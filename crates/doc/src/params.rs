@@ -276,6 +276,32 @@ impl FeatureKind {
         v
     }
 
+    /// A primitive's placement point (length expressions). Its coordinates are not inputs:
+    /// they get no parameter names and keep bare numbers in mm whatever the design's units, as
+    /// every other position does; renames and users still find them.
+    pub fn point_expr_mut(&mut self) -> Option<&mut crate::PointExpr> {
+        match self {
+            FeatureKind::Box { corner: p, .. }
+            | FeatureKind::Cylinder { base: p, .. }
+            | FeatureKind::Sphere { center: p, .. }
+            | FeatureKind::Torus { center: p, .. }
+            | FeatureKind::Coil { base: p, .. } => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Read-only view of [`FeatureKind::point_expr_mut`].
+    pub fn point_expr(&self) -> Option<&crate::PointExpr> {
+        match self {
+            FeatureKind::Box { corner: p, .. }
+            | FeatureKind::Cylinder { base: p, .. }
+            | FeatureKind::Sphere { center: p, .. }
+            | FeatureKind::Torus { center: p, .. }
+            | FeatureKind::Coil { base: p, .. } => Some(p),
+            _ => None,
+        }
+    }
+
     /// Read-only view of [`FeatureKind::inputs_mut`]: (label, expression, kind).
     pub fn inputs(&self) -> Vec<(&'static str, String, Kind)> {
         // Imports have no inputs (and their STEP text is large: don't clone it).
@@ -369,6 +395,55 @@ impl Document {
         }
         if let Some(f) = self.features.get_mut(idx) {
             f.param_names.truncate(n);
+        }
+    }
+
+    /// Repair a loaded timeline in one pass. Reserve even later features' names, just as
+    /// `name_feature_inputs` does, without restarting a document scan for every `dN` candidate.
+    pub(crate) fn name_all_feature_inputs(&mut self) {
+        let mut taken: BTreeMap<String, usize> = BTreeMap::new();
+        for name in self.params.iter().map(|p| &p.name).chain(self.features.iter().flat_map(|f| &f.param_names)) {
+            *taken.entry(name.clone()).or_default() += 1;
+        }
+        let mut next = 1usize;
+        for f in &mut self.features {
+            let n = f.kind.inputs().len();
+            for k in 0..n {
+                if f.param_names.get(k).is_some_and(|name| !name.is_empty()) {
+                    continue;
+                }
+                let name = loop {
+                    let name = format!("d{next}");
+                    next += 1;
+                    if !taken.contains_key(&name) {
+                        break name;
+                    }
+                };
+                if f.param_names.len() <= k {
+                    f.param_names.resize(k + 1, String::new());
+                }
+                // Empty slots cannot collide with a generated name.
+                if let Some(slot) = f.param_names.get_mut(k) {
+                    *slot = name.clone();
+                }
+                taken.insert(name, 1);
+            }
+            // Match the single-feature repair: surplus names become available only after
+            // this feature has been repaired. Counts preserve names shared with parameters.
+            for name in f.param_names.drain(n..) {
+                if let Some(count) = taken.get_mut(&name) {
+                    *count -= 1;
+                    if *count == 0 {
+                        taken.remove(&name);
+                        if let Some(i) = name.strip_prefix('d').and_then(|s| s.parse::<usize>().ok())
+                            && name == format!("d{i}")
+                            && i > 0
+                        {
+                            next = next.min(i);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -655,6 +730,9 @@ impl Document {
                     }
                 }
             }
+            if f.kind.point_expr().is_some_and(|p| p.iter().any(|e| expr::references(e).iter().any(|r| r == name))) {
+                out.push(ParamUser::Feature { feature: f.id, name: f.name.clone(), input: "Position".into() });
+            }
             if let FeatureKind::Sketch { sketch, .. } = &f.kind {
                 for c in &sketch.constraints {
                     if c.param.as_deref() == Some(name) {
@@ -716,6 +794,13 @@ impl Document {
             for x in &mut f.param_names {
                 if x == old {
                     *x = new.to_string();
+                }
+            }
+            for e in f.kind.point_expr_mut().into_iter().flatten() {
+                let r = expr::rename_reference(e, old, new);
+                if r != *e {
+                    *e = r;
+                    n += 1;
                 }
             }
             for (_, e, _) in f.kind.inputs_mut() {

@@ -1445,6 +1445,14 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     }
 
     let proj = projection(app, rect);
+    // Suppress hover for the whole navigation gesture, including frames between pointer
+    // events. Testing delta made the highlight reappear whenever a held drag paused.
+    // Resolve it before rendering so the GPU scene and screen overlays use the same hit.
+    let navigating =
+        scroll != 0.0 || middle || secondary_down || (app.viewport.nav.is_some() && primary_down) || app.viewport.spin || app.cam_anim.is_some();
+    let hits = hover.filter(|_| inside && app.viewport.boxsel.is_none() && !navigating).map(|p| pick_cached(app, &proj, p)).unwrap_or_default();
+    let cand = if app.tool.is_some() { hits.first().cloned().map(|h| (h, None)) } else { candidate(app, &hits).map(|(h, s)| (h, Some(s))) };
+    app.viewport.hover = cand.as_ref().map(|c| c.0.clone());
     let painter = ui.painter_at(rect);
     // Background gradient.
     let (top, bot) = (t.viewport_top, t.viewport_bottom);
@@ -1505,11 +1513,6 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     }
 
     // ---- interaction ----
-    // No picking while the view moves (orbit, pan, zoom): nothing can be hovered meanwhile.
-    let navigating = scroll != 0.0 || ((middle || secondary_down) && delta != egui::Vec2::ZERO) || (app.viewport.nav.is_some() && primary_down);
-    let hits = hover.filter(|_| inside && app.viewport.boxsel.is_none() && !navigating).map(|p| pick_cached(app, &proj, p)).unwrap_or_default();
-    let cand = if app.tool.is_some() { hits.first().cloned().map(|h| (h, None)) } else { candidate(app, &hits).map(|(h, s)| (h, Some(s))) };
-    app.viewport.hover = cand.as_ref().map(|c| c.0.clone());
     let add = mods.shift || mods.command || mods.ctrl;
     if let Some(p) = hover.filter(|_| inside) {
         if app.tool.is_some() {
@@ -2099,6 +2102,8 @@ fn view_cube(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
         let tip = at + vec2((d.dot(wr) * CUBE_SCALE * 2.6) as f32, -(d.dot(wu) * CUBE_SCALE * 2.6) as f32);
         painter.line_segment([at, tip], Stroke::new(2.0, Color32::from_rgb(col.0, col.1, col.2)));
     }
+    let labels: Vec<String> = targets.iter().filter(|tg| !tg.corner).map(|tg| tg.name.to_uppercase()).collect();
+    let size = cube_label_size(ui.ctx(), &labels);
     // Back to front: the faces and facets turned toward the camera.
     for (i, pts) in shapes.iter().rev() {
         let tg = &targets[*i];
@@ -2114,7 +2119,8 @@ fn view_cube(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
         // Fades out as the face turns edge-on.
         let ink = (n.dot(b) / 0.3).clamp(0.0, 1.0) as f32;
         if !tg.corner && ink > 0.05 {
-            painter.add(cube_label(ui.ctx(), &tg.name.to_uppercase(), n, (r, u), c, Color32::from_rgb(40, 44, 52).gamma_multiply(ink)));
+            let color = Color32::from_rgb(40, 44, 52).gamma_multiply(ink);
+            painter.add(cube_label(ui.ctx(), &tg.name.to_uppercase(), size, n, (r, u), c, color));
         }
     }
     crate::scenario::publish_count("cube_highlights", f64::from(u8::from(hovered.is_some())));
@@ -2205,10 +2211,24 @@ fn cube_label_axes(n: Vec3) -> (Vec3, Vec3) {
     if n.z.abs() > 0.5 { (Vec3::X, Vec3::Y * n.z.signum()) } else { (Vec3::Z.cross(n), Vec3::Z) }
 }
 
-/// A face's label printed on the face: laid out flat, then mapped through the cube's projection,
-/// so it turns and foreshortens with the face.
-fn cube_label(ctx: &egui::Context, text: &str, n: Vec3, ru: (Vec3, Vec3), c: Pos2, color: Color32) -> Shape {
-    let galley = ctx.fonts_mut(|f| f.layout(text.to_string(), FontId::proportional(9.5), color, f32::INFINITY));
+/// How much of a face the widest face label spans.
+const CUBE_LABEL_WIDTH: f32 = 0.9;
+
+/// The face labels' font size: one size for all, the widest of `labels` spanning
+/// `CUBE_LABEL_WIDTH` of a face.
+fn cube_label_size(ctx: &egui::Context, labels: &[String]) -> f32 {
+    let probe = 10.0;
+    let widest = labels
+        .iter()
+        .map(|s| ctx.fonts_mut(|f| f.layout_no_wrap(s.clone(), FontId::proportional(probe), Color32::WHITE).size().x))
+        .fold(0.0, f32::max);
+    if widest > 0.0 { probe * CUBE_LABEL_WIDTH * 2.0 * CUBE_SCALE as f32 / widest } else { probe }
+}
+
+/// A face's label printed on the face at `size`: laid out flat, then mapped through the cube's
+/// projection, so it turns and foreshortens with the face.
+fn cube_label(ctx: &egui::Context, text: &str, size: f32, n: Vec3, ru: (Vec3, Vec3), c: Pos2, color: Color32) -> Shape {
+    let galley = ctx.fonts_mut(|f| f.layout(text.to_string(), FontId::proportional(size), color, f32::INFINITY));
     let options = egui::epaint::TessellationOptions { round_text_to_pixels: false, ..Default::default() };
     let mut tess = egui::epaint::Tessellator::new(ctx.pixels_per_point(), options, ctx.fonts(|f| f.font_image_size()), vec![]);
     let mut mesh = egui::Mesh::default();
@@ -2403,6 +2423,88 @@ fn view_menu(app: &mut SolveApp, ui: &mut egui::Ui, button: Rect) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hover_frame(app: &mut SolveApp, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let selected = app.highlighted();
+        let _ = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))), events, ..Default::default() },
+            |ui| {
+                show(app, ui);
+            },
+        );
+        // Click selection is applied after rendering; hover itself must already be current.
+        if app.viewport.gpu.is_some() && selected == app.highlighted() {
+            assert_eq!(app.viewport.hl_key, highlight_key(app), "GPU highlight must use this frame's hover");
+        }
+    }
+
+    fn hover_app(gpu: bool) -> SolveApp {
+        let mut s = solvecraft_engine::Session::default();
+        s.execute("sketch.create", &json!({"plane": "XY"})).unwrap();
+        s.execute("sketch.point", &json!({"point": [0, 0]})).unwrap();
+        let mut app = SolveApp::new(s, crate::Services::default());
+        app.viewport.no_pixels = true;
+        if gpu {
+            // The callback is queued by egui; no device is needed to inspect scene updates.
+            app.viewport.gpu = Some(GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1 });
+        }
+        app
+    }
+
+    #[test]
+    fn hover_stays_off_between_navigation_events_and_returns_on_release() {
+        for gpu in [false, true] {
+            for button in [egui::PointerButton::Middle, egui::PointerButton::Secondary, egui::PointerButton::Primary] {
+                let ctx = egui::Context::default();
+                let mut app = hover_app(gpu);
+                if button == egui::PointerButton::Primary {
+                    app.viewport.nav = Some(NavMode::Orbit);
+                }
+                hover_frame(&mut app, &ctx, vec![]);
+                let p = projection(&app, app.viewport.rect.unwrap()).to_screen(Vec3::ZERO).unwrap();
+                hover_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(p)]);
+                assert!(app.viewport.hover.is_some());
+                hover_frame(&mut app, &ctx, vec![egui::Event::PointerButton { pos: p, button, pressed: true, modifiers: Default::default() }]);
+                assert!(app.viewport.hover.is_none(), "hover on navigation press");
+                for offset in [1.0, 2.0, 3.0] {
+                    hover_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(p + vec2(offset, 0.0))]);
+                    assert!(app.viewport.hover.is_none(), "hover while moving");
+                    for _ in 0..3 {
+                        hover_frame(&mut app, &ctx, vec![]);
+                        assert!(app.viewport.hover.is_none(), "hover between movement events");
+                    }
+                }
+                hover_frame(&mut app, &ctx, vec![egui::Event::PointerButton { pos: p, button, pressed: false, modifiers: Default::default() }]);
+                assert!(app.viewport.hover.is_some(), "hover must return on release");
+            }
+        }
+    }
+
+    #[test]
+    fn hover_stays_off_during_spin_and_animated_views() {
+        let ctx = egui::Context::default();
+        let mut app = hover_app(true);
+        hover_frame(&mut app, &ctx, vec![]);
+        let p = projection(&app, app.viewport.rect.unwrap()).to_screen(Vec3::ZERO).unwrap();
+        hover_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(p)]);
+        assert!(app.viewport.hover.is_some());
+        app.viewport.spin = true;
+        for _ in 0..3 {
+            hover_frame(&mut app, &ctx, vec![]);
+            assert!(app.viewport.hover.is_none());
+        }
+        app.viewport.spin = false;
+        hover_frame(&mut app, &ctx, vec![]);
+        assert!(app.viewport.hover.is_some());
+        app.cam_anim = Some(solvecraft_engine::render::CameraAnim::new(app.cam, app.cam, 0.0));
+        for _ in 0..3 {
+            hover_frame(&mut app, &ctx, vec![]);
+            assert!(app.viewport.hover.is_none());
+        }
+        app.cam_anim = None;
+        hover_frame(&mut app, &ctx, vec![]);
+        assert!(app.viewport.hover.is_some());
+    }
 
     fn cylinder_app() -> SolveApp {
         let mut s = solvecraft_engine::Session::default();
@@ -2741,6 +2843,26 @@ mod tests {
         }
     }
 
+    fn face_labels(targets: &[CubeTarget]) -> Vec<String> {
+        targets.iter().filter(|t| !t.corner).map(|t| t.name.to_uppercase()).collect()
+    }
+
+    /// The widest label spans 90% of its face, looking straight at it.
+    #[test]
+    fn view_cube_widest_label_spans_most_of_its_face() {
+        let ctx = egui::Context::default();
+        let mut span = 0.0f32;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let size = cube_label_size(ui.ctx(), &face_labels(&cube_targets()));
+            let front = Vec3::new(0.0, -1.0, 0.0);
+            let (r, u, _) = basis_from(front);
+            let pts = drawn_points(vec![cube_label(ui.ctx(), "BOTTOM", size, front, (r, u), pos2(100.0, 100.0), Color32::BLACK)]);
+            let (lo, hi) = pts.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| (lo.min(p.x), hi.max(p.x)));
+            span = (hi - lo) / (2.0 * CUBE_SCALE as f32);
+        });
+        assert!((span - CUBE_LABEL_WIDTH).abs() < 0.05, "BOTTOM spans {span} of the face");
+    }
+
     /// From any direction, each label is printed within its face.
     #[test]
     fn view_cube_labels_stay_on_their_faces() {
@@ -2748,6 +2870,7 @@ mod tests {
         let (mut worst, mut drawn) = (f32::NEG_INFINITY, 0);
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             let targets = cube_targets();
+            let size = cube_label_size(ui.ctx(), &face_labels(&targets));
             let c = pos2(100.0, 100.0);
             for dir in orbit_directions().step_by(7) {
                 let (r, u, b) = basis_from(dir);
@@ -2756,7 +2879,7 @@ mod tests {
                     if tg.corner {
                         continue;
                     }
-                    for p in drawn_points(vec![cube_label(ui.ctx(), &tg.name.to_uppercase(), tg.normal(), (r, u), c, Color32::BLACK)]) {
+                    for p in drawn_points(vec![cube_label(ui.ctx(), &tg.name.to_uppercase(), size, tg.normal(), (r, u), c, Color32::BLACK)]) {
                         let outside = if point_in_poly(p, &pts) { 0.0 } else { poly_distance(p, &pts) };
                         worst = worst.max(outside);
                         drawn += 1;
