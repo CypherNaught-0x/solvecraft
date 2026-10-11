@@ -72,7 +72,8 @@ pub(super) fn rectangle() -> Fixture {
         u32(&mut data, 0);
         data.push(1);
         u32(&mut data, 0);
-        data.extend([0; 224]);
+        data.extend([0; 220]);
+        wide(&mut data, "fx: ");
         wide(&mut data, expr);
         data.extend([0; 44]);
         u64(&mut data, if vertical { 0x800000 } else { 0x400000 });

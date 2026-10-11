@@ -27,6 +27,8 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-loop-measurements.json",
         "fusion-arc-measurements.json",
         "fusion-plane-measurements.json",
+        "fusion-user-parameter-measurements.json",
+        "fusion-user-rectangle-measurements.json",
     ] {
         let cases: Value = serde_json::from_slice(&std::fs::read(dir.join(source)).unwrap()).unwrap();
         for (name, api) in cases.as_object().unwrap() {
@@ -128,6 +130,46 @@ fn imported_plane_dependencies_move_bodies_after_parameter_and_feature_edits() {
 
 #[test]
 #[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
+fn imported_user_parameters_preserve_roles_comments_favorites_and_dependencies() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let mut cases: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-user-parameter-measurements.json")).unwrap()).unwrap();
+    let rectangles: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-user-rectangle-measurements.json")).unwrap()).unwrap();
+    cases.as_object_mut().unwrap().extend(rectangles.as_object().unwrap().clone());
+    for (name, api) in cases.as_object().unwrap() {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let rows = s.doc.param_rows();
+        let inspected = s.execute("file.inspect_f3d", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap();
+        for p in api["parameters"].as_array().unwrap() {
+            let actual = rows.iter().find(|r| r.name == p["name"].as_str().unwrap()).unwrap();
+            let user = p["type"].as_str().unwrap().ends_with("::UserParameter");
+            assert_eq!(actual.source == "user", user);
+            assert_eq!(actual.comment, p["comment"].as_str().unwrap(), "{name}: {}", actual.name);
+            assert_eq!(actual.favorite, p["favorite"].as_bool().unwrap());
+            let record = inspected["designs"][0]["parameters"]["records"].as_array().unwrap().iter().find(|r| r["name"] == p["name"]).unwrap();
+            assert_eq!(record["user"], user);
+            assert_eq!(record["comment"], p["comment"]);
+            assert_eq!(record["favorite"], p["favorite"]);
+        }
+        volume(&mut s, api["volume"].as_f64().unwrap(), name);
+        let original = s.doc.clone();
+        s.execute("parameters.change", &json!({"name":"base","expression":"30 mm"})).unwrap();
+        let edited_volume = if name.starts_with("user-rectangle-") { 54. } else { 13.5 * std::f64::consts::PI };
+        volume(&mut s, edited_volume, name);
+        let doc = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+        assert_eq!(doc, *s.doc);
+        volume(&mut Session::new(doc), edited_volume, name);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc, original);
+        s.execute("parameters.rename", &json!({"name":"base","new_name":"size"})).unwrap();
+        s.execute("parameters.change", &json!({"name":"size","expression":"20 mm"})).unwrap();
+        s.execute("parameters.change", &json!({"name":"scale","expression":"3"})).unwrap();
+        volume(&mut s, if name.starts_with("user-rectangle-") { 24. } else { 6. * std::f64::consts::PI }, name);
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
 fn imported_rectangle_dimensions_regenerate_and_undo() {
     let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
     let mut s = Session::default();
@@ -190,7 +232,7 @@ fn driven_dimensions_cannot_silently_become_driving_constraints() {
         if api["driving"].as_bool().unwrap() {
             result.unwrap_or_else(|e| panic!("{name}: {e}"));
         } else {
-            assert!(result.unwrap_err().to_string().contains("parameter expression metadata"), "{name}");
+            assert!(result.unwrap_err().to_string().contains("driven parameter measurement dependencies"), "{name}");
             assert!(std::sync::Arc::ptr_eq(&before, &s.doc));
             assert!(std::sync::Arc::ptr_eq(&model, &s.model.state()));
         }
@@ -277,7 +319,7 @@ fn radius_and_arc_diameter_controls_preserve_values_edits_and_reopening() {
         let model = s.model.state();
         let result = s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))}));
         if !api["driving"].as_bool().unwrap() {
-            assert!(result.unwrap_err().to_string().contains("parameter expression metadata"), "{name}");
+            assert!(result.unwrap_err().to_string().contains("driven parameter measurement dependencies"), "{name}");
             assert!(std::sync::Arc::ptr_eq(&before, &s.doc));
             assert!(std::sync::Arc::ptr_eq(&model, &s.model.state()));
             continue;

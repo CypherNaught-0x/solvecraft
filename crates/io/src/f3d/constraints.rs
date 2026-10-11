@@ -62,7 +62,7 @@ impl Design {
         let records = Records::new(self);
         let classes: BTreeMap<_, _> = self.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
         let parameters = self.parameters()?;
-        let bindings: BTreeMap<_, _> = parameters.iter().map(|p| (p.binding, p.owner)).collect();
+        let bindings: BTreeMap<_, _> = parameters.iter().filter_map(|p| p.binding.zip(p.owner)).collect();
         let circles: BTreeMap<_, _> =
             self.sketch_circles()?.into_iter().chain(self.sketch_arcs()?.into_iter().map(|a| a.circle)).map(|c| (c.id, c.sketch)).collect();
         let lines: BTreeMap<_, _> = self.sketch_lines()?.into_iter().map(|c| (c.id, c.sketch)).collect();
@@ -192,7 +192,8 @@ impl Design {
                         }
                         one(&mut r)?;
                         attributes(&mut r)?;
-                        r.take(224)?;
+                        r.take(220)?;
+                        r.wide_string()?; // display prefix, including expression marker
                         r.wide_string()?;
                         r.take(44)?;
                         if r.u64()? != if vertical { 0x800000 } else { 0x400000 } {
@@ -229,7 +230,8 @@ impl Design {
                     }
                     one(&mut r)?;
                     attributes(&mut r)?;
-                    r.take(250)?; // presentation geometry, text prefix and layout
+                    r.take(244)?; // presentation geometry and layout
+                    r.wide_string()?; // prefix may include the expression marker (fx:)
                     r.wide_string()?; // displayed value; the binding carries the expression
                     r.take(24)?;
                     if r.u64()? != if radial { 0x20000 } else { 0x10000 } {

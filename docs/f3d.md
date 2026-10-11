@@ -25,6 +25,7 @@ measuring and benchmarking it. Browser file pickers reject oversized F3D files
 before allocating their buffers; engine reads enforce the same archive limit.
 
 Supported reconstruction includes native parameter names and expressions,
+numeric user parameters, user/model roles, comments and favorites,
 driving radius/diameter and horizontal/vertical distance dimensions, coincidence,
 horizontal/vertical line and point alignment, parallel/perpendicular/collinear lines,
 equal lengths/radii, concentric/tangent round curves, point-on-curve and line-midpoint
@@ -86,8 +87,8 @@ record tables. Index validity does not certify feature semantics.
 
 In layout 8, parameter class `7A6A3D31-BE74-4E19-9115-20642944C2E4`, version 9,
 contains UTF-16 expressions, names, labels and display units, plus numeric values.
-Bindings (`D91D429C-1BB5-4640-B49F-69AF14F463E9`, version 0) connect parameters to
-their owning objects. Both binding back-references and duplicate numeric values
+Bindings (`D91D429C-1BB5-4640-B49F-69AF14F463E9`, version 0) connect model parameters to
+their owning objects; user parameters have a null binding. Both binding back-references and duplicate numeric values
 are checked. Numeric length values are **centimetres**, angles are **radians**;
 `display_unit` is separate. The inspector exposes these units explicitly.
 
@@ -410,3 +411,56 @@ including the six new plane archives. The native chain fixture and an imported
 XZ cylinder after a negative offset edit were rendered and visually checked.
 Browser picker changes compile for WASM; a browser UI import run remains to be
 verified. General F3D history support is still incomplete.
+
+## Legacy parameter schemas and editable user parameters
+
+The supplied originals and their locally resaved copies contain 411 matching
+parameter identities: adapter 190, R36S 70, Gridfinity 151. Their names, expressions,
+labels, comments, units, bindings and cached values agree across the following
+verified schema pairs. Other layout/version combinations fail explicitly.
+
+| Archive layout | Parameter version | Flags before comment | Metadata zero prefix |
+|---|---:|---:|---:|
+| 4 | 5 | 3 bytes | 0 bytes |
+| 5 | 6 | 7 bytes | 0 bytes |
+| 5 | 7 | 8 bytes | 4 bytes |
+| 8 | 9 | 12 bytes | 5 bytes |
+
+The comment is a variable-length UTF-16 string before the parameter sequence and
+nullable binding. The five-byte expression metadata suffix records driven,
+favorite and user flags. A user parameter must have a null binding; a model
+parameter must have a valid owning binding. The inspector exposes driven status,
+but import still rejects driven parameters until their measurement dependencies
+can be reconstructed. Text parameters remain unsupported.
+
+Five circular and three rectangular controls were authored with the documented
+[user-parameter API](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/fusion_UserParameters_add.htm)
+and [parameter properties](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/fusion_Parameter.htm).
+They vary comments (including Unicode/newlines), favorites, dependent expressions
+and a unitless multiplier. Native dimensions show a variable UTF-16 `fx:` prefix
+when their value is an expression; circular and linear decoders now read that
+prefix instead of assuming a fixed presentation length.
+
+Modern resaves of legacy archives can retain `Design` as the initial stream name
+while using the layout-8 `FusionDesignSegmentType` descriptor. This observed
+header combination is accepted and has an original synthetic regression test.
+
+Original tests cover all verified parameter schemas, roles, flags, comments,
+truncation, user-driven contradictions, unknown layout/version combinations,
+dependency edits and reopening. A seventeenth native fixture has diameter `base`
+and height `base * scale`; parameter edits must update its analytic volume and
+bounds. Local evidence additionally checks parameter renaming, serialization,
+undo, user/model classification and public-API measurements. This work exposes
+legacy parameters; it does not yet import the larger archives' full histories.
+
+Eleven legacy count parameters use the observed version-1 integer binding class
+`A085449A-5144-4B2B-B455-7F7035A40559` instead of the double binding. These slots
+must be unitless; ownership, parameter backreferences and cached values are
+checked. Original tests cover invalid units, values, owners and truncation.
+
+Validation: `cargo xtask ci` passes all 25 test binaries, 53 IO tests, seventeen
+native fixtures and ten-crate WASM checks. The opening guard completed in 1.04
+seconds. All eighteen local evidence groups pass (thirteen import and five
+inspection), including the 411-record legacy comparison and eight new user
+parameter controls. An imported rectangle after renaming and editing its base
+parameter was rendered and visually checked.

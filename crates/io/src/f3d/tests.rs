@@ -89,6 +89,23 @@ fn native_indexes_keep_opaque_streams_and_secondary_records() {
 }
 
 #[test]
+fn resaved_legacy_design_header_uses_modern_descriptor() {
+    let (mut meta, bulk) = streams(8);
+    let mut r = Reader { bytes: &meta, at: 0 };
+    r.string().unwrap();
+    let end = r.at;
+    let mut prefix = Vec::new();
+    string(&mut prefix, "Design");
+    meta.splice(..end, prefix);
+    let d = index("resaved".into(), meta.clone(), bulk.clone()).unwrap();
+    assert_eq!(d.layout, 8);
+    assert_eq!(d.classes[0].objects, [7]);
+    // An unrelated stream identity must still fail.
+    meta[4..10].copy_from_slice(b"Other!");
+    assert!(index("wrong identity".into(), meta, bulk).is_err());
+}
+
+#[test]
 fn truncated_and_corrupt_indexes_fail_without_panicking() {
     let (meta, bulk) = streams(5);
     for end in 0..meta.len() {

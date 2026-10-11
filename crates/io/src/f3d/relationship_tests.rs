@@ -104,7 +104,8 @@ pub(super) fn fixture(construction: bool, curve_tag: u64) -> Design {
     u32(&mut b, 0);
     b.push(1);
     u32(&mut b, 0);
-    b.extend([0; 250]);
+    b.extend([0; 244]);
+    wide(&mut b, "Ø");
     wide(&mut b, "60 mm");
     b.extend([0; 24]);
     u64(&mut b, 0x10000);

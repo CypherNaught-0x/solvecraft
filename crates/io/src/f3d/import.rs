@@ -30,17 +30,20 @@ impl Design {
         let records = Records::new(self);
         let classes: BTreeMap<_, _> = self.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
         let parameters = self.parameters()?;
+        if parameters.iter().any(|p| p.driven) {
+            return Err(invalid("driven parameter measurement dependencies are not supported yet"));
+        }
         if parameters.len() > solvecraft_doc::MAX_PARAMS {
             return Err(invalid("too many imported parameters"));
         }
-        let bindings: BTreeMap<_, _> = parameters.iter().map(|p| (p.binding, p)).collect();
+        let bindings: BTreeMap<_, _> = parameters.iter().filter_map(|p| p.binding.map(|binding| (binding, p))).collect();
         let named_parameters: BTreeMap<_, _> = parameters.iter().map(|p| (p.name.as_str(), p)).collect();
         let mut internal_offsets = BTreeSet::new();
         for f in &history {
             if let HistoryKind::OffsetPlane { extra_offset, .. } = &f.kind {
                 let p = length_parameter(&bindings, *extra_offset)?;
                 let mut expression = p.expression.split_whitespace();
-                if p.owner != f.id
+                if p.owner != Some(f.id)
                     || p.label != "ExtraOffset"
                     || p.value != 0.
                     || expression.next().and_then(|s| s.parse::<f64>().ok()) != Some(0.)
@@ -72,12 +75,15 @@ impl Design {
             if p.name.is_empty() || !names.insert(p.name.clone()) {
                 return Err(invalid("duplicate or empty parameter name"));
             }
+            if p.favorite {
+                doc.favorites.insert(p.name.clone());
+            }
             doc.params.push(Param {
                 name: p.name.clone(),
                 expr: p.expression.clone(),
                 unit: p.display_unit.clone(),
-                comment: p.label.clone(),
-                model: true,
+                comment: p.comment.clone(),
+                model: p.binding.is_some(),
             });
         }
         let mut sketches = BTreeMap::new();
@@ -94,7 +100,7 @@ impl Design {
                         return Err(invalid("inconsistent internal plane offset binding"));
                     }
                     let p = length_parameter(&bindings, definition.distance.ok_or_else(|| invalid("missing plane distance"))?)?;
-                    if p.owner != f.id || p.label != "AlongDistance" {
+                    if p.owner != Some(f.id) || p.label != "AlongDistance" {
                         return Err(invalid("plane distance belongs to another feature"));
                     }
                     let (base, cached) = plane_base(&records, &classes, &planes, definition.base, root)?;
@@ -361,7 +367,7 @@ impl Design {
             // timeline edit. Reserve all names above, then transfer these inputs.
             let mut transferred = BTreeSet::new();
             for (name, (_, expression, kind)) in feature.param_names.iter_mut().zip(feature.kind.inputs_mut()) {
-                let Some(p) = named_parameters.get(expression.as_str()).filter(|p| p.owner == f.id) else { continue };
+                let Some(p) = named_parameters.get(expression.as_str()).filter(|p| p.owner == Some(f.id)) else { continue };
                 // SolveCraft feature inputs use mm/degrees. Preserve the existing
                 // unit-bearing parameter indirection for other display units until
                 // feature inputs support their own unit contexts.
@@ -371,7 +377,9 @@ impl Design {
                 *name = p.name.clone();
                 *expression = p.expression.clone();
                 transferred.insert(p.name.clone());
-                doc.param_comments.insert(p.name.clone(), p.label.clone());
+                if !p.comment.is_empty() {
+                    doc.param_comments.insert(p.name.clone(), p.comment.clone());
+                }
             }
             if let Some(body) = new_body {
                 feature.body_names = vec![body];
@@ -512,10 +520,12 @@ fn extent(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, parameters: &B
     zeros(&mut r, 36)?;
     let distance = parameters
         .get(&distance)
-        .filter(|p| p.owner == id && p.label == "AlongDistance")
+        .filter(|p| p.owner == Some(id) && p.label == "AlongDistance")
         .ok_or_else(|| invalid("missing extrusion distance binding"))?;
-    let taper =
-        parameters.get(&taper).filter(|p| p.owner == id && p.label == "TaperAngle").ok_or_else(|| invalid("missing extrusion taper binding"))?;
+    let taper = parameters
+        .get(&taper)
+        .filter(|p| p.owner == Some(id) && p.label == "TaperAngle")
+        .ok_or_else(|| invalid("missing extrusion taper binding"))?;
     if solvecraft_doc::expr::Kind::from_unit(&distance.display_unit) != solvecraft_doc::expr::Kind::Length
         || solvecraft_doc::expr::Kind::from_unit(&taper.display_unit) != solvecraft_doc::expr::Kind::Angle
     {

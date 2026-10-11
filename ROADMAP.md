@@ -146,7 +146,7 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   construction, selected circular profiles and coincidence/diameter relationships.
   Twenty-five local Fusion controls cover dimension edits, reversal, renaming,
   placement, reordering, body operations, suppression and constraint removal.
-  Sixteen original native SolveCraft fixtures check analytic volumes/bounds and edits.
+  Seventeen original native SolveCraft fixtures check analytic volumes/bounds and edits.
   `doc.open` now reconstructs verified layout-8 circle/line/arc sketches and one-sided
   extrusions as editable history, with driving parameters, fixation, taper and
   atomic failure. Thirty local native imports check volumes/placement; original
@@ -159,7 +159,10 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   parallel/perpendicular/collinear/equal/concentric/tangent relationships, point
   alignment and point-on-curve/line-midpoint relationships retain their native bindings.
   Offset construction planes preserve parent and sketch dependencies, including
-  chained and negative offsets. Other feature types, legacy history schemas and native B-reps remain unsupported; see
+  chained and negative offsets. Numeric user parameters preserve expressions,
+  comments, favorites and user/model roles. Legacy parameter schemas decode all
+  411 records in the three larger supplied files; their legacy feature histories
+  still need reconstruction. Other feature types and native B-reps remain unsupported; see
   [the observed format and remaining work](docs/f3d.md). HardEdgeBasin opening now
   has a child-process performance guard ([measurements](docs/project-open-regression.md)).
 - Persistent naming (plan/adr/0002) names faces from their history and edges by their faces;

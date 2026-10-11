@@ -191,10 +191,12 @@ fn index(path: String, metadata: Vec<u8>, bulk: Vec<u8>) -> Result<Design> {
         r.u32()?; // stream revision; retained in metadata
         r.u32()?; // stream flags; retained in metadata
     }
-    if !matches!(layout, 4 | 5 | 8)
-        || r.string()? != segment
-        || r.string()? != if layout == 8 { "Fusion" } else { "" }
-        || r.u32()? != 1
+    let descriptor = r.string()?;
+    let flavor = r.string()?;
+    if !matches!(
+        (layout, segment.as_str(), descriptor.as_str(), flavor.as_str()),
+        (4 | 5, "Design", "Design", "") | (8, "Design" | "FusionDesignSegmentType", "FusionDesignSegmentType", "Fusion")
+    ) || r.u32()? != 1
         || r.u32()? != 0
     {
         return Err(invalid("unsupported metadata layout (observed layouts: 4, 5 and 8)"));

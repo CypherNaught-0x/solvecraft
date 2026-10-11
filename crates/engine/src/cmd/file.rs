@@ -161,7 +161,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 *groups.entry(&class.group).or_default() += class.objects.len();
             }
             let parameters = match d.parameters() {
-                Ok(parameters) => json!({"native_units":{"length":"cm","angle":"rad"},"records": parameters.iter().map(|p| json!({"id":p.id,"binding":p.binding,"owner":p.owner,"name":p.name,"expression":p.expression,"label":p.label,"display_unit":p.display_unit,"native_value":p.value})).collect::<Vec<_>>()}),
+                Ok(parameters) => json!({"native_units":{"length":"cm","angle":"rad"},"records": parameters.iter().map(|p| json!({"id":p.id,"binding":p.binding,"owner":p.owner,"name":p.name,"expression":p.expression,"label":p.label,"display_unit":p.display_unit,"native_value":p.value,"comment":p.comment,"driven":p.driven,"favorite":p.favorite,"user":p.binding.is_none()})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
             let circles = match d.sketch_circles() {

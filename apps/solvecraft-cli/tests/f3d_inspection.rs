@@ -140,6 +140,31 @@ fn controlled_parameter_edits_match_fusion_api() {
 }
 
 #[test]
+#[ignore = "requires SOLVECRAFT_F3D_CORPUS and SOLVECRAFT_F3D_PROBES with legacy/resaved archive pairs"]
+fn legacy_parameters_match_resaved_records_and_public_api_measurements() {
+    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").expect("set SOLVECRAFT_F3D_CORPUS"));
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-corpus-measurements.json")).unwrap()).unwrap();
+    for (name, count) in [("adapter-x20-makita.f3d", 190), ("R36S Grip.f3d", 70), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 151)] {
+        let original = solvecraft_engine::io::f3d::read_f3d(&std::fs::read(corpus.join(name)).unwrap()).unwrap();
+        let upgraded = solvecraft_engine::io::f3d::read_f3d(&std::fs::read(probes.join(format!("corpus-{name}"))).unwrap()).unwrap();
+        let mut old = original[0].parameters().unwrap();
+        let mut new = upgraded[0].parameters().unwrap();
+        old.sort_by_key(|p| p.id);
+        new.sort_by_key(|p| p.id);
+        assert_eq!(old.len(), count);
+        assert_eq!(old, new, "{name}: schema upgrade changed a parameter");
+        for p in api[name]["parameters"].as_array().unwrap() {
+            let actual = old.iter().find(|r| r.name == p["name"].as_str().unwrap()).unwrap();
+            assert_eq!(actual.expression, p["expression"].as_str().unwrap(), "{name}");
+            assert_eq!(actual.display_unit, p["unit"].as_str().unwrap(), "{name}");
+            let want = p["value"].as_f64().unwrap();
+            assert!((actual.value - want).abs() < want.abs().max(1.) * 1e-9, "{name}: {}", actual.name);
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to local controlled Fusion exports"]
 fn controlled_history_matches_fusion_api() {
     let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
