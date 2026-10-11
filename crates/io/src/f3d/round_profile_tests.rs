@@ -29,7 +29,7 @@ fn round(f: &mut Fixture, id: u64, tag: u64, radius: f64, sweep: f64, axis: f64)
     reference(&mut b, 70);
     f.put(id, "F0130424-8B7E-4092-93C9-1CA807482534", 0, b, None);
 }
-fn geometry(f: &mut Fixture, entities: &[u64], dimensions: &[u64]) {
+pub(super) fn geometry(f: &mut Fixture, entities: &[u64], dimensions: &[u64]) {
     let mut b = vec![0; 4];
     b.extend([0, 1]);
     u32(&mut b, 0);
@@ -80,7 +80,7 @@ fn ring() -> Fixture {
     tracking(&mut f, &[(vec![(18, true)], false), (vec![(17, false)], true)]);
     f
 }
-fn arc(sweep: f64, axis: f64) -> Fixture {
+pub(super) fn arc(sweep: f64, axis: f64) -> Fixture {
     let mut f = fixture(false);
     for id in [56, 61, 62] {
         f.0.remove(&id);

@@ -2,6 +2,43 @@ use serde_json::json;
 use solvecraft_engine::Session;
 
 #[test]
+fn oversized_f3d_reads_fail_before_archive_decoding() {
+    let path = std::env::temp_dir().join(format!("solvecraft-f3d-cap-{}.f3d", std::process::id()));
+    let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+    file.set_len(solvecraft_engine::io::f3d::MAX_F3D_BYTES as u64 + 1).unwrap();
+    drop(file);
+    let mut s = Session::default();
+    let doc = s.doc.clone();
+    let errors: Vec<_> = ["doc.open", "file.inspect_f3d"].into_iter().map(|command| s.execute(command, &json!({"path":path}))).collect();
+    let cli = std::process::Command::new(env!("CARGO_BIN_EXE_solvecraft-cli")).arg("bench-open").arg(&path).output().unwrap();
+    std::fs::remove_file(path).unwrap();
+    for result in errors {
+        assert!(result.unwrap_err().to_string().contains("file too large"));
+    }
+    assert!(!cli.status.success());
+    assert!(String::from_utf8_lossy(&cli.stderr).contains("file too large"));
+    assert!(std::sync::Arc::ptr_eq(&doc, &s.doc));
+}
+
+#[cfg(unix)]
+#[test]
+fn f3d_entry_points_refuse_non_regular_files() {
+    let path = std::env::temp_dir().join(format!("solvecraft-f3d-device-{}.f3d", std::process::id()));
+    // /dev/null is finite, so this regression itself cannot hang even if the
+    // regular-file guard is accidentally removed in a future change.
+    std::os::unix::fs::symlink("/dev/null", &path).unwrap();
+    let mut s = Session::default();
+    let errors: Vec<_> = ["doc.open", "file.inspect_f3d"].into_iter().map(|command| s.execute(command, &json!({"path":path}))).collect();
+    let cli = std::process::Command::new(env!("CARGO_BIN_EXE_solvecraft-cli")).arg("bench-open").arg(&path).output().unwrap();
+    std::fs::remove_file(path).unwrap();
+    for result in errors {
+        assert!(result.unwrap_err().to_string().contains("not a regular file"));
+    }
+    assert!(!cli.status.success());
+    assert!(String::from_utf8_lossy(&cli.stderr).contains("not a regular file"));
+}
+
+#[test]
 fn unsupported_f3d_open_preserves_the_current_design() {
     use std::io::Write;
     let path = std::env::temp_dir().join(format!("solvecraft-invalid-{}.F3D", std::process::id()));

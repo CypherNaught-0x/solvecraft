@@ -2,7 +2,7 @@ use super::import_tests::{Fixture, common, fixture, volume};
 use super::relationship_tests::{reference, refs, string, u32, u64, wide};
 
 /// An original 30 x 20 x 17 mm rectangle. No exported native bytes are reused.
-fn rectangle() -> Fixture {
+pub(super) fn rectangle() -> Fixture {
     let mut f = fixture(false);
     for (id, connection, x, y, origin) in [(42, 44, 0_f64, 0., true), (41, 43, 3., 0., false), (71, 73, 3., 2., false), (72, 74, 0., 2., false)] {
         let mut b = vec![0; 4];

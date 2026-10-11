@@ -237,3 +237,72 @@ fn native_parameters_remain_editable_and_failed_import_is_atomic() {
     assert!(std::sync::Arc::ptr_eq(&before, &s.doc));
     assert!(std::sync::Arc::ptr_eq(&model, &s.model.state()));
 }
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
+fn radius_and_arc_diameter_controls_preserve_values_edits_and_reopening() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let cases: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-radial-measurements.json")).unwrap()).unwrap();
+    for (name, api) in cases.as_object().unwrap() {
+        let mut s = Session::default();
+        let before = s.doc.clone();
+        let model = s.model.state();
+        let result = s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))}));
+        if !api["driving"].as_bool().unwrap() {
+            assert!(result.unwrap_err().to_string().contains("parameter expression metadata"), "{name}");
+            assert!(std::sync::Arc::ptr_eq(&before, &s.doc));
+            assert!(std::sync::Arc::ptr_eq(&model, &s.model.state()));
+            continue;
+        }
+        result.unwrap_or_else(|e| panic!("{name}: {e}"));
+        volume(&mut s, api["volume"].as_f64().unwrap(), name);
+        let radial = !name.starts_with("arc-diameter");
+        let solvecraft_engine::doc::FeatureKind::Sketch { sketch, .. } = &s.doc.features[0].kind else { panic!("sketch") };
+        let dimension = sketch.constraints.iter().find(|c| c.param.as_deref() == Some("d1")).unwrap();
+        assert_eq!(matches!(dimension.kind, solvecraft_engine::doc::sketch::ConstraintKind::Radius { .. }), radial, "{name}");
+        let original = s.doc.clone();
+        s.execute("parameters.change", &json!({"name":"d1","expression":if radial {"40 mm"} else {"80 mm"}})).unwrap();
+        let want = if name.starts_with("circle") { 32. } else { 16. } * std::f64::consts::PI;
+        volume(&mut s, want, name);
+        let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+        volume(&mut Session::new(reopened), want, name);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(*s.doc, *original);
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
+fn geometric_controls_preserve_relationships_and_remain_solvable_after_edits() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let cases: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-constraint-measurements.json")).unwrap()).unwrap();
+    for (name, api) in cases.as_object().unwrap() {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let solvecraft_engine::doc::FeatureKind::Sketch { sketch, .. } = &s.doc.features[0].kind else { panic!("sketch") };
+        assert_eq!(sketch.constraints.len(), api["constraints"].as_array().unwrap().len(), "{name}");
+        assert_eq!(sketch.points.len(), api["points"].as_array().unwrap().len(), "{name}");
+        assert_eq!(sketch.curves.len(), api["curves"].as_array().unwrap().len(), "{name}");
+        if name.ends_with("-constrained") {
+            let native = name.strip_prefix("constraint-").unwrap().strip_suffix("-constrained").unwrap();
+            let expected = match native {
+                "equal-lines" | "equal-circles" => "equal",
+                "point-on-line" => "point_on_curve",
+                "horizontal-points" => "horizontal_points",
+                "vertical-points" => "vertical_points",
+                other => other,
+            };
+            assert_eq!(serde_json::to_value(&sketch.constraints[0]).unwrap()["type"], expected, "{name}");
+            let mut edited = sketch.clone();
+            for (i, point) in edited.points.iter_mut().enumerate().filter(|(_, p)| !p.fixed) {
+                point.pos.x += (i % 3) as f64 * 0.3;
+                point.pos.y -= (i % 2) as f64 * 0.2;
+            }
+            let report = solvecraft_engine::doc::sketch::solve(&mut edited);
+            assert!(report.ok(), "{name}: {report:?}");
+            assert!(report.max_residual < 1e-6, "{name}");
+        }
+        let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+        assert_eq!(*s.doc, reopened, "{name}");
+    }
+}

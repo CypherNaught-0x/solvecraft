@@ -155,7 +155,10 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   dimensions; driven dimensions fail atomically. Native mm/degree feature-input
   names now survive timeline edits with their expression dependencies. Arc endpoints,
   major/rotated sweeps and profiles with holes retain exact curve references, with
-  independent native controls and analytic fixtures. Other
+  independent native controls and analytic fixtures. Radius and arc-diameter dimensions,
+  parallel/perpendicular/collinear/equal/concentric/tangent relationships, point
+  alignment and point-on-curve/line-midpoint relationships retain their native bindings.
+  Other
   feature types, legacy history schemas and native B-reps remain unsupported; see
   [the observed format and remaining work](docs/f3d.md). HardEdgeBasin opening now
   has a child-process performance guard ([measurements](docs/project-open-regression.md)).

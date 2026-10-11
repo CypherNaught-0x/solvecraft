@@ -17,6 +17,20 @@ pub enum SketchConstraint {
     Vertical { id: u64, line: u64 },
     Linear { id: u64, points: [u64; 2], vertical: bool, binding: u64 },
     Diameter { id: u64, circle: u64, binding: u64 },
+    Radius { id: u64, circle: u64, binding: u64 },
+    AlignedPoints { id: u64, points: [u64; 2], vertical: bool },
+    PointCurve { id: u64, point: u64, curve: u64, midpoint: bool },
+    Curves { id: u64, curves: [u64; 2], relation: CurveRelation },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CurveRelation {
+    Collinear,
+    Concentric,
+    Parallel,
+    Perpendicular,
+    Tangent,
+    Equal,
 }
 
 fn attributes(r: &mut Reader<'_>) -> Result<()> {
@@ -49,7 +63,8 @@ impl Design {
         let classes: BTreeMap<_, _> = self.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
         let parameters = self.parameters()?;
         let bindings: BTreeMap<_, _> = parameters.iter().map(|p| (p.binding, p.owner)).collect();
-        let circles: BTreeMap<_, _> = self.sketch_circles()?.into_iter().map(|c| (c.id, c.sketch)).collect();
+        let circles: BTreeMap<_, _> =
+            self.sketch_circles()?.into_iter().chain(self.sketch_arcs()?.into_iter().map(|a| a.circle)).map(|c| (c.id, c.sketch)).collect();
         let lines: BTreeMap<_, _> = self.sketch_lines()?.into_iter().map(|c| (c.id, c.sketch)).collect();
         class
             .objects
@@ -74,6 +89,9 @@ impl Design {
                 finish(&r)?;
                 let mut seen = BTreeSet::new();
                 let mut constraints = Vec::new();
+                let point = |id: &u64| classes.get(id).is_some_and(|c| c.id == "C2CEDAE7-1716-47C1-B7B1-07B70081D0FB" && c.version == 11);
+                let line = |id: &u64| lines.get(id) == Some(geometry);
+                let round = |id: &u64| circles.get(id) == Some(geometry);
                 for id in relations {
                     if !seen.insert(id) {
                         return Err(invalid("duplicate sketch constraint"));
@@ -110,11 +128,28 @@ impl Design {
                     zeros(&mut r, 1)?;
                     finish(&r)?;
                     constraints.push(match (kind, operands.as_slice()) {
-                        (1, [a, b]) => {
-                            for p in [a, b] {
-                                require_class(&classes, *p, "C2CEDAE7-1716-47C1-B7B1-07B70081D0FB", 11)?;
-                            }
-                            SketchConstraint::Coincident { id, points: [*a, *b] }
+                        (1, [a, b]) if point(a) && point(b) => SketchConstraint::Coincident { id, points: [*a, *b] },
+                        (1 | 0x1000, [p, c]) if point(p) && (line(c) || (kind == 1 && round(c))) => {
+                            SketchConstraint::PointCurve { id, point: *p, curve: *c, midpoint: kind == 0x1000 }
+                        }
+                        (64 | 128, [a, b]) if point(a) && point(b) => SketchConstraint::AlignedPoints { id, points: [*a, *b], vertical: kind == 128 },
+                        (2 | 16 | 32, [a, b]) if line(a) && line(b) => SketchConstraint::Curves {
+                            id,
+                            curves: [*a, *b],
+                            relation: if kind == 2 {
+                                CurveRelation::Collinear
+                            } else if kind == 16 {
+                                CurveRelation::Parallel
+                            } else {
+                                CurveRelation::Perpendicular
+                            },
+                        },
+                        (4, [a, b]) if round(a) && round(b) => SketchConstraint::Curves { id, curves: [*a, *b], relation: CurveRelation::Concentric },
+                        (0x800, [a, b]) if (line(a) && line(b)) || (round(a) && round(b)) => {
+                            SketchConstraint::Curves { id, curves: [*a, *b], relation: CurveRelation::Equal }
+                        }
+                        (0x100, [a, b]) if (line(a) && round(b)) || (round(a) && (line(b) || round(b))) => {
+                            SketchConstraint::Curves { id, curves: [*a, *b], relation: CurveRelation::Tangent }
                         }
                         (64 | 128, [line]) if lines.get(line) == Some(geometry) => {
                             if kind == 64 {
@@ -173,32 +208,45 @@ impl Design {
                         constraints.push(SketchConstraint::Linear { id, points: [a, b], vertical, binding });
                         continue;
                     }
-                    require_class(&classes, id, "664AD49F-207F-4CD5-8555-DD269E9F09EA", 0)?;
+                    let radial = classes.get(&id).is_some_and(|c| c.id == "8EDAC24D-35D4-4591-B8E7-B3EA081C9DF0");
+                    require_class(
+                        &classes,
+                        id,
+                        if radial { "8EDAC24D-35D4-4591-B8E7-B3EA081C9DF0" } else { "664AD49F-207F-4CD5-8555-DD269E9F09EA" },
+                        0,
+                    )?;
                     let mut r = payload(records.primary(id)?, id)?;
                     empty(&mut r)?;
                     one(&mut r)?;
                     if r.u32()? != 2 || r.reference()? != 0 || !matches!(r.u32()?, 4 | 5) {
-                        return Err(invalid("unsupported diameter operands"));
+                        return Err(invalid("unsupported circular dimension operands"));
                     }
                     let circle = r.reference()?;
                     zeros(&mut r, 4)?;
                     require_class(&classes, circle, "F0130424-8B7E-4092-93C9-1CA807482534", 0)?;
                     if circles.get(&circle) != Some(geometry) {
-                        return Err(invalid("diameter circle belongs to another sketch"));
+                        return Err(invalid("dimensioned curve belongs to another sketch"));
                     }
                     one(&mut r)?;
                     attributes(&mut r)?;
                     r.take(250)?; // presentation geometry, text prefix and layout
                     r.wide_string()?; // displayed value; the binding carries the expression
-                    r.take(32)?;
+                    r.take(24)?;
+                    if r.u64()? != if radial { 0x20000 } else { 0x10000 } {
+                        return Err(invalid("circular dimension flags disagree with its class"));
+                    }
                     let binding = r.reference()?;
                     if bindings.get(&binding) != Some(&feature) || references(&mut r)? != [circle] {
-                        return Err(invalid("inconsistent diameter binding or curve"));
+                        return Err(invalid("inconsistent circular dimension binding or curve"));
                     }
                     zeros(&mut r, 1)?;
                     finish(&r)?;
                     dimension_owner(&records, id, *geometry)?;
-                    constraints.push(SketchConstraint::Diameter { id, circle, binding });
+                    constraints.push(if radial {
+                        SketchConstraint::Radius { id, circle, binding }
+                    } else {
+                        SketchConstraint::Diameter { id, circle, binding }
+                    });
                 }
                 Ok(SketchConstraints { geometry: *geometry, feature, constraints })
             })

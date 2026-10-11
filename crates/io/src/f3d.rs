@@ -11,6 +11,8 @@ use crate::{IoError, Result};
 mod archive;
 mod circles;
 mod constraints;
+#[cfg(test)]
+mod geometric_tests;
 mod history;
 mod import;
 #[cfg(test)]
@@ -22,9 +24,11 @@ mod points;
 mod polygon_tests;
 mod profiles;
 #[cfg(test)]
+mod radial_tests;
+#[cfg(test)]
 mod round_profile_tests;
 pub use circles::{SketchArc, SketchCircle};
-pub use constraints::{SketchConstraint, SketchConstraints};
+pub use constraints::{CurveRelation, SketchConstraint, SketchConstraints};
 pub use history::{HistoryFeature, HistoryKind, SketchPlacement};
 pub use import::import_f3d;
 pub use lines::SketchLine;

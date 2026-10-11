@@ -195,11 +195,44 @@ impl Design {
                                 let q = point_indices.get(b).copied().ok_or_else(|| invalid("missing coincidence point"))?;
                                 (ConstraintKind::Coincident { p, q }, None)
                             }
-                            SketchConstraint::Diameter { id, circle, binding } => {
-                                let c = curve_indices.get(circle).copied().ok_or_else(|| invalid("missing dimensioned circle"))?;
-                                let parameter = bindings.get(binding).ok_or_else(|| invalid("missing diameter parameter"))?;
+                            SketchConstraint::AlignedPoints { points: [a, b], vertical, .. } => {
+                                let p = point_indices.get(a).copied().ok_or_else(|| invalid("missing aligned point"))?;
+                                let q = point_indices.get(b).copied().ok_or_else(|| invalid("missing aligned point"))?;
+                                (if *vertical { ConstraintKind::VerticalPoints { p, q } } else { ConstraintKind::HorizontalPoints { p, q } }, None)
+                            }
+                            SketchConstraint::PointCurve { point, curve, midpoint, .. } => {
+                                let p = point_indices.get(point).copied().ok_or_else(|| invalid("missing constrained point"))?;
+                                let c = curve_indices.get(curve).copied().ok_or_else(|| invalid("missing constrained curve"))?;
+                                (if *midpoint { ConstraintKind::Midpoint { p, l: c } } else { ConstraintKind::PointOnCurve { p, c } }, None)
+                            }
+                            SketchConstraint::Curves { curves: [a, b], relation, .. } => {
+                                let a = curve_indices.get(a).copied().ok_or_else(|| invalid("missing constrained curve"))?;
+                                let b = curve_indices.get(b).copied().ok_or_else(|| invalid("missing constrained curve"))?;
+                                (
+                                    match relation {
+                                        CurveRelation::Collinear => ConstraintKind::Collinear { a, b },
+                                        CurveRelation::Concentric => ConstraintKind::Concentric { a, b },
+                                        CurveRelation::Parallel => ConstraintKind::Parallel { a, b },
+                                        CurveRelation::Perpendicular => ConstraintKind::Perpendicular { a, b },
+                                        CurveRelation::Tangent => ConstraintKind::Tangent { a, b },
+                                        CurveRelation::Equal => ConstraintKind::Equal { a, b },
+                                    },
+                                    None,
+                                )
+                            }
+                            SketchConstraint::Diameter { id, circle, binding } | SketchConstraint::Radius { id, circle, binding } => {
+                                let c = curve_indices.get(circle).copied().ok_or_else(|| invalid("missing dimensioned curve"))?;
+                                let parameter = length_parameter(&bindings, *binding)?;
                                 consumed.insert(*id);
-                                (ConstraintKind::Diameter { c, value: parameter.value * 10. }, Some(parameter.name.clone()))
+                                let value = parameter.value * 10.;
+                                (
+                                    if matches!(constraint, SketchConstraint::Radius { .. }) {
+                                        ConstraintKind::Radius { c, value }
+                                    } else {
+                                        ConstraintKind::Diameter { c, value }
+                                    },
+                                    Some(parameter.name.clone()),
+                                )
                             }
                             SketchConstraint::Horizontal { line, .. } | SketchConstraint::Vertical { line, .. } => {
                                 let l = curve_indices.get(line).copied().ok_or_else(|| invalid("missing constrained line"))?;
@@ -215,7 +248,7 @@ impl Design {
                             SketchConstraint::Linear { id, points: [a, b], vertical, binding } => {
                                 let p = point_indices.get(a).copied().ok_or_else(|| invalid("missing dimension point"))?;
                                 let q = point_indices.get(b).copied().ok_or_else(|| invalid("missing dimension point"))?;
-                                let parameter = bindings.get(binding).ok_or_else(|| invalid("missing linear dimension parameter"))?;
+                                let parameter = length_parameter(&bindings, *binding)?;
                                 consumed.insert(*id);
                                 let value = parameter.value * 10.;
                                 (
@@ -297,6 +330,14 @@ impl Design {
         }
         Ok(doc)
     }
+}
+
+fn length_parameter<'a>(bindings: &BTreeMap<u64, &'a Parameter>, binding: u64) -> Result<&'a Parameter> {
+    let p = bindings.get(&binding).copied().ok_or_else(|| invalid("missing dimension parameter"))?;
+    if solvecraft_doc::expr::Kind::from_unit(&p.display_unit) != solvecraft_doc::expr::Kind::Length {
+        return Err(invalid("sketch dimension requires a length parameter"));
+    }
+    Ok(p)
 }
 
 fn profile_selection(profile: &SketchProfile) -> Result<ProfileSel> {

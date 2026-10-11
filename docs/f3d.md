@@ -23,8 +23,10 @@ An imported document is unsaved with no source path: saving it uses a new
 dialog includes F3D, and the CLI supports opening, measuring and benchmarking it.
 
 Supported reconstruction includes native parameter names and expressions,
-driving diameter and horizontal/vertical distance dimensions, coincidence and
-horizontal/vertical constraints, independent point/curve fixation, construction curves, rigid root sketch placement, feature names/order/suppression,
+driving radius/diameter and horizontal/vertical distance dimensions, coincidence,
+horizontal/vertical line and point alignment, parallel/perpendicular/collinear lines,
+equal lengths/radii, concentric/tangent round curves, point-on-curve and line-midpoint
+relationships, independent point/curve fixation, construction curves, rigid root sketch placement, feature names/order/suppression,
 complete outer and inner boundaries for circle, polygon and arc profiles, signed extrusion distances and taper. New-body
 operations and booleans against a sole existing body are supported. Multiple-body
 boolean targeting, two-sided/start/to-object extents, other sketch geometry and
@@ -337,3 +339,35 @@ imports were rendered and visually checked; generated evidence remains local.
 
 Upstream `7abfe69` (merged documentation PR #157) was then integrated without
 conflicts. Post-merge full CI also passes, including the opening guard in 0.91 seconds.
+
+## Radius dimensions and geometric relationships
+
+Nine independent radius/arc-diameter controls establish the circular dimension
+schemas: radial class `8EDAC24D-35D4-4591-B8E7-B3EA081C9DF0` version 0, diameter
+class `664AD49F-207F-4CD5-8555-DD269E9F09EA` version 0. The trailing dimension flag
+is respectively `0x20000` or `0x10000`, and must agree with the class. Both bind
+native parameters to SolveCraft dimensions on circles or arcs. The importer checks
+length units. Reference dimensions still fail explicitly until their measurement
+dependencies can be represented, rather than becoming frozen driving parameters.
+
+Thirty-three geometric controls add/remove eleven relationships independently.
+The generic version-3 constraint record uses the following verified kind tags:
+collinear `2`, concentric `4`, parallel `16`, perpendicular `32`, horizontal `64`,
+vertical `128`, tangent `256`, equal `2048`, midpoint `4096`; coincidence and
+point-on-curve share `1`. Operand count and classes distinguish point alignment
+from line alignment and point coincidence from point-on-curve. The importer
+checks operand types, sketch ownership and matching back-references; an unknown
+combination is rejected. Arc midpoints are not mapped to chord midpoints.
+
+Original synthetic prisms check analytic volume after edits to dimensions whose
+geometry is held by parallel, perpendicular, equal and aligned-point constraints.
+Local native controls check constraint identity, solver behavior after point edits,
+radius/diameter edits, independent API volume, reopening and undo. Upstream file
+read limits are also applied to F3D opening, inspection and CLI benchmarking.
+
+Verified against upstream `d9d4dd2` (merged PRs #151–155): full CI passes all 25
+test binaries, 46 IO tests, 553 engine tests, 191 kernel tests and ten-crate WASM
+validation. The thirteen native fixtures pass; the opening guard completed in
+0.85 seconds. All fifteen local evidence tests pass (eleven import, four
+inspection). The edited arc extrusion was rendered and visually checked. The
+larger supplied designs still require legacy schemas and additional feature types.

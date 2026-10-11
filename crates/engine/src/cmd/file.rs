@@ -54,11 +54,7 @@ fn path_arg<'a>(p: &'a Value, cmd: &str) -> Result<&'a str> {
 
 /// Read a STEP file as an Import feature.
 fn read_step(path: &str) -> Result<solvecraft_io::StepFeature> {
-    let meta = solvecraft_io::vfs::len(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if meta > solvecraft_io::MAX_STEP_BYTES as u64 {
-        return Err(EngineError::Other(format!("{path}: file too large")));
-    }
-    let bytes = solvecraft_io::vfs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let bytes = solvecraft_io::vfs::read(path, solvecraft_io::MAX_STEP_BYTES).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     solvecraft_io::step_import_feature(&bytes, path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }
 
@@ -83,11 +79,7 @@ fn add_step(s: &mut Session, path: &str, name: Option<&str>) -> Result<Value> {
 
 /// Add a MeshImport feature for a 3MF or STL file.
 fn add_mesh(s: &mut Session, path: &str, name: Option<&str>) -> Result<Value> {
-    let meta = solvecraft_io::vfs::len(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if meta > solvecraft_io::MAX_3MF_BYTES as u64 {
-        return Err(EngineError::Other(format!("{path}: file too large")));
-    }
-    let bytes = solvecraft_io::vfs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let bytes = solvecraft_io::vfs::read(path, solvecraft_io::MAX_3MF_BYTES).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     let mf = solvecraft_io::mesh_import_feature(&bytes, path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     let fname = name.filter(|n| !n.trim().is_empty()).unwrap_or(&mf.name).to_string();
     let id = s.doc_mut().add_feature(mf.kind, Some(&fname))?;
@@ -126,11 +118,7 @@ fn insert_step(s: &mut Session, p: &Value) -> Result<Value> {
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_arg(p, "doc.open")?;
     if solvecraft_io::f3d::is_f3d_path(path) {
-        let len = solvecraft_io::vfs::len(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-        if len > solvecraft_io::f3d::MAX_F3D_BYTES as u64 {
-            return Err(bad("doc.open", "F3D archive exceeds 256 MiB"));
-        }
-        let bytes = solvecraft_io::vfs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+        let bytes = solvecraft_io::vfs::read(path, solvecraft_io::f3d::MAX_F3D_BYTES).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
         let stem = std::path::Path::new(path).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "Imported".into());
         let doc = solvecraft_io::f3d::import_f3d(&bytes, &stem)?;
         let mut fresh = Session::new(doc);
@@ -153,11 +141,7 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
         let errors = s.model.results.iter().filter(|r| r.error.is_some()).count();
         return Ok(json!({"path": path, "features": s.doc.features.len(), "errors": errors, "bodies": r["bodies"], "warnings": r["warnings"]}));
     }
-    let meta = solvecraft_io::vfs::len(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if meta as usize > solvecraft_io::MAX_DESIGN_BYTES {
-        return Err(EngineError::Other(format!("{path}: file too large")));
-    }
-    let bytes = solvecraft_io::vfs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let bytes = solvecraft_io::vfs::read(path, solvecraft_io::MAX_DESIGN_BYTES).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     let doc = solvecraft_io::read_design(&bytes)?;
     *s = Session::new(doc);
     s.path = Some(path.to_string());
@@ -167,11 +151,7 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
     let path = path_arg(p, "file.inspect_f3d")?;
-    let len = solvecraft_io::vfs::len(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if len > solvecraft_io::f3d::MAX_F3D_BYTES as u64 {
-        return Err(bad("file.inspect_f3d", "F3D archive exceeds 256 MiB"));
-    }
-    let bytes = solvecraft_io::vfs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let bytes = solvecraft_io::vfs::read(path, solvecraft_io::f3d::MAX_F3D_BYTES).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     let designs = solvecraft_io::f3d::read_f3d(&bytes)?;
     let summaries: Vec<_> = designs
         .iter()
@@ -217,6 +197,10 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 Ok(sketches) => json!({"records":sketches.iter().map(|s|json!({"geometry":s.geometry,"feature":s.feature,"constraints":s.constraints.iter().map(|c|match c {
                     solvecraft_io::f3d::SketchConstraint::Coincident {id,points} => json!({"type":"coincident","id":id,"points":points}),
                     solvecraft_io::f3d::SketchConstraint::Diameter {id,circle,binding} => json!({"type":"diameter","id":id,"circle":circle,"binding":binding}),
+                    solvecraft_io::f3d::SketchConstraint::Radius {id,circle,binding} => json!({"type":"radius","id":id,"circle":circle,"binding":binding}),
+                    solvecraft_io::f3d::SketchConstraint::AlignedPoints {id,points,vertical} => json!({"type":if *vertical{"vertical_points"}else{"horizontal_points"},"id":id,"points":points}),
+                    solvecraft_io::f3d::SketchConstraint::PointCurve {id,point,curve,midpoint} => json!({"type":if *midpoint{"midpoint"}else{"point_on_curve"},"id":id,"point":point,"curve":curve}),
+                    solvecraft_io::f3d::SketchConstraint::Curves {id,curves,relation} => json!({"type":format!("{relation:?}").to_lowercase(),"id":id,"curves":curves}),
                     solvecraft_io::f3d::SketchConstraint::Horizontal{id,line}=>json!({"type":"horizontal","id":id,"line":line}),
                     solvecraft_io::f3d::SketchConstraint::Vertical{id,line}=>json!({"type":"vertical","id":id,"line":line}),
                     solvecraft_io::f3d::SketchConstraint::Linear{id,points,vertical,binding}=>json!({"type":if *vertical{"distance_y"}else{"distance_x"},"id":id,"points":points,"binding":binding}),

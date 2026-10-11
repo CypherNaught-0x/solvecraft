@@ -106,7 +106,8 @@ pub(super) fn fixture(construction: bool, curve_tag: u64) -> Design {
     u32(&mut b, 0);
     b.extend([0; 250]);
     wide(&mut b, "60 mm");
-    b.extend([0; 32]);
+    b.extend([0; 24]);
+    u64(&mut b, 0x10000);
     reference(&mut b, 61);
     refs(&mut b, &[31]);
     b.push(0);
@@ -198,7 +199,7 @@ fn unsupported_constraints_and_damaged_relationships_fail() {
     let mut d = fixture(false, 17);
     let rec = d.records.iter().find(|r| r.id == 55).unwrap();
     let at = rec.offset + Records::new(&d).primary(55).unwrap().len() - 35;
-    d.bulk[at..at + 8].copy_from_slice(&64u64.to_le_bytes());
+    d.bulk[at..at + 8].copy_from_slice(&0xdead_u64.to_le_bytes());
     assert!(d.sketch_constraints().unwrap_err().to_string().contains("constraint kind"));
     let mut d = fixture(false, 17);
     d.classes.iter_mut().find(|c| c.objects.contains(&55)).unwrap().version = 999;
