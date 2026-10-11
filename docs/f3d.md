@@ -903,7 +903,29 @@ checking. All 24 local import groups and ten inspection groups passed. The
 HardEdgeBasin opening guard passed in 1.41 seconds. An imported triangular prism
 was rendered and visually checked after a supplementary-angle edit.
 
-A new fixed-arc control separately demonstrates that the existing arc importer
-still freezes an otherwise free endpoint after a dimension edit. Its supporting
-circle and endpoint fixation need separate reconstruction; this remains open
-alongside legacy support links, offset-curve generators and other feature types.
+### Fixed arc supports with independently editable endpoints
+
+Native arc fixation now reconstructs a fixed center and a constant radius
+constraint, preserving the independent endpoint fixation flags. Setting the
+whole imported curve fixed incorrectly held both endpoints and silently left
+the extrusion at its previous shape after a driving endpoint-dimension edit.
+
+Three local public-API controls use a radius of 30 mm, center (0, 0), fixed start
+(30, 0), and a free endpoint whose horizontal coordinate changes from 10 to 20 mm.
+For an extrusion height of 10 mm the independent volume changes from
+1296.6766909 to 430.7070513 mm³. Native acceptance checks compare center, start,
+end, volume and bounds after editing, reopening and undo. Original field-authored
+records exercise the same reconstruction in ordinary CI, including a third
+endpoint position. The twenty-eighth original `.solvecraft` fixture,
+`fixed-arc-support`, checks the analytic circular-segment volume and bounds for
+two endpoint edits and a height edit. No Fusion-generated data is committed.
+
+Legacy support links, offset-curve generators and other feature types remain
+unfinished; the larger supplied archives still cannot be fully imported as
+editable history.
+
+Validation for the arc correction: full `cargo xtask ci` passed all 29 test
+binaries, including 89 I/O tests, 560 engine tests, 198 kernel tests, all 28
+original history fixtures, the HardEdgeBasin opening guard and ten-crate WASM
+checking. All 25 local F3D import groups passed. The edited imported segment was
+rendered and visually checked. Upstream `4af2d06` remains integrated.

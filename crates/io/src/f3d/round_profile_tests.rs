@@ -201,3 +201,37 @@ fn diameter_graph_slots_do_not_change_dimension_semantics() {
         volume(&doc, 400. * PI * 17.);
     }
 }
+
+#[test]
+fn fixed_arc_support_preserves_free_endpoint_motion() {
+    use solvecraft_doc::sketch::{ConstraintKind, CurveKind};
+    let mut f = arc((1_f64 / 3.).acos(), 0.);
+    let b = &mut f.0.get_mut(&31).unwrap().2;
+    let n = b.len();
+    b[n - 51] = 1; // Original field-authored support fixation.
+    f.0.get_mut(&71).unwrap().2[24] = 1; // Start point independently fixed.
+    let mut doc = f.design().to_document("Fixed arc support").unwrap();
+    let FeatureKind::Sketch { sketch, .. } = &mut doc.features[0].kind else { panic!("sketch") };
+    let ci = sketch.curve_index("c31").unwrap();
+    let CurveKind::Arc { c, a, b } = sketch.curves[ci].kind else { panic!("arc") };
+    assert!(!sketch.curves[ci].fixed);
+    assert!(sketch.points[a].fixed);
+    assert!(!sketch.points[b].fixed);
+    let dimension = sketch.add_constraint(ConstraintKind::DistanceX { p: c, q: b, value: 10. }, None).unwrap();
+    for x in [10_f64, 20., 5.] {
+        let FeatureKind::Sketch { sketch, .. } = &mut doc.features[0].kind else { panic!("sketch") };
+        sketch.constraints.iter_mut().find(|c| c.id == dimension).unwrap().kind = ConstraintKind::DistanceX { p: c, q: b, value: x };
+        let angle = (x / 30.).acos();
+        volume(&doc, 450. * (angle - angle.sin()) * 17.);
+        let mut model = solvecraft_doc::Model::new();
+        model.evaluate(&doc);
+        let state = model.state();
+        let solved = &state.sketches[0].sketch;
+        for (index, expected) in [(c, (0., 0.)), (a, (30., 0.)), (b, (x, (900. - x * x).sqrt()))] {
+            let p = solved.points[index].pos;
+            assert!((p.x - expected.0).abs() < 1e-5);
+            assert!((p.y - expected.1).abs() < 1e-5);
+        }
+        volume(&crate::read_design(&crate::write_design(&doc)).unwrap(), 450. * (angle - angle.sin()) * 17.);
+    }
+}

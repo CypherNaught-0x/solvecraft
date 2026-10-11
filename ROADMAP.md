@@ -207,8 +207,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   Point-to-line and parallel-line offset dimensions retain their driving parameters
   through edits, reopening and undo; independent controls check both volume and bounds.
   Angular dimensions preserve quadrants and clockwise/supplementary edit directions,
-  including 0°, 90° and 180° controls. Native fixed line supports leave unfixed
-  endpoints editable instead of freezing their positions.
+  including 0°, 90° and 180° controls. Native fixed line supports and arc centers/radii leave unfixed
+  endpoints editable instead of freezing their positions; an original arc-segment
+  fixture checks endpoint edits against analytic volume and bounds.
   Signed extrusion start offsets preserve expressions
   and parameter bindings through edits, reopening and undo; zero-angle taper inputs
   remain editable. Other feature types and native B-reps remain unsupported; see

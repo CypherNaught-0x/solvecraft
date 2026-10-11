@@ -30,6 +30,7 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-polygon-measurements.json",
         "fusion-loop-measurements.json",
         "fusion-arc-measurements.json",
+        "fusion-arc-support-measurements.json",
         "fusion-plane-measurements.json",
         "fusion-user-parameter-measurements.json",
         "fusion-user-rectangle-measurements.json",
@@ -329,7 +330,13 @@ fn imported_arcs_preserve_api_endpoints_and_independent_flags() {
                 },
             )
             .unwrap();
-        assert_eq!(curve.fixed, api["arc"]["fixed"].as_bool().unwrap(), "{name}");
+        assert!(!curve.fixed, "{name}: native arc fixation must not immobilize its endpoints");
+        let ci = sketch.curve_index(&curve.id).unwrap();
+        let held = sketch
+            .constraints
+            .iter()
+            .any(|c| matches!(c.kind, solvecraft_engine::doc::sketch::ConstraintKind::Radius { c, .. } if c == ci) && c.param.is_none());
+        assert_eq!(held, api["arc"]["fixed"].as_bool().unwrap(), "{name}");
         assert_eq!(curve.construction, api["arc"]["construction"].as_bool().unwrap(), "{name}");
         for (index, key) in indices.into_iter().zip(["center", "start", "end"]) {
             let p = sketch.points[index].pos;
@@ -777,4 +784,45 @@ fn fixed_line_support_preserves_free_endpoint_dimension_edits() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.doc, original);
     verify(&s, base);
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with independently fixed arc/point controls"]
+fn fixed_arc_support_preserves_endpoint_edits_volume_and_bounds() {
+    use solvecraft_engine::doc::sketch::CurveKind;
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-arc-support-measurements.json")).unwrap()).unwrap();
+    let base = &api["fixed-arc-support-baseline"];
+    let changed = &api["fixed-arc-support-changed"];
+    assert_eq!(base["arc"]["fixed"], true);
+    assert_eq!(base["arc"]["start_fixed"], true);
+    assert_eq!(base["arc"]["end_fixed"], false);
+    let verify = |s: &mut Session, expected: &Value| {
+        let measure = volume(s, expected["volume"].as_f64().unwrap(), "fixed arc support");
+        for (end, key) in [(0, "min"), (1, "max")] {
+            for axis in 0..3 {
+                let got = measure["bodies"][0]["bbox"][key][axis].as_f64().unwrap();
+                assert!((got - expected["bounds"][end][axis].as_f64().unwrap() * 10.).abs() < 1e-5);
+            }
+        }
+        let state = s.model.state();
+        let sk = &state.sketches[0].sketch;
+        let (c, a, b) = sk.curves.iter().find_map(|curve| if let CurveKind::Arc { c, a, b } = curve.kind { Some((c, a, b)) } else { None }).unwrap();
+        for (point, key) in [(c, "center"), (a, "start"), (b, "end")] {
+            let p = sk.points[point].pos;
+            assert!((p.x - expected["arc"][key][0].as_f64().unwrap() * 10.).abs() < 1e-5);
+            assert!((p.y - expected["arc"][key][1].as_f64().unwrap() * 10.).abs() < 1e-5);
+        }
+    };
+    let mut s = Session::default();
+    s.execute("doc.open", &json!({"path":dir.join("fixed-arc-support-baseline.f3d")})).unwrap();
+    let original = s.doc.clone();
+    verify(&mut s, base);
+    s.execute("parameters.change", &json!({"name":base["parameter"],"expression":changed["expression"]})).unwrap();
+    verify(&mut s, changed);
+    let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+    verify(&mut Session::new(reopened), changed);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc, original);
+    verify(&mut s, base);
 }

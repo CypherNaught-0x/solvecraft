@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These twenty-seven designs and their JSON command recipes are original SolveCraft test
+These twenty-eight designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -33,7 +33,13 @@ recipe, independent expectations and optional edits.
 | extrusion-start-offset | Signed start offset and dependent height expression | 10200 |
 | symmetric-cylinders | Center symmetry, equal radii, diameter/height edits | 6000π |
 | offset-dimension-prism | Parallel-line distance, width/depth/height edits | 10200 |
+| fixed-arc-support | Fixed center/radius with moving endpoint, height edits | 4500(acos(1/3) − √8/3) |
 | angular-prism | Driving angle, supplementary angles, height edits | 10200 |
+
+The fixed arc support uses radius 30 mm, a fixed start at (30, 0), and an endpoint
+whose X coordinate changes from 10 to 20 or 5 mm. Its segment volume is
+r²(θ − sin θ)h/2, where θ = acos(endpoint_x/r). Endpoint edits preserve the
+center, radius and start while changing the segment bounds and volume.
 
 The annulus uses radii 30 and 10 mm with height 12 mm, giving π(R² − r²)h.
 The semicircular segment uses radius 15 mm and height 12 mm, giving πr²h/2.

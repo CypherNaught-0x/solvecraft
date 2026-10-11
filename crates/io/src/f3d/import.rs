@@ -314,8 +314,16 @@ impl Design {
                             let [center, start, end] = coords;
                             let i = sketch.add_arc(center, start, end, indices, Some(&format!("c{id}"))).map_err(|e| invalid(&e.to_string()))?;
                             let curve = sketch.curves.get_mut(i).ok_or_else(|| invalid("missing imported arc"))?;
-                            curve.fixed = c.fixed;
                             curve.construction = c.construction;
+                            if c.fixed {
+                                // Native fixation holds the supporting circle. Endpoint
+                                // fixation is independent; curve.fixed would freeze both.
+                                let [center, _, _] = indices;
+                                let p = center.ok_or_else(|| invalid("missing fixed arc center"))?;
+                                for kind in [ConstraintKind::Fix { p }, ConstraintKind::Radius { c: i, value: c.radius * 10. }] {
+                                    sketch.add_constraint(kind, None).map_err(|e| invalid(&e.to_string()))?;
+                                }
+                            }
                             curve_indices.insert(*id, i);
                             if !consumed.insert(*id) {
                                 return Err(invalid("duplicate sketch entity"));
