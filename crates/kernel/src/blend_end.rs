@@ -788,6 +788,7 @@ mod tests {
 
     #[test]
     fn transition_internal_seams_are_tangent() {
+        use mt::InnerSpace;
         let mut body = shallow_basin();
         let rim = [Vec3::new(45.0, 1.8, 16.0), Vec3::new(45.0, 45.0, 16.0), Vec3::new(15.0, 23.4, 16.0), Vec3::new(75.0, 23.4, 16.0)];
         body = crate::fillet(&body, &rim, 0.3).unwrap();
@@ -802,6 +803,28 @@ mod tests {
         }
         body = check_geometry(&body, Vec3::new(15.0 + inset * 0.5, 45.0 - inset * 0.5, 10.0), 1.5);
         check_transition_tangency(&body);
+        for face in body.solid.face_iter() {
+            let mt::Surface::BSplineSurface(s) = face.surface() else { continue };
+            if s.degrees() != (5, 5) {
+                continue;
+            }
+            let surface = crate::body::evaluation::Surface(mt::Surface::BSplineSurface(s));
+            let mut max_angle = 0.0_f64;
+            for i in 1..64 {
+                for j in 1..64 {
+                    let (u, v) = (i as f64 / 64.0, j as f64 / 64.0);
+                    // Leave only the immediate neighborhood of singular tips out.
+                    if u.min(1.0 - u).hypot(1.0 - v) < 0.08 {
+                        continue;
+                    }
+                    let n = surface.normal(u, v);
+                    for (a, b) in [(u + 1.0 / 64.0, v), (u, v + 1.0 / 64.0)] {
+                        max_angle = max_angle.max(n.dot(surface.normal(a, b)).clamp(-1.0, 1.0).acos().to_degrees());
+                    }
+                }
+            }
+            assert!(max_angle < 45.0, "transition normal wrinkles between adjacent samples: {max_angle} degrees");
+        }
         let mesh = body.display_mesh(0.01).unwrap();
         let mut seen = std::collections::HashSet::new();
         let mut index = 0;
@@ -820,6 +843,40 @@ mod tests {
             }
         }
         assert!(joins > 0);
+        // Check the actual display normals, too: exact surface tangency alone
+        // does not catch a mesher projecting boundary points outside a patch.
+        // Include a translated, scaled body to expose endpoint conditioning.
+        let placed =
+            crate::transform_matrix(&body, [[10.0, 0.0, 0.0, 0.0], [0.0, 10.0, 0.0, 0.0], [0.0, 0.0, 10.0, 0.0], [0.0, -480.0, 690.0, 1.0]]).unwrap();
+        for (b, tolerance) in [&body, &placed].into_iter().flat_map(|b| [1e-3, 1e-4].into_iter().map(move |t| (b, t))) {
+            let mesh = b.display_mesh(b.size() * tolerance).unwrap();
+            let fs: Vec<_> = b.solid.face_iter().collect();
+            for (edge, faces) in mesh.edges.iter().zip(&mesh.edge_faces) {
+                let [a, b2] = faces.as_slice() else { continue };
+                if ![*a, *b2].iter().all(|f| matches!(fs[*f as usize].surface(), mt::Surface::BSplineSurface(s) if s.degrees() == (5, 5))) {
+                    continue;
+                }
+                for p in edge.iter().skip(1).take(edge.len().saturating_sub(2)) {
+                    let normals: Vec<_> = [a, b2]
+                        .into_iter()
+                        .map(|face| {
+                            let index = mesh
+                                .triangles
+                                .iter()
+                                .zip(&mesh.tri_face)
+                                .filter(|(_, f)| *f == face)
+                                .flat_map(|(t, _)| t)
+                                .min_by(|a, b| mesh.positions[**a as usize].dist(*p).total_cmp(&mesh.positions[**b as usize].dist(*p)))
+                                .unwrap();
+                            assert!(mesh.positions[*index as usize].dist(*p) < 1e-5);
+                            mesh.normals[*index as usize]
+                        })
+                        .collect();
+                    let angle = normals[0].dot(normals[1]).clamp(-1.0, 1.0).acos().to_degrees();
+                    assert!(angle < 0.02, "display seam normal mismatch {angle} at {p:?}");
+                }
+            }
+        }
     }
 
     #[test]

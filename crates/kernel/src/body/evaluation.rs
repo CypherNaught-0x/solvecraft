@@ -1,6 +1,7 @@
 //! Meshing adapter: spline bases have compact support. Skipping exactly zero
 //! weights preserves the surface while avoiding work proportional to its entire
 //! control net at every interior grid point.
+use solvecraft_geom::Vec3;
 use truck_modeling::{self as mt, *};
 
 #[derive(Clone)]
@@ -93,15 +94,21 @@ impl ParametricSurface for Surface {
 impl ParametricSurface3D for Surface {
     fn normal(&self, u: f64, v: f64) -> mt::Vector3 {
         let mt::Surface::BSplineSurface(s) = &self.0 else { return self.0.normal(u, v) };
-        let normal = self.uder(u, v).cross(self.vder(u, v));
-        if normal.magnitude2() > 0.0 && normal.magnitude2().is_finite() {
+        let (du, dv) = (self.uder(u, v), self.vder(u, v));
+        let normal = du.cross(dv);
+        let (ur, vr) = s.range_tuple();
+        let boundary = u.is_finite() && v.is_finite() && (u == ur.0 || u == ur.1 || v == vr.0 || v == vr.1);
+        // Coincident endpoint controls can differ by rounding after placement.
+        // Their tiny nonzero derivative is not a meaningful limiting normal.
+        let roundoff = if boundary { self.subs(u, v).to_vec().magnitude().max(1.0) * f64::EPSILON * 8192.0 } else { 0.0 };
+        let singular = du.magnitude2() <= roundoff * roundoff || dv.magnitude2() <= roundoff * roundoff;
+        if !singular && normal.magnitude2() > 0.0 && normal.magnitude2().is_finite() {
             return normal.normalize();
         }
         // At an isolated singular corner the surface has directional limiting
         // normals. Use the interior limit for its display vertex; a surface
         // that remains degenerate still returns the original invalid normal.
-        let (ur, vr) = s.range_tuple();
-        if u.is_finite() && v.is_finite() && (u == ur.0 || u == ur.1 || v == vr.0 || v == vr.1) {
+        if boundary {
             let inward = |t: f64, (a, b): (f64, f64)| (t + if t < (a + b) * 0.5 { 1e-3 * (b - a) } else { -1e-3 * (b - a) }).clamp(a, b);
             let (u, v) = (inward(u, ur), inward(v, vr));
             let limit = self.uder(u, v).cross(self.vder(u, v));
@@ -120,6 +127,13 @@ impl ParameterDivision2D for Surface {
 impl SearchParameter<D2> for Surface {
     type Point = mt::Point3;
     fn search_parameter<H: Into<SPHint2D>>(&self, p: mt::Point3, hint: H, trials: usize) -> Option<(f64, f64)> {
+        if matches!(&self.0, mt::Surface::BSplineSurface(s) if s.degrees() == (5, 5)) {
+            // Robust triangulation tries this exact search before the nearest
+            // search. Both must use the bounded solver: an unconstrained root
+            // outside a singular patch can corrupt its boundary triangulation.
+            let (u, v) = self.search_nearest_parameter(p, hint, trials)?;
+            return self.subs(u, v).near(&p).then_some((u, v));
+        }
         self.0.search_parameter(p, hint, trials)
     }
 }
@@ -135,6 +149,16 @@ impl SearchNearestParameter<D2> for Surface {
             return None;
         }
         let (ur, vr) = s.range_tuple();
+        let boundary_tol = (p.to_vec().magnitude().max(1.0) * f64::EPSILON * 128.0).max(1e-12);
+        // At a cubic pole, indistinguishable points can have very different
+        // parameters. Prefer the exact endpoint and its stable limiting normal.
+        for u in [ur.0, ur.1] {
+            for v in [vr.0, vr.1] {
+                if self.subs(u, v).distance2(p) <= boundary_tol * boundary_tol {
+                    return Some((u, v));
+                }
+            }
+        }
         let clamp = |(u, v): (f64, f64)| (u.clamp(ur.0, ur.1), v.clamp(vr.0, vr.1));
         let improve = |(mut u, mut v): (f64, f64)| {
             for _ in 0..trials.min(100) {
@@ -180,9 +204,6 @@ impl SearchNearestParameter<D2> for Surface {
         let valid = |(u, v): (f64, f64)| u.is_finite() && v.is_finite() && u >= ur.0 && u <= ur.1 && v >= vr.0 && v <= vr.1;
         let distance = |(u, v)| self.subs(u, v).distance2(p);
         let mut best = first.filter(|uv| valid(*uv));
-        if best.is_some_and(|uv| distance(uv) < 1e-24) {
-            return best;
-        }
         let mut consider = |uv| {
             if valid(uv) && distance(uv).is_finite() && best.is_none_or(|old| distance(uv) < distance(old)) {
                 best = Some(uv);
@@ -191,6 +212,16 @@ impl SearchNearestParameter<D2> for Surface {
         if !matches!(hint, SPHint2D::None) {
             consider(improve(mt::algo::surface::presearch(self, p, (ur, vr), 12)));
         }
+        // Prefer an incident boundary over a numerically equivalent interior
+        // root. Otherwise roundoff can turn a straight parameter boundary into
+        // a thin zigzag, producing overlapping sliver triangles along a seam.
+        let mut boundary_best = None;
+        let mut boundary = |uv| {
+            consider(uv);
+            if valid(uv) && distance(uv) <= boundary_tol * boundary_tol && boundary_best.is_none_or(|old| distance(uv) < distance(old)) {
+                boundary_best = Some(uv);
+            }
+        };
         // A singular boundary can trap Newton's iteration. Search its four
         // regular one-dimensional boundary curves as independent candidates.
         if s.is_clamped() {
@@ -205,8 +236,8 @@ impl SearchNearestParameter<D2> for Surface {
                 ] {
                     let (a, b) = curve.range_tuple();
                     let uv = |t| if along_u { (t, fixed) } else { (fixed, t) };
-                    consider(uv(a));
-                    consider(uv(b));
+                    boundary(uv(a));
+                    boundary(uv(b));
                     if let Some(mut t) = curve.search_nearest_parameter(p, None, trials) {
                         // Polish the one-dimensional boundary solve: the generic
                         // Newton stopping threshold is too coarse at a flat pole.
@@ -226,18 +257,93 @@ impl SearchNearestParameter<D2> for Surface {
                                 break;
                             }
                         }
-                        consider(uv(t));
+                        boundary(uv(t));
                     }
                 }
             }
         }
-        best
+        boundary_best.or(best)
     }
+}
+
+pub(crate) fn display_projection(surface: &mt::BSplineSurface<mt::Point3>, mesh_normals: &[mt::Vector3]) -> Option<Vec3> {
+    if surface.degrees() != (5, 5) || surface.control_points().len() > 64 || surface.control_points().iter().any(|r| r.len() > 64) {
+        return None;
+    }
+    let origin = *surface.control_points().first()?.first()?;
+    let local = mt::BSplineSurface::try_new(
+        (surface.uknot_vec().clone(), surface.vknot_vec().clone()),
+        surface
+            .control_points()
+            .iter()
+            .map(|row| row.iter().map(|p| mt::Point3::new(p.x - origin.x, p.y - origin.y, p.z - origin.z)).collect())
+            .collect(),
+    )
+    .ok()?;
+    let (ur, vr) = local.range_tuple();
+    if ur != (0.0, 1.0) || vr != (0.0, 1.0) {
+        return None;
+    }
+    let evaluated = crate::body::evaluation::Surface(mt::Surface::BSplineSurface(local));
+    let mut normals = Vec::new();
+    for i in 0..=16 {
+        for j in 0..=16 {
+            if (i == 0 || i == 16) && (j == 0 || j == 16) {
+                continue;
+            }
+            let n = evaluated.normal(i as f64 / 16.0, j as f64 / 16.0);
+            if let Some(n) = Vec3::new(n.x, n.y, n.z).normalized() {
+                normals.push(n);
+            }
+        }
+    }
+    normals.extend(mesh_normals.iter().filter_map(|n| Vec3::new(n.x, n.y, n.z).normalized()));
+    let mut direction = normals.iter().copied().fold(Vec3::ZERO, |a, b| a + b).normalized()?;
+    // This only chooses how to connect existing display vertices; construction
+    // still requires its independent Jacobian and containment certificates.
+    for _ in 0..1024 {
+        let worst = normals.iter().min_by(|a, b| a.dot(direction).total_cmp(&b.dot(direction)))?;
+        let dot = worst.dot(direction);
+        if dot >= 0.01 {
+            break;
+        }
+        direction = (direction + *worst * (0.011 - dot)).normalized()?;
+    }
+    normals.iter().all(|n| n.dot(direction) >= 0.01).then_some(direction)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn projected_display_mesh_removes_crossing_diagonals_without_moving_vertices() {
+        use truck_meshalgo::prelude::{Faces, PolygonMesh, StandardAttributes, retriangulate_projected};
+        let positions = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.8, 0.7), (0.2, 0.3)]
+            .into_iter()
+            .map(|(x, y)| mt::Point3::new(x, y, 0.0))
+            .collect::<Vec<_>>();
+        // Two interior vertices exchange sides in projection. The original
+        // parameter diagonals overlap, although the surface itself is flat.
+        let triangles = [[0, 1, 5], [0, 5, 4], [0, 4, 3], [1, 2, 5], [2, 4, 5], [2, 3, 4]];
+        let mesh = PolygonMesh::new(
+            StandardAttributes { positions, normals: vec![mt::Vector3::unit_z(); 6], uv_coords: vec![mt::Vector2::new(0.0, 0.0); 6] },
+            Faces::from_tri_and_quad_faces(triangles.into_iter().map(|t| t.map(|i| [i, i, i].into())).collect(), Vec::new()),
+        );
+        let fixed = retriangulate_projected(&mesh, mt::Vector3::unit_z()).unwrap();
+        assert_eq!(fixed.positions(), mesh.positions());
+        assert_eq!(fixed.normals(), mesh.normals());
+        let mut area = 0.0;
+        for triangle in fixed.faces().triangle_iter() {
+            let [a, b, c] = triangle.map(|v| fixed.positions()[v.pos]);
+            let signed = (b - a).cross(c - a).z * 0.5;
+            assert!(signed > 0.0);
+            area += signed;
+        }
+        assert!((area - 1.0).abs() < 1e-12);
+        assert!(retriangulate_projected(&mesh, -mt::Vector3::unit_z()).is_none());
+        assert!(retriangulate_projected(&mesh, mt::Vector3::zero()).is_none());
+    }
+
     #[test]
     fn bounded_projection_recovers_from_a_singular_or_outside_hint() {
         // x=u³, y=v³: the origin is stationary in both parameters.
@@ -250,8 +356,13 @@ mod tests {
                 let (u, v) = surface.search_nearest_parameter(p, hint, 100).unwrap();
                 assert!((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v));
                 assert!(surface.subs(u, v).distance(p) < 1e-10);
+                let (u, v) = surface.search_parameter(p, hint, 100).unwrap();
+                assert!((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v));
+                assert!(surface.subs(u, v).distance(p) < 1e-10);
             }
         }
+        assert!(surface.search_parameter(mt::Point3::new(-0.125, 0.5, 0.0), None, 100).is_none());
+        assert_eq!(surface.search_nearest_parameter(mt::Point3::new(1e-14, 1e-14, 0.0), (0.001, 0.001), 100), Some((0.0, 0.0)));
         assert!(surface.search_nearest_parameter(mt::Point3::new(f64::NAN, 0.0, 0.0), None, 100).is_none());
     }
 
@@ -271,6 +382,17 @@ mod tests {
         let surface = Surface(mt::Surface::BSplineSurface(mt::BSplineSurface::new((knots.clone(), knots), ctrl)));
         assert_eq!(surface.normal(0.0, 0.0), mt::Vector3::new(0.0, 0.0, 1.0));
         assert_eq!(surface.normal(0.0, 0.5), mt::Vector3::new(0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn placed_singular_corner_ignores_control_roundoff() {
+        let cubic = [0.0, 0.0, 0.0, 0.1, 0.4, 1.0];
+        let mut ctrl: Vec<Vec<_>> = cubic.iter().map(|x| cubic.iter().map(|y| mt::Point3::new(100.0 + x, 200.0 + y, 700.0)).collect()).collect();
+        ctrl[1][0].x += 1e-12;
+        ctrl[0][1].z += 1e-12;
+        let knots = mt::KnotVec::bezier_knot(5);
+        let surface = Surface(mt::Surface::BSplineSurface(mt::BSplineSurface::new((knots.clone(), knots), ctrl)));
+        assert!(surface.normal(0.0, 0.0).dot(mt::Vector3::unit_z()) > 0.99999);
     }
     #[test]
     fn sparse_evaluation_preserves_knots_and_domain_endpoints() {

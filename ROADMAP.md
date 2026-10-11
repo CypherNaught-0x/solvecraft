@@ -151,7 +151,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   Projected-Jacobian and control-hull certificates reject folded or protruding fills.
   Shared projections also check that transition domains do not overlap; boundary
   position and tangency are checked before accepting a patch. Transition interiors minimize bending
-  instead of fitting a faceted guide, with an interior concavity/normal regression.
+  in physical coordinates, avoiding wrinkles near singular parameter corners. Display meshing
+  uses bounded projection, stable tip normals and local detail for these patches, with
+  surface and displayed-normal regressions.
   Non-cylindrical ends, folded domains and
   transitions outside these conservative bounds still return an error;
   transition fitting reuses sparse boundary evaluation and quadrature grids, and
