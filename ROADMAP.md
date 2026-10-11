@@ -132,6 +132,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   basin rims within the rim width); convex fillets also meet sloped planar ends and reflex
   corners around pocket rims, with unequal wall slopes and extensions confined to the face;
   connected equal-distance chamfers also trim each other across unequal sloped rim walls;
+  straight fillets can end on oblique planar faces or a fan of planar faces, with exact
+  elliptical sections and checks for crossed boundaries (including holes). Endings that
+  consume neighbouring faces or require rebuilding an earlier curved blend remain unsupported;
   whole smooth loops of a planar face, picked whole or by one edge (tangent
   chain), including circles and walls at any angle (boss bases and tops, bores, pocket floors,
   plate outlines), loops with sharp corners between straight edges (the blends meet in mitres), runs of
