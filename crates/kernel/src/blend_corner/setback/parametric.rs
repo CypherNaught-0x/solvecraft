@@ -190,17 +190,30 @@ pub(crate) fn fit(
                 let v = j as f64 / (2 * n) as f64;
                 let (bu, du, ddu) = basis(&knots, u, n)?;
                 let (bv, dv, ddv) = basis(&knots, v, n)?;
-                let w = 1e-4 / (2 * n) as f64;
-                rows.push(tensor(&ddu, &bv, w, 0.0));
-                rows.push(tensor(&du, &dv, w * 2.0_f64.sqrt(), 0.0));
-                rows.push(tensor(&bu, &ddv, w, 0.0));
+                let derivatives =
+                    [project(&du, &bv), project(&bu, &dv), project(&ddu, &bv), project(&du, &dv), project(&bu, &ddv)].map(|p| [p.dot(x), p.dot(y)]);
+                let (area, weights) = physical_curvature_weights(derivatives).ok_or_else(|| unsupported("singular smoothing map"))?;
+                let w = 1e-4 * size * area.sqrt() / (2 * n) as f64;
+                // The radial chart collapses at the tip. Penalize curvature in
+                // physical projected coordinates, not derivatives of that chart.
+                for ([a, b, c, cu, cv], factor) in weights.into_iter().zip([1.0, 2.0_f64.sqrt(), 1.0]) {
+                    let mut entries = std::collections::BTreeMap::new();
+                    for (aa, bb, coefficient) in [(&ddu, &bv, a), (&du, &dv, b), (&bu, &ddv, c), (&du, &bv, cu), (&bu, &dv, cv)] {
+                        for (index, value) in tensor(aa, bb, coefficient * w * factor, 0.0).entries {
+                            *entries.entry(index).or_insert(0.0) += value;
+                        }
+                    }
+                    rows.push(Row { entries: entries.into_iter().collect(), rhs: 0.0 });
+                }
             }
         }
         for i in 0..n {
             for j in 0..n {
                 let u = knots.iter().skip(i + 1).take(5).sum::<f64>() / 5.0;
                 let v = knots.iter().skip(j + 1).take(5).sum::<f64>() / 5.0;
-                rows.push(Row { entries: vec![(i * n + j, 1e-4)], rhs: guide(u, v)?.dot(z) * 1e-4 });
+                // A weak positional regularizer leaves the physical bending
+                // objective in control of the interior shape.
+                rows.push(Row { entries: vec![(i * n + j, 1e-7)], rhs: guide(u, v)?.dot(z) * 1e-7 });
             }
         }
         let mut fixed: std::collections::HashMap<_, _> = jets.iter().map(|(i, p)| (*i, p.dot(z))).collect();
@@ -384,6 +397,26 @@ fn basis(knots: &[f64], t: f64, n: usize) -> Result<(Vec<f64>, Vec<f64>, Vec<f64
         }
     }
     Ok((values, der, der2))
+}
+
+/// Chain rule for the physical height Hessian. Input: projected u, v, uu, uv,
+/// vv derivatives. Output rows multiply [height_uu, height_uv, height_vv,
+/// height_u, height_v] to obtain height_xx, height_xy and height_yy.
+fn physical_curvature_weights(d: [[f64; 2]; 5]) -> Option<(f64, [[f64; 5]; 3])> {
+    if d.iter().flatten().any(|x| !x.is_finite()) {
+        return None;
+    }
+    let [[xu, yu], [xv, yv], [xuu, yuu], [xuv, yuv], [xvv, yvv]] = d;
+    let det = xu * yv - xv * yu;
+    if !det.is_finite() || det.abs() <= 1e-14 * xu.hypot(yu) * xv.hypot(yv) {
+        return None;
+    }
+    let (ux, vx, uy, vy) = (yv / det, -yu / det, -xv / det, xu / det);
+    let weights = [[ux * ux, 2.0 * ux * vx, vx * vx], [ux * uy, ux * vy + vx * uy, vx * vy], [uy * uy, 2.0 * uy * vy, vy * vy]].map(|[a, b, c]| {
+        let (cx, cy) = (a * xuu + b * xuv + c * xvv, a * yuu + b * yuv + c * yvv);
+        [a, b, c, -ux * cx - uy * cy, -vx * cx - vy * cy]
+    });
+    weights.iter().flatten().all(|x| x.is_finite()).then_some((det.abs(), weights))
 }
 
 /// Positive Bernstein coefficients of the projected Jacobian certify that the
@@ -575,6 +608,24 @@ fn solve_qr(rows: &[Row], count: usize) -> Result<Vec<f64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_curvature_is_independent_of_a_cubic_parameter_map() {
+        let (u, v) = (0.2_f64, 0.7_f64);
+        let (x, y) = (u.powi(3), v.powi(3));
+        let (xu, yv, xuu, yvv) = (3.0 * u * u, 3.0 * v * v, 6.0 * u, 6.0 * v);
+        let (_, rows) = physical_curvature_weights([[xu, 0.0], [0.0, yv], [xuu, 0.0], [0.0, 0.0], [0.0, yvv]]).unwrap();
+        // z=x²+xy+y² has the same physical Hessian at every chart location.
+        let (zx, zy) = (2.0 * x + y, x + 2.0 * y);
+        let h = [2.0 * xu * xu + zx * xuu, xu * yv, 2.0 * yv * yv + zy * yvv, zx * xu, zy * yv];
+        for (row, expected) in rows.iter().zip([2.0, 1.0, 2.0]) {
+            assert!((row.iter().zip(h).map(|(a, b)| a * b).sum::<f64>() - expected).abs() < 1e-10);
+            let plane = [3.0 * xuu, 0.0, -2.0 * yvv, 3.0 * xu, -2.0 * yv];
+            assert!(row.iter().zip(plane).map(|(a, b)| a * b).sum::<f64>().abs() < 1e-10);
+        }
+        assert!(physical_curvature_weights([[0.0; 2]; 5]).is_none());
+        assert!(physical_curvature_weights([[f64::NAN; 2]; 5]).is_none());
+    }
 
     #[test]
     fn both_corner_limits_fit_without_a_fold() {

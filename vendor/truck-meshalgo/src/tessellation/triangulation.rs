@@ -15,6 +15,123 @@ type Cdt = ConstrainedDelaunayTriangulation<SPoint2>;
 type MeshedShell = Shell<Point3, PolylineCurve, Option<PolygonMesh>>;
 type MeshedCShell = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
 
+/// Retriangulate a single-boundary mesh in a caller-checked forward-facing projection.
+/// Keeps the sampled positions and normals, but avoids folds caused by connecting
+/// a highly distorted parameter grid. Returns `None` for unsupported boundaries.
+pub fn retriangulate_projected(mesh: &PolygonMesh, direction: Vector3) -> Option<PolygonMesh> {
+    let positions = mesh.positions();
+    if positions.len() > MAX_GRID || positions.len() < 3 || mesh.normals().len() != positions.len() || mesh.uv_coords().len() != positions.len() {
+        return None;
+    }
+    let origin = *positions.first()?;
+    let length = direction.magnitude();
+    if !length.is_finite() || length <= 0.0 {
+        return None;
+    }
+    let z = direction / length;
+    if mesh.normals().iter().any(|n| !n.magnitude2().is_finite() || n.dot(z) <= 0.0) {
+        return None;
+    }
+    let x = z.cross(if z.z.abs() < 0.9 { Vector3::unit_z() } else { Vector3::unit_x() }).normalize();
+    let y = z.cross(x);
+    let scale = positions.iter().map(|p| p.distance(origin)).fold(0.0_f64, f64::max);
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let project = |p: Point3| {
+        let d = (p - origin) / scale;
+        Point2::new((d.dot(x) * 1e12).round() / 1e12, (d.dot(y) * 1e12).round() / 1e12)
+    };
+    let mut uses = HashMap::<(usize, usize), usize>::default();
+    let mut triangles = 0usize;
+    for t in mesh.faces().triangle_iter() {
+        triangles += 1;
+        if triangles > 2 * MAX_GRID {
+            return None;
+        }
+        for (a, b) in [(t[0].pos, t[1].pos), (t[1].pos, t[2].pos), (t[2].pos, t[0].pos)] {
+            if a >= positions.len() || b >= positions.len() {
+                return None;
+            }
+            *uses.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    let mut neighbors = HashMap::<usize, Vec<usize>>::default();
+    for ((a, b), count) in uses {
+        if count > 2 {
+            return None;
+        }
+        if count == 1 {
+            neighbors.entry(a).or_default().push(b);
+            neighbors.entry(b).or_default().push(a);
+        }
+    }
+    if neighbors.values().any(|n| n.len() != 2) {
+        return None;
+    }
+    let start = *neighbors.keys().min()?;
+    let mut boundary_indices = Vec::new();
+    let (mut previous, mut current) = (usize::MAX, start);
+    loop {
+        boundary_indices.push(current);
+        let next = *neighbors.get(&current)?.iter().find(|i| **i != previous)?;
+        (previous, current) = (current, next);
+        if current == start {
+            break;
+        }
+        if boundary_indices.len() >= neighbors.len() {
+            return None;
+        }
+    }
+    if boundary_indices.len() != neighbors.len() {
+        return None; // holes or disconnected loops
+    }
+    let mut polygon: Vec<_> = boundary_indices.iter().map(|i| project(positions[*i])).collect();
+    if !loop_orientation(&polygon) {
+        polygon.reverse();
+    }
+    let boundary = PolyBoundary(vec![polygon]);
+    let mut cdt = Cdt::new();
+    let mut handles = Vec::with_capacity(positions.len());
+    let mut original = HashMap::default();
+    for (i, p) in positions.iter().enumerate() {
+        let q = project(*p);
+        if !q.x.is_finite() || !q.y.is_finite() {
+            return None;
+        }
+        let handle = cdt.insert(SPoint2::new(q.x, q.y)).ok()?;
+        handles.push(handle);
+        original.entry(handle).or_insert(i);
+    }
+    for (a, b) in boundary_indices.iter().circular_tuple_windows() {
+        let (a, b) = (*handles.as_slice().get(*a)?, *handles.as_slice().get(*b)?);
+        if a == b {
+            continue;
+        }
+        if !cdt.can_add_constraint(a, b) {
+            return None;
+        }
+        cdt.add_constraint(a, b);
+    }
+    let mut faces = Vec::new();
+    for triangle in cdt.inner_faces() {
+        let v = triangle.vertices();
+        let p = v.map(|v| Point2::new(v.position().x, v.position().y));
+        if !boundary.include(p[0] + ((p[1] - p[0]) + (p[2] - p[0])) / 3.0) {
+            continue;
+        }
+        let indices = [*original.get(&v[0].fix())?, *original.get(&v[1].fix())?, *original.get(&v[2].fix())?];
+        faces.push(indices.map(|i| [i, i, i].into()));
+    }
+    if faces.is_empty() {
+        return None;
+    }
+    Some(PolygonMesh::debug_new(
+        StandardAttributes { positions: positions.clone(), uv_coords: mesh.uv_coords().clone(), normals: mesh.normals().clone() },
+        Faces::from_tri_and_quad_faces(faces, Vec::new()),
+    ))
+}
+
 pub(super) trait SP<S>:
     Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> + Parallelizable {
 }

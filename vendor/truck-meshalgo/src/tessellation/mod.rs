@@ -18,6 +18,8 @@ mod parallelizable {
 
 pub use parallelizable::*;
 
+pub use triangulation::retriangulate_projected;
+
 /// Gathered the traits used in tessellation.
 pub trait PolylineableCurve:
     ParametricCurve3D + BoundedCurve + ParameterDivision1D<Point = Point3> + Parallelizable {

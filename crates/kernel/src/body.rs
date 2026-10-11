@@ -653,13 +653,20 @@ impl Body {
             let solid_faces: Vec<&mt::Face> = self.solid.face_iter().collect();
             for (fi, face) in meshed.iter().flat_map(|s| s.face_iter()).enumerate() {
                 let Some(pm) = face.surface() else { continue };
+                let projected = solid_faces.get(fi).and_then(|f| match f.surface() {
+                    mt::Surface::BSplineSurface(s) if s.degrees() == (5, 5) => {
+                        evaluation::display_projection(&s, pm.normals()).and_then(|n| retriangulate_projected(&pm, mt::Vector3::new(n.x, n.y, n.z)))
+                    }
+                    _ => None,
+                });
+                let pm = projected.as_ref().unwrap_or(&pm);
                 let flip = !face.orientation();
                 let base = u32::try_from(out.positions.len()).unwrap_or(u32::MAX);
                 // Curved faces: split triangles that cut through the surface.
                 if refine
                     && let Some(sf) = solid_faces.get(fi)
                     && !matches!(sf.surface(), mt::Surface::Plane(_))
-                    && let Some(tris) = refined(&pm, &sf.surface(), tol)
+                    && let Some(tris) = refined(pm, &sf.surface(), tol)
                 {
                     let fid = u32::try_from(fi).unwrap_or(u32::MAX);
                     for t in tris {
@@ -759,6 +766,26 @@ impl Body {
 
     /// Display mesh: like [`Body::tessellate`], with seam edges flagged.
     pub fn display_mesh(&self, tol: f64) -> Result<Mesh> {
+        // A body's overall size can make a small transition patch only a few
+        // triangles wide. Give quintic patches local display detail, with a
+        // bounded refinement factor for the shared shell mesh.
+        let tol = if tol.is_finite() && tol > 0.0 { tol } else { 0.05 };
+        let local = self
+            .solid
+            .face_iter()
+            .filter_map(|f| match f.surface() {
+                mt::Surface::BSplineSurface(s) if s.degrees() == (5, 5) => {
+                    let mut bounds = solvecraft_geom::Aabb3::EMPTY;
+                    for p in s.control_points().iter().flatten().take(4096) {
+                        bounds.add(from_p3(*p));
+                    }
+                    let size = bounds.diagonal();
+                    (size.is_finite() && size > 0.0).then_some(size * 1e-3)
+                }
+                _ => None,
+            })
+            .fold(tol, f64::min);
+        let tol = local.max(tol / 16.0);
         let mut m = self.tessellate(tol)?;
         if self.is_mesh() {
             return Ok(m);
