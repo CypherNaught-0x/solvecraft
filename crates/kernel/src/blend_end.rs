@@ -11,10 +11,10 @@ use truck_modeling::{self as mt, BoundedCurve, Cut, ParameterDivision1D, Paramet
 fn h(p: Vec3, w: f64) -> mt::Vector4 {
     mt::Vector4::new(p.x * w, p.y * w, p.z * w, w)
 }
-fn conic(a: Vec3, m: Vec3, b: Vec3, w: f64) -> mt::Curve {
+pub(super) fn conic(a: Vec3, m: Vec3, b: Vec3, w: f64) -> mt::Curve {
     mt::Curve::NurbsCurve(mt::NurbsCurve::new(mt::BSplineCurve::new(mt::KnotVec::bezier_knot(2), vec![h(a, 1.0), h(m, w), h(b, 1.0)])))
 }
-fn trim(mut c: mt::Curve, lo: f64, hi: f64) -> mt::Curve {
+pub(super) fn trim(mut c: mt::Curve, lo: f64, hi: f64) -> mt::Curve {
     let (a, b) = c.range_tuple();
     if hi < b {
         let _ = c.cut(hi);
@@ -29,6 +29,9 @@ fn trim(mut c: mt::Curve, lo: f64, hi: f64) -> mt::Curve {
 fn crossing(c: &mt::Curve, f: impl Fn(Vec3) -> f64, tol: f64) -> Result<(f64, Vec3)> {
     let (a, b) = c.range_tuple();
     let mut prev = (a, f(from_p3(c.subs(a))));
+    if !prev.1.is_finite() {
+        return Err(unsupported("an invalid fillet intersection"));
+    }
     for i in 1..=128 {
         let t = a + (b - a) * i as f64 / 128.0;
         let y = f(from_p3(c.subs(t)));
@@ -39,7 +42,11 @@ fn crossing(c: &mt::Curve, f: impl Fn(Vec3) -> f64, tol: f64) -> Result<(f64, Ve
             let (mut lo, mut hi) = (prev.0, t);
             for _ in 0..60 {
                 let mid = (lo + hi) * 0.5;
-                if f(from_p3(c.subs(mid))) * prev.1 > 0.0 {
+                let y = f(from_p3(c.subs(mid)));
+                if !y.is_finite() {
+                    return Err(unsupported("an invalid fillet intersection"));
+                }
+                if y * prev.1 > 0.0 {
                     lo = mid;
                 } else {
                     hi = mid;
@@ -57,8 +64,18 @@ fn crossing(c: &mt::Curve, f: impl Fn(Vec3) -> f64, tol: f64) -> Result<(f64, Ve
     Err(unsupported("the fillet is larger than its neighbouring faces"))
 }
 
+/// Only an inward dihedral joint can extend an uncut fan seam backwards.
+/// Use the seam as oriented by its first face, so reversing the solid changes
+/// the classification even though its supporting planes are unchanged.
+fn reflex_joint(a: &mt::Face, b: &mt::Face, id: mt::EdgeID) -> bool {
+    let (Some(na), Some(nb)) = (plane_normal(a), plane_normal(b)) else { return false };
+    let Some(e) = a.boundary_iters().into_iter().flatten().find(|e| e.id() == id) else { return false };
+    let Some(t) = (vtx(e.back()) - vtx(e.front())).normalized() else { return false };
+    t.dot(na.cross(nb)) < -1e-6
+}
+
 /// A plane cuts an exact elliptical section out of the circular cylinder.
-fn on_end(f: &mt::Face, q: Vec3, d: Vec3, p: Vec3) -> Result<Vec3> {
+pub(super) fn on_end(f: &mt::Face, q: Vec3, d: Vec3, p: Vec3) -> Result<Vec3> {
     let n = plane_normal(f).ok_or_else(|| unsupported("this fillet needs rebuilding where it meets an earlier curved blend"))?;
     let den = n.dot(d);
     if den.abs() < 1e-8 {
@@ -67,10 +84,87 @@ fn on_end(f: &mt::Face, q: Vec3, d: Vec3, p: Vec3) -> Result<Vec3> {
     Ok(q - d * (n.dot(q - p) / den))
 }
 
+/// A cylinder/cylinder intersection, parameterized by the new fillet's angular
+/// section. Fit cubic Hermite spans adaptively instead of tilting a circular arc.
+pub(super) fn curved_section(f: &mt::Face, base: &mt::Curve, d: Vec3, lo: f64, hi: f64, start: Vec3, end: Vec3, tol: f64) -> Result<mt::Curve> {
+    use crate::offset::{Surf, surf_of};
+    let Some(Surf::Cylinder { o, a, r, .. }) = surf_of(f, tol) else {
+        return Err(unsupported("this end face is not a plane or cylinder"));
+    };
+    let dd = d - a * d.dot(a);
+    let k2 = dd.dot(dd);
+    if k2 < 1e-12 {
+        return Err(unsupported("parallel fillet cylinders"));
+    }
+    let l0 = (start - from_p3(base.subs(lo))).dot(d);
+    let l1 = (end - from_p3(base.subs(hi))).dot(d);
+    let branch = |p: Vec3| ((p - o) - a * (p - o).dot(a)).dot(dd);
+    let side = branch(start).signum();
+    if side == 0.0 || side * branch(end) <= tol {
+        return Err(unsupported("a fillet end section folds back"));
+    }
+    let eval = |u: f64| -> Result<(Vec3, Vec3)> {
+        let q = from_p3(base.subs(u));
+        let v = base.der(u);
+        let v = Vec3::new(v.x, v.y, v.z);
+        let x = q - o;
+        let x = x - a * x.dot(a);
+        let k1 = x.dot(dd);
+        let disc = k1 * k1 - k2 * (x.dot(x) - r * r);
+        if !(disc.is_finite() && disc > tol * tol) {
+            return Err(unsupported("fillet cylinders do not cross transversely"));
+        }
+        let l = (-k1 + side * disc.sqrt()) / k2;
+        let p = q + d * l;
+        let radial = x + dd * l;
+        let dl = -radial.dot(v - a * v.dot(a)) / radial.dot(dd);
+        let tangent = v + d * dl;
+        if !p.is_finite() || !tangent.is_finite() || (l - (l0 + (l1 - l0) * (u - lo) / (hi - lo))).abs() > r * 4.0 {
+            return Err(unsupported("an unbounded fillet end section"));
+        }
+        Ok((p, tangent))
+    };
+    if eval(lo)?.0.dist(start) > tol * 10.0 || eval(hi)?.0.dist(end) > tol * 10.0 {
+        return Err(unsupported("fillet end section misses its endpoints"));
+    }
+    let mut pending = vec![(lo, hi, 0)];
+    let mut ctrl = Vec::new();
+    let mut knots = vec![lo; 4];
+    while let Some((u, v, depth)) = pending.pop() {
+        let (p, dp) = eval(u)?;
+        let (q, dq) = eval(v)?;
+        let c1 = p + dp * ((v - u) / 3.0);
+        let c2 = q - dq * ((v - u) / 3.0);
+        let mut accurate = true;
+        for t in [0.25, 0.5, 0.75] {
+            let b = 1.0 - t;
+            let approx = p * (b * b * b) + c1 * (3.0 * b * b * t) + c2 * (3.0 * b * t * t) + q * (t * t * t);
+            accurate &= approx.dist(eval(u + (v - u) * t)?.0) <= tol * 0.1;
+        }
+        if !accurate {
+            if depth >= 16 || ctrl.len() + pending.len() * 3 > 12_000 {
+                return Err(unsupported("cannot resolve this fillet end section within tolerance"));
+            }
+            let m = (u + v) * 0.5;
+            pending.push((m, v, depth + 1));
+            pending.push((u, m, depth + 1));
+            continue;
+        }
+        if ctrl.is_empty() {
+            ctrl.push(p3(start));
+        }
+        ctrl.extend([p3(c1), p3(c2), p3(if v == hi { end } else { q })]);
+        knots.extend([v; 3]);
+    }
+    knots.push(hi);
+    let c = mt::BSplineCurve::try_new(mt::KnotVec::from(knots), ctrl).map_err(|e| KernelError::Failed(format!("fillet intersection: {e}")))?;
+    Ok(mt::Curve::BSplineCurve(c))
+}
+
 /// Topological closure alone does not detect a cap crossing another boundary or a hole.
 /// Check the rebuilt planar loops, including boundaries away from the old endpoint.
-fn uncrossed(f: &mt::Face, tol: f64) -> Result<()> {
-    let Some(n) = plane_normal(f) else { return Ok(()) };
+pub(super) fn uncrossed(f: &mt::Face, tol: f64) -> Result<()> {
+    let normal = plane_normal(f);
     let mut segments = Vec::new();
     for (wi, wire) in f.boundaries().iter().enumerate() {
         let mut points = Vec::new();
@@ -94,9 +188,23 @@ fn uncrossed(f: &mt::Face, tol: f64) -> Result<()> {
                 continue;
             }
             let (ab, cd) = (*b - *a, *d - *c);
-            let (sa, sb) = (ab.cross(*c - *a).dot(n), ab.cross(*d - *a).dot(n));
-            let (sc, sd) = (cd.cross(*a - *c).dot(n), cd.cross(*b - *c).dot(n));
-            let crosses = sa * sb < 0.0 && sc * sd < 0.0;
+            let crosses = if let Some(n) = normal {
+                let (sa, sb) = (ab.cross(*c - *a).dot(n), ab.cross(*d - *a).dot(n));
+                let (sc, sd) = (cd.cross(*a - *c).dot(n), cd.cross(*b - *c).dot(n));
+                sa * sb < 0.0 && sc * sd < 0.0
+            } else {
+                // Closest interior points of two 3D chords; endpoint distances
+                // below also cover parallel segments and clamped solutions.
+                let w = *a - *c;
+                let (aa, bb, cc) = (ab.dot(ab), ab.dot(cd), cd.dot(cd));
+                let den = aa * cc - bb * bb;
+                let s = (bb * cd.dot(w) - cc * ab.dot(w)) / den;
+                let t = (aa * cd.dot(w) - bb * ab.dot(w)) / den;
+                den > aa * cc * 1e-12
+                    && (0.0..=1.0).contains(&s)
+                    && (0.0..=1.0).contains(&t)
+                    && (*a + ab * s).dist(*c + cd * t) <= tol.max(1e-6) * 3.0
+            };
             let touches =
                 a.dist_to_segment(*c, *d).min(b.dist_to_segment(*c, *d)).min(c.dist_to_segment(*a, *b)).min(d.dist_to_segment(*a, *b)) <= tol;
             if crosses || touches {
@@ -113,6 +221,9 @@ pub(crate) fn can_trim(solid: &Solid, edge: &mt::Edge) -> bool {
 }
 
 pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> Result<Solid> {
+    if !(r.is_finite() && r > 0.0 && (size * 4.0).is_finite() && size > 0.0) {
+        return Err(KernelError::Invalid("fillet radius and body size must be finite and positive".into()));
+    }
     if !matches!(edge.curve(), mt::Curve::Line(_)) {
         return Err(unsupported("an endpoint-trimmed fillet needs a straight edge"));
     }
@@ -157,6 +268,9 @@ pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> R
         return Err(unsupported("the faces at the edge are tangent"));
     }
     let s = r / (alpha * 0.5).tan();
+    if !(s.is_finite() && s > 0.0 && s < size) {
+        return Err(unsupported("the fillet setback exceeds the body size"));
+    }
     let w = (alpha * 0.5).sin();
     let tol = (size * 1e-8).max(1e-7);
     // Extensions through a reflex endpoint must not escape the part. The
@@ -207,7 +321,7 @@ pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> R
         let center = p + t1 * s + n1 * (sign * r);
         let mut points = Vec::new();
         let count = fan.len();
-        for (i, (seam, _)) in fan.iter().enumerate() {
+        for (i, (seam, next)) in fan.iter().enumerate() {
             let oriented = if seam.front() == v { seam.clone() } else { seam.inverse() };
             let c = oriented.oriented_curve();
             let residual = |q: Vec3| {
@@ -225,7 +339,13 @@ pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> R
                 Ok(hit) => hit,
                 Err(_) if i > 0 && i + 1 < count && matches!(c, mt::Curve::Line(_)) => {
                     // A reflex joint in the end-face fan may extend its shared seam.
-                    // The rebuilt face loops below must remain free of crossings.
+                    // Loop intersection and global bounds checks cannot establish
+                    // that this local extension lies on the material side.
+                    let a = fan.get(i - 1).and_then(|(_, fi)| faces.get(*fi));
+                    let b = faces.get(*next);
+                    if !matches!((a, b), (Some(a), Some(b)) if reflex_joint(a, b, seam.id())) {
+                        return Err(unsupported("a convex endpoint joint cannot extend its seam backwards"));
+                    }
                     let back = vtx(oriented.back());
                     let away = (back - p).normalized().ok_or_else(|| unsupported("zero length endpoint seam"))?;
                     let ext = mt::Curve::Line(mt::Line(p3(p), p3(p - away * size)));
@@ -361,7 +481,7 @@ mod tests {
         body
     }
     fn check(body: &Body, p: Vec3, r: f64) -> Body {
-        let out = crate::fillet(body, &[p], r).unwrap();
+        let out = crate::fillet(body, &[p], r).unwrap_or_else(|e| panic!("fillet {p:?}, radius {r}: {e}"));
         assert!(out.validity().is_empty());
         assert_eq!(out.unmeshed_faces(), 0);
         let delta = crate::measure(&out).unwrap().volume - crate::measure(body).unwrap().volume;
@@ -419,6 +539,153 @@ mod tests {
         ] {
             check(&b, p, 1.5);
         }
+    }
+
+    #[test]
+    fn adjacent_basin_floor_fillets() {
+        let b = shallow_basin();
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        let left = Vec3::new(15.0 + inset, 40.0 - inset, 4.0);
+        let back = Vec3::new(45.0, 45.0 - inset, 4.0);
+        let left = check(&b, left, 1.5);
+        check(&left, back, 1.5);
+    }
+
+    #[test]
+    fn all_basin_floor_fillets() {
+        let b = shallow_basin();
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        let picks = [
+            Vec3::new(15.0 + inset, 40.0 - inset, 4.0),
+            Vec3::new(75.0 - inset, 40.0 - inset, 4.0),
+            Vec3::new(45.0, 45.0 - inset, 4.0),
+            Vec3::new(45.0, 35.0 - inset, 4.0),
+        ];
+        let mut cur = b.clone();
+        for p in picks {
+            cur = check(&cur, p, 1.5);
+        }
+        let combined = crate::fillet(&b, &picks, 1.5).unwrap();
+        assert!(combined.validity().is_empty());
+        assert_eq!(combined.unmeshed_faces(), 0);
+        assert!((crate::measure(&cur).unwrap().volume - crate::measure(&combined).unwrap().volume).abs() < 1e-4);
+    }
+
+    #[test]
+    fn floor_fillets_with_existing_rim_export_and_replay() {
+        let b = shallow_basin();
+        let rim_edges = [Vec3::new(45.0, 1.8, 16.0), Vec3::new(45.0, 45.0, 16.0), Vec3::new(15.0, 23.4, 16.0), Vec3::new(75.0, 23.4, 16.0)];
+        let mut b = crate::fillet(&b, &rim_edges, 0.3).unwrap();
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        for p in [
+            Vec3::new(15.0 + inset, 40.0 - inset, 4.0),
+            Vec3::new(75.0 - inset, 40.0 - inset, 4.0),
+            Vec3::new(45.0, 45.0 - inset, 4.0),
+            Vec3::new(45.0, 35.0 - inset, 4.0),
+        ] {
+            b = check(&b, p, 1.5);
+        }
+        let volume = crate::measure(&b).unwrap().volume;
+        let export = crate::ExportBody { name: "Rounded basin".into(), body: &b, color: None };
+        let step = crate::step_export_bodies(&[export], &crate::StepHeader::default()).unwrap();
+        let imported = crate::step_import(&step).unwrap();
+        assert_eq!(imported.bodies.len(), 1);
+        let restored = &imported.bodies[0].body;
+        assert!(restored.validity().is_empty());
+        assert_eq!(restored.unmeshed_faces(), 0);
+        assert!((crate::measure(restored).unwrap().volume - volume).abs() < 0.05);
+        let hole = crate::cylinder(Vec3::new(45.0, 38.0, -1.0), Vec3::Z, 1.0, 6.0).unwrap();
+        let drilled = crate::boolean(&b, &hole, BoolOp::Cut).unwrap().unwrap();
+        assert!(drilled.validity().is_empty());
+        assert_eq!(drilled.unmeshed_faces(), 0);
+        assert!(crate::measure(&drilled).unwrap().volume < volume);
+    }
+
+    #[test]
+    fn tracing_preserves_holes_in_rebuilt_end_faces() {
+        let hole = crate::cylinder(Vec3::new(20.5, 38.0, -1.0), Vec3::Z, 0.2, 10.0).unwrap();
+        let b = crate::boolean(&shallow_basin(), &hole, BoolOp::Cut).unwrap().unwrap();
+        assert!(!b.tessellate(1e-3).unwrap().contains(Vec3::new(20.5, 38.0, 1.0)));
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        let b = check(&b, Vec3::new(15.0 + inset, 40.0 - inset, 4.0), 1.5);
+        let b = check(&b, Vec3::new(45.0, 45.0 - inset, 4.0), 1.5);
+        let mesh = b.tessellate(1e-3).unwrap();
+        assert!(!mesh.contains(Vec3::new(20.5, 38.0, 1.0)));
+        assert!(mesh.contains(Vec3::new(21.0, 38.0, 1.0)));
+    }
+
+    #[test]
+    fn unsupported_corner_patch_preserves_completed_floor_fillets() {
+        let mut b = shallow_basin();
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        for p in [
+            Vec3::new(15.0 + inset, 40.0 - inset, 4.0),
+            Vec3::new(75.0 - inset, 40.0 - inset, 4.0),
+            Vec3::new(45.0, 45.0 - inset, 4.0),
+            Vec3::new(45.0, 35.0 - inset, 4.0),
+        ] {
+            b = check(&b, p, 1.5);
+        }
+        let before: Vec<_> = b.solid.vertex_iter().map(|v| vtx(&v)).collect();
+        for x in [15.0 + inset * 0.5, 75.0 - inset * 0.5] {
+            for y in [45.0 - inset * 0.5, (1.8 + 35.0 - inset) * 0.5] {
+                assert!(crate::fillet(&b, &[Vec3::new(x, y, 10.0)], 1.5).is_err());
+                assert_eq!(before, b.solid.vertex_iter().map(|v| vtx(&v)).collect::<Vec<_>>());
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_front_corner_patch_is_an_error() {
+        let b = shallow_basin();
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        for x in [15.0 + inset * 0.5, 75.0 - inset * 0.5] {
+            assert!(crate::fillet(&b, &[Vec3::new(x, (1.8 + 35.0 - inset) * 0.5, 10.0)], 1.5).is_err());
+        }
+    }
+
+    #[test]
+    fn unsupported_corner_to_rim_patch_is_an_error() {
+        let b = shallow_basin();
+        let picks = [Vec3::new(45.0, 1.8, 16.0), Vec3::new(45.0, 45.0, 16.0), Vec3::new(15.0, 23.4, 16.0), Vec3::new(75.0, 23.4, 16.0)];
+        let rim = crate::fillet(&b, &picks, 0.3).unwrap();
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        for x in [15.0 + inset * 0.5, 75.0 - inset * 0.5] {
+            for y in [45.0 - inset * 0.5, (1.8 + 35.0 - inset) * 0.5] {
+                assert!(crate::fillet(&rim, &[Vec3::new(x, y, 10.0)], 1.5).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn convex_fan_joint_cannot_use_backward_extension() {
+        // Complement the shallow basin: the same seam and cylinder still cross
+        // backwards, but the joint now faces outwards instead of into the pocket.
+        let slab = crate::box_solid(Vec3::ZERO, Vec3::new(90.0, 48.0, 16.0)).unwrap();
+        let b = crate::boolean(&slab, &shallow_basin(), BoolOp::Cut).unwrap().unwrap();
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        let pick = Vec3::new(45.0, 35.0 - inset, 4.0);
+        let (index, _) = b.nearest_edge(pick, 1e-4).unwrap().unwrap();
+        let edges = Body::unique_edges(&b.solid);
+        let before: Vec<_> = b.solid.vertex_iter().map(|v| vtx(&v)).collect();
+        let err = fillet_one(&b.solid, &edges[index], b.size(), 1.5).unwrap_err();
+        assert!(err.to_string().contains("convex endpoint joint"), "{err}");
+        assert!(crate::fillet(&b, &[pick], 1.5).is_err());
+        assert_eq!(before, b.solid.vertex_iter().map(|v| vtx(&v)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn endpoint_trim_rejects_nonfinite_inputs_and_setback() {
+        let b = basin(false);
+        let (index, _) = b.nearest_edge(Vec3::new(25.0, 12.0, 20.0), 1e-4).unwrap().unwrap();
+        let edges = Body::unique_edges(&b.solid);
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 0.0, f64::MAX] {
+            assert!(fillet_one(&b.solid, &edges[index], b.size(), invalid).is_err());
+            assert!(fillet_one(&b.solid, &edges[index], invalid, 2.0).is_err());
+        }
+        let line = mt::Curve::Line(mt::Line(p3(Vec3::ZERO), p3(Vec3::X)));
+        assert!(crossing(&line, |_| f64::NAN, 1e-6).is_err());
+        assert!(crossing(&line, |p| if p.x == 0.0 { f64::INFINITY } else { p.x - 0.5 }, 1e-6).is_err());
     }
 
     #[test]

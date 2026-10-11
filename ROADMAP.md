@@ -133,8 +133,13 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   corners around pocket rims, with unequal wall slopes and extensions confined to the face;
   connected equal-distance chamfers also trim each other across unequal sloped rim walls;
   straight fillets can end on oblique planar faces or a fan of planar faces, with exact
-  elliptical sections and checks for crossed boundaries (including holes). Endings that
-  consume neighbouring faces or require rebuilding an earlier curved blend remain unsupported;
+  elliptical sections and checks for crossed boundaries (including holes). Backward seam
+  extensions require a reflex joint; endpoint and section bounds remain conservative.
+  Endpoint sections can also cross planar and cylindrical neighbours, consuming short seams
+  left by earlier blends; this supports adjacent and combined basin-floor fillets. Curved
+  sections use a tolerance-checked cubic fit. Endings requiring a new transition patch
+  (including the shallow front basin corners and concave corners meeting convex rim rounds)
+  remain unsupported;
   whole smooth loops of a planar face, picked whole or by one edge (tangent
   chain), including circles and walls at any angle (boss bases and tops, bores, pocket floors,
   plate outlines), loops with sharp corners between straight edges (the blends meet in mitres), runs of
