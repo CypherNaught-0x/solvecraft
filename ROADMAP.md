@@ -125,7 +125,11 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   Twenty-five local Fusion controls cover dimension edits, reversal, renaming,
   placement, reordering, body operations, suppression and constraint removal.
   Nine original native SolveCraft fixtures check analytic volumes/bounds and edits.
-  Editable feature history and native B-rep decoding are not implemented; see
+  `doc.open` now reconstructs verified layout-8 circle sketches and one-sided
+  extrusions as editable history, with driving parameters, fixation, taper and
+  atomic failure. Thirty local native imports check volumes/placement; original
+  synthetic records exercise reconstruction and edits in ordinary CI. Other
+  feature types, legacy history schemas and native B-reps remain unsupported; see
   [the observed format and remaining work](docs/f3d.md). HardEdgeBasin opening now
   has a child-process performance guard ([measurements](docs/project-open-regression.md)).
 - Persistent naming (plan/adr/0002) names faces from their history and edges by their faces;

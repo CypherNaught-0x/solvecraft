@@ -1,5 +1,5 @@
 //! Coincidence and circle-diameter relationships observed in controlled sketches.
-//! Point fixation and all other constraint classes remain unsupported.
+//! Other relationships sharing the generic constraint class fail explicitly.
 use super::history::{empty, finish, payload, references, require_class, zeros};
 use super::*;
 
@@ -93,7 +93,11 @@ impl Design {
                     if r.reference()? != *geometry {
                         return Err(invalid("inconsistent coincidence owner"));
                     }
-                    r.u64()?;
+                    // The class is shared by geometric relationships; operand
+                    // count and point types alone do not establish coincidence.
+                    if r.u64()? != 1 {
+                        return Err(invalid("unsupported geometric constraint kind"));
+                    }
                     let back = references(&mut r)?;
                     if back.len() != 2 || !back.contains(&a) || !back.contains(&b) || a == b {
                         return Err(invalid("inconsistent coincidence references"));

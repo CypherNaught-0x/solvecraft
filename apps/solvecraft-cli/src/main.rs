@@ -369,7 +369,10 @@ fn cmd_bench_open(args: &[String]) -> Result<(), String> {
     let read_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("{}", json!({"step": "read", "ms": read_ms, "bytes": bytes.len()}));
     let t = std::time::Instant::now();
-    let doc = if step {
+    let doc = if solvecraft_engine::io::f3d::is_f3d_path(path) {
+        let name = std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Imported".into());
+        solvecraft_engine::io::f3d::import_f3d(&bytes, &name).map_err(|e| e.to_string())?
+    } else if step {
         let imported = solvecraft_engine::io::step_import_feature(&bytes, path).map_err(|e| e.to_string())?;
         let mut doc = solvecraft_engine::doc::Document::new(&imported.name);
         doc.add_feature(imported.kind, Some(&imported.name)).map_err(|e| e.to_string())?;

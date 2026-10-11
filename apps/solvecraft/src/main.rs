@@ -55,9 +55,10 @@ fn services() -> Services {
             rfd::FileDialog::new()
                 .add_filter(
                     "Designs, STEP, IGES and meshes",
-                    &["solvecraft", "step", "stp", "STEP", "STP", "igs", "iges", "IGS", "IGES", "3mf", "3MF", "stl", "STL"],
+                    &["solvecraft", "f3d", "F3D", "step", "stp", "STEP", "STP", "igs", "iges", "IGS", "IGES", "3mf", "3MF", "stl", "STL"],
                 )
                 .add_filter("SolveCraft design", &["solvecraft"])
+                .add_filter("Fusion archive (supported history features)", &["f3d", "F3D"])
                 .add_filter("STEP", &["step", "stp", "STEP", "STP"])
                 .add_filter("IGES", &["igs", "iges", "IGS", "IGES"])
                 .add_filter("Mesh (3MF, STL)", &["3mf", "3MF", "stl", "STL"])

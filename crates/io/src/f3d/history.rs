@@ -194,8 +194,9 @@ pub(super) fn empty(r: &mut Reader<'_>) -> Result<()> {
     Ok(())
 }
 pub(super) fn zeros(r: &mut Reader<'_>, n: usize) -> Result<()> {
+    let at = r.at;
     if r.take(n)?.iter().any(|b| *b != 0) {
-        return Err(invalid("unsupported history flags"));
+        return Err(invalid(&format!("unsupported history flags at record byte {at} ({n} bytes)")));
     }
     Ok(())
 }

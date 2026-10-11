@@ -1,7 +1,8 @@
 # Native F3D investigation
 
-Status: archive/index, parameter, timeline, placement, circle, selected circular
-profile and limited constraint inspection, **not editable-history import**.
+Status: bounded archive inspection and **editable import of verified layout-8
+circle-sketch/one-sided-extrusion history**. General F3D history support remains
+incomplete; the three larger supplied designs do not import yet.
 The project owner authorized clean-room investigation on 2026-10-11 as an
 exception to AGENTS.md's public-specification requirement. Only the supplied
 files and locally generated controlled variants were observed through Fusion's
@@ -14,8 +15,20 @@ object index against its bulk records, leaving the current design untouched:
 cargo run --profile ci -p solvecraft-cli -- exec file.inspect_f3d '{"path":"/path/to/part.f3d"}'
 ```
 
-`doc.open` reports that editable F3D history is not implemented, instead of a
-misleading JSON/UTF-8 error. It never substitutes flattened geometry for history.
+`doc.open` reconstructs supported sketches, constraints and extrusions and
+regenerates the model before replacing the current document. Unsupported schemas
+or regeneration failures leave the current document/model/undo state intact.
+An imported document is unsaved with no source path: saving it uses a new
+`.solvecraft` file, never JSON written over the original F3D. The desktop open
+dialog includes F3D, and the CLI supports opening, measuring and benchmarking it.
+
+Supported reconstruction includes native parameter names and expressions,
+driving diameter/coincidence constraints, independent point/circle fixation,
+construction circles, rigid root sketch placement, feature names/order/suppression,
+single-circle selected profiles, signed extrusion distances and taper. New-body
+operations and booleans against a sole existing body are supported. Multiple-body
+boolean targeting, two-sided/start/to-object extents, other sketch geometry and
+constraint schemas, assembly transforms and other feature types fail explicitly.
 
 ## Evidence
 
@@ -129,8 +142,10 @@ diameter and coincidence constraints. All 25 controls remain local.
   object ID is not its profile tag. The verified schema is a single loop containing
   one full circle; other topologies fail explicitly. Ownership and back-references
   are checked, rather than selecting the first circle in a sketch.
-* Coincidence class `60403D47-0C49-49B0-BDE8-1679608164A2`, version 3, connects two
-  points. Diameter class `664AD49F-207F-4CD5-8555-DD269E9F09EA`, version 0, connects
+* Generic constraint class `60403D47-0C49-49B0-BDE8-1679608164A2`, version 3, uses
+  kind 1 for coincidence between two points. The importer checks kind and operands;
+  a class ID alone is insufficient (horizontal/vertical controls share it).
+  Diameter class `664AD49F-207F-4CD5-8555-DD269E9F09EA`, version 0, connects
   a circle to a parameter binding. The decoder checks owning sketches and repeated
   references. Constraint-removal controls independently verify both lists.
 
@@ -140,11 +155,24 @@ remain retained in the raw streams, not interpreted as defaults.
 
 ## Remaining history work
 
-Full extent/start/direction schemas, sketch point fixation, expression dependencies,
-other sketch geometry and constraints, non-circular profiles, assemblies and native
-B-reps remain unresolved. The next stage is to reconstruct supported native
-SolveCraft sketch/extrusion features without discarding those semantics, then edit
-and regenerate them and compare volumes/bounds against Fusion. General history preservation is not implemented.
+Full extent/start/direction schemas, other sketch geometry and constraints,
+non-circular profiles, assemblies and native B-reps remain unresolved. Parameter
+expressions are preserved and checked against the native cached values; unsupported
+units or expressions fail instead of becoming constants. Native parameter names
+currently coexist with SolveCraft's generated feature-input aliases.
+
+Point class `C2CEDAE7-1716-47C1-B7B1-07B70081D0FB` version 11 stores local coordinates,
+fixation and origin identity. Five independent point/circle fixation controls
+establish that fixed state is distinct from derived constraint state. Treating the
+latter as a Fix would make the supplied diameter dimension uneditable. The origin
+maps to SolveCraft's existing fixed origin instead of creating a duplicate point.
+Taper volume measurements establish the same positive sign in both applications.
+
+Independent API inspection of the three larger designs found loft, fillet,
+chamfer, mirror, pattern, sweep, combine, construction, draft, offset-face,
+delete-face, remove and base features in addition to sketches/extrusions. Those
+feature types and legacy record versions still require reconstruction and tests.
+General history preservation is not implemented.
 Opaque-byte retention alone must not be called editable import.
 
 Autodesk's public [ImportManager](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/core_ImportManager.htm)
@@ -167,6 +195,7 @@ SOLVECRAFT_F3D_CORPUS=/path/to/test_files cargo test --profile ci -p solvecraft-
 SOLVECRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solvecraft-cli --test f3d_inspection controlled_parameter_edits_match_fusion_api -- --ignored
 SOLVECRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solvecraft-cli --test f3d_inspection controlled_history_matches_fusion_api -- --ignored
 SOLVECRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solvecraft-cli --test f3d_inspection controlled_construction_and_constraint_removal -- --ignored
+SOLVECRAFT_F3D_PROBES=/path/to/probes SOLVECRAFT_F3D_CORPUS=/path/to/test_files cargo test --profile ci -p solvecraft-cli --test f3d_import -- --ignored
 ```
 
 Observed inspection times were under 8 ms per archive. The controlled-variant
@@ -184,4 +213,20 @@ Full `cargo xtask ci` passed with upstream `a094fa4` integrated, including all 2
 test binaries, the opening-performance guard and the ten-crate WASM check. All
 four local evidence tests passed on that same build: four supplied archives and
 25 controlled exports. This validates inspection and the separate native history
-fixtures, not editable F3D import.
+fixtures, not editable F3D import. Subsequent importer checks cover the original
+Minimal archive, 24 supported history/extent controls and five fixation controls:
+30 successful native imports in total. Volumes are compared with independent
+Fusion API measurements at 0.1% tolerance; available world bounds use 0.00001 mm.
+The two-sided control explicitly checks atomic rejection. Additional tests edit
+the imported diameter/height and a dependent expression, then check volume and
+undo. Original synthetic records in ordinary CI reconstruct an editable document,
+check analytic volume before/after edits and reopening, and exercise suppression,
+fixation, unknown versions and every truncated point prefix. No Fusion-generated
+archive or geometry is committed.
+
+The importer milestone passes `cargo xtask ci` against upstream `a094fa4`:
+25 test binaries, including 29 IO tests and the original editable fixtures,
+plus the ten-crate WASM check. The HardEdgeBasin performance test completed in
+0.87 seconds on this run. Local import and inspection evidence tests also passed
+using the workspace build. Rectangular-profile controls have been generated for
+the next stage but are not supported by this milestone.

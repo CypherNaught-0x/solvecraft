@@ -1,27 +1,27 @@
 use super::*;
 
-fn u32(b: &mut Vec<u8>, n: u32) {
+pub(super) fn u32(b: &mut Vec<u8>, n: u32) {
     b.extend(n.to_le_bytes());
 }
-fn u64(b: &mut Vec<u8>, n: u64) {
+pub(super) fn u64(b: &mut Vec<u8>, n: u64) {
     b.extend(n.to_le_bytes());
 }
-fn string(b: &mut Vec<u8>, s: &str) {
+pub(super) fn string(b: &mut Vec<u8>, s: &str) {
     u32(b, s.len() as u32);
     b.extend(s.as_bytes());
 }
-fn wide(b: &mut Vec<u8>, s: &str) {
+pub(super) fn wide(b: &mut Vec<u8>, s: &str) {
     u32(b, s.encode_utf16().count() as u32);
     for c in s.encode_utf16() {
         b.extend(c.to_le_bytes());
     }
 }
-fn reference(b: &mut Vec<u8>, id: u64) {
+pub(super) fn reference(b: &mut Vec<u8>, id: u64) {
     b.push(1);
     u64(b, id);
     b.extend([0; 2]);
 }
-fn refs(b: &mut Vec<u8>, ids: &[u64]) {
+pub(super) fn refs(b: &mut Vec<u8>, ids: &[u64]) {
     u32(b, ids.len() as u32);
     for id in ids {
         reference(b, *id);
@@ -29,7 +29,7 @@ fn refs(b: &mut Vec<u8>, ids: &[u64]) {
 }
 
 /// Hand-authored records; synthetic identities, values and presentation fields.
-fn fixture(construction: bool, curve_tag: u64) -> Design {
+pub(super) fn fixture(construction: bool, curve_tag: u64) -> Design {
     let mut d = Design { path: "test".into(), build: 1, layout: 8, classes: vec![], roots: vec![], records: vec![], metadata: vec![], bulk: vec![] };
     let mut add = |id, guid: &str, version, primary: Vec<u8>, secondary: Option<Vec<u8>>| {
         let mut write = |bytes: Vec<u8>| {
@@ -195,6 +195,11 @@ fn selected_circle_and_driving_dimension_follow_explicit_references() {
 
 #[test]
 fn unsupported_constraints_and_damaged_relationships_fail() {
+    let mut d = fixture(false, 17);
+    let rec = d.records.iter().find(|r| r.id == 55).unwrap();
+    let at = rec.offset + Records::new(&d).primary(55).unwrap().len() - 35;
+    d.bulk[at..at + 8].copy_from_slice(&64u64.to_le_bytes());
+    assert!(d.sketch_constraints().unwrap_err().to_string().contains("constraint kind"));
     let mut d = fixture(false, 17);
     d.classes.iter_mut().find(|c| c.objects.contains(&55)).unwrap().version = 999;
     assert!(d.sketch_constraints().is_err());

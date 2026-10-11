@@ -1,6 +1,6 @@
-//! Native F3D archive and selected history-record inspection. Opaque streams
-//! are retained alongside decoded relationships, never converted to a flattened
-//! body or presented as an editable SolveCraft document.
+//! Native F3D archive inspection and reconstruction of verified history schemas.
+//! Unsupported feature or constraint schemas fail rather than silently flattening
+//! or dropping editable history.
 //! See docs/f3d.md for the evidence, supported layouts and remaining work.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,12 +12,18 @@ mod archive;
 mod circles;
 mod constraints;
 mod history;
+mod import;
+#[cfg(test)]
+mod import_tests;
 mod parameters;
+mod points;
 mod profiles;
 pub use circles::SketchCircle;
 pub use constraints::{SketchConstraint, SketchConstraints};
 pub use history::{HistoryFeature, HistoryKind, SketchPlacement};
+pub use import::import_f3d;
 pub use parameters::Parameter;
+pub use points::SketchPoint;
 pub use profiles::CircleProfile;
 
 pub const MAX_F3D_BYTES: usize = 256 << 20;

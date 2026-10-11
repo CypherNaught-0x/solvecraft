@@ -126,10 +126,22 @@ fn insert_step(s: &mut Session, p: &Value) -> Result<Value> {
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_arg(p, "doc.open")?;
     if solvecraft_io::f3d::is_f3d_path(path) {
-        return Err(bad(
-            "doc.open",
-            "native F3D editable-history import is not implemented; file.inspect_f3d can inspect the archive without changing the design",
-        ));
+        let len = solvecraft_io::vfs::len(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+        if len > solvecraft_io::f3d::MAX_F3D_BYTES as u64 {
+            return Err(bad("doc.open", "F3D archive exceeds 256 MiB"));
+        }
+        let bytes = solvecraft_io::vfs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+        let stem = std::path::Path::new(path).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "Imported".into());
+        let doc = solvecraft_io::f3d::import_f3d(&bytes, &stem)?;
+        let mut fresh = Session::new(doc);
+        let errors: Vec<_> = fresh.model.results.iter().filter_map(|r| r.error.as_ref().map(|e| format!("feature {}: {e}", r.id))).collect();
+        if !errors.is_empty() {
+            return Err(bad("doc.open", format!("F3D history could not regenerate: {}", errors.join("; "))));
+        }
+        fresh.mark_unsaved();
+        let result = json!({"path":path,"features":fresh.doc.features.len(),"bodies":fresh.model.state().bodies.len(),"errors":0,"editable_history_imported":true});
+        *s = fresh;
+        return Ok(result);
     }
     if solvecraft_io::is_step_path(path) || solvecraft_io::is_mesh_path(path) {
         // A new, unsaved design holding the file's bodies.

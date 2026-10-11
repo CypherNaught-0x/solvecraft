@@ -12,6 +12,7 @@ pub struct SketchCircle {
     pub x_axis: [f64; 3],
     pub radius: f64,
     pub construction: bool,
+    pub fixed: bool,
     pub profile_id: Option<(u64, u64)>,
 }
 
@@ -87,7 +88,9 @@ fn decode(bytes: &[u8]) -> Result<SketchCircle> {
         return Err(invalid("unsupported full-circle geometry"));
     }
     let center_point = r.reference()?;
-    r.take(9)?;
+    r.take(4)?;
+    let fixed = points::fixed(&mut r)?;
+    r.take(3)?;
     let construction = match r.take(1)? {
         [0] => false,
         [1] => true,
@@ -103,7 +106,7 @@ fn decode(bytes: &[u8]) -> Result<SketchCircle> {
         (None, None) => None,
         _ => return Err(invalid("incomplete circle profile identity")),
     };
-    Ok(SketchCircle { id, sketch, center_point, center, normal, x_axis, radius, construction, profile_id })
+    Ok(SketchCircle { id, sketch, center_point, center, normal, x_axis, radius, construction, fixed, profile_id })
 }
 
 #[cfg(test)]

@@ -3,12 +3,18 @@ use solvecraft_engine::Session;
 
 #[test]
 fn unsupported_f3d_open_preserves_the_current_design() {
+    use std::io::Write;
+    let path = std::env::temp_dir().join(format!("solvecraft-invalid-{}.F3D", std::process::id()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+    file.write_all(b"invalid native archive").unwrap();
+    drop(file);
     let mut session = Session::default();
     session.execute("solid.box", &json!({"length": 10, "width": 20, "height": 30})).unwrap();
     let doc = session.doc.clone();
     let model = session.model.state();
-    let error = session.execute("doc.open", &json!({"path": "unsupported.F3D"})).unwrap_err().to_string();
-    assert!(error.contains("editable-history import is not implemented"), "{error}");
+    let error = session.execute("doc.open", &json!({"path": path})).unwrap_err().to_string();
+    std::fs::remove_file(path).unwrap();
+    assert!(error.contains("F3D"), "{error}");
     assert!(std::sync::Arc::ptr_eq(&doc, &session.doc));
     assert!(std::sync::Arc::ptr_eq(&model, &session.model.state()));
     assert!(session.is_dirty());
