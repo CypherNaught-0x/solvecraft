@@ -1079,13 +1079,20 @@ impl Body {
             let solid_faces: Vec<&mt::Face> = self.solid.face_iter().collect();
             for (fi, face) in meshed.iter().flat_map(|s| s.face_iter()).enumerate() {
                 let Some(pm) = face.surface() else { continue };
+                let projected = solid_faces.get(fi).and_then(|f| match f.surface() {
+                    mt::Surface::BSplineSurface(s) if s.degrees() == (5, 5) => {
+                        evaluation::display_projection(&s, pm.normals()).and_then(|n| retriangulate_projected(&pm, mt::Vector3::new(n.x, n.y, n.z)))
+                    }
+                    _ => None,
+                });
+                let pm = projected.as_ref().unwrap_or(&pm);
                 let flip = !face.orientation();
                 let base = u32::try_from(out.positions.len()).unwrap_or(u32::MAX);
                 // Curved faces: split triangles that cut through the surface.
                 let refinement = if refine {
                     solid_faces.get(fi).and_then(|sf| {
                         let surface = sf.surface();
-                        if matches!(surface, mt::Surface::Plane(_)) { None } else { refined(&pm, &surface, tol) }
+                        if matches!(surface, mt::Surface::Plane(_)) { None } else { refined(pm, &surface, tol) }
                     })
                 } else {
                     None
@@ -1325,6 +1332,7 @@ impl Body {
 
     /// A tessellation with its edges flagged for display (seams, tangent joins, protected creases).
     fn flagged(&self, mut m: Mesh) -> Result<Mesh> {
+
         if self.is_mesh() {
             return Ok(m);
         }
