@@ -25,6 +25,8 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-extent-measurements.json",
         "fusion-start-offset-measurements.json",
         "fusion-offset-dimension-measurements.json",
+        "fusion-angular-dimension-measurements.json",
+        "fusion-angular-stable-measurements.json",
         "fusion-polygon-measurements.json",
         "fusion-loop-measurements.json",
         "fusion-arc-measurements.json",
@@ -276,7 +278,9 @@ fn isolated_lines_keep_endpoints_fixation_and_construction() {
         s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap();
         let solvecraft_engine::doc::FeatureKind::Sketch { sketch, .. } = &s.doc.features[0].kind else { panic!("sketch") };
         let line = &sketch.curves[0];
-        assert_eq!(line.fixed, api["fixed"].as_bool().unwrap());
+        assert!(!line.fixed, "native line fixation must not immobilize its endpoints");
+        let held = sketch.constraints.iter().any(|c| matches!(c.kind, solvecraft_engine::doc::sketch::ConstraintKind::LineAngle { l: 0, .. }));
+        assert_eq!(held, api["fixed"].as_bool().unwrap());
         assert_eq!(line.construction, api["construction"].as_bool().unwrap());
         let solvecraft_engine::doc::sketch::CurveKind::Line { a, b } = line.kind else { panic!("line") };
         for (p, key) in [(a, "start"), (b, "end")] {
@@ -693,4 +697,84 @@ fn offset_dimensions_follow_api_bounds_through_edits_reopening_and_undo() {
         assert_eq!(s.doc, original);
         verify(&mut s, base);
     }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with angular quadrant and boundary controls"]
+fn angular_dimensions_preserve_quadrants_and_boundary_edit_directions() {
+    use solvecraft_engine::doc::sketch::CurveKind;
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    for file in ["fusion-angular-stable-measurements.json", "fusion-angular-boundary-measurements.json"] {
+        let api: Value = serde_json::from_slice(&std::fs::read(dir.join(file)).unwrap()).unwrap();
+        for (name, base) in api.as_object().unwrap().iter().filter(|(n, _)| n.ends_with("-baseline")) {
+            let changed = &api[name.replace("-baseline", "-changed")];
+            let verify = |s: &mut Session, expected: &Value| {
+                if let Some(v) = expected["volume"].as_f64() {
+                    volume(s, v, name);
+                }
+                let state = s.model.state();
+                let sketch = &state.sketches[0].sketch;
+                let lines = expected["lines"].as_array().unwrap();
+                assert_eq!(sketch.curves.len(), lines.len());
+                for curve in &sketch.curves {
+                    let CurveKind::Line { a, b } = curve.kind else { panic!("finite line") };
+                    let actual = [sketch.points[a].pos, sketch.points[b].pos];
+                    assert!(
+                        lines.iter().any(|line| {
+                            ["start", "end"].iter().enumerate().all(|(i, key)| {
+                                (actual[i].x - line[key][0].as_f64().unwrap() * 10.).abs() < 1e-5
+                                    && (actual[i].y - line[key][1].as_f64().unwrap() * 10.).abs() < 1e-5
+                            })
+                        }),
+                        "{name}: unmatched line {actual:?}"
+                    );
+                }
+            };
+            let mut s = Session::default();
+            s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let original = s.doc.clone();
+            verify(&mut s, base);
+            s.execute("parameters.change", &json!({"name":base["parameter"],"expression":changed["expression"]})).unwrap();
+            verify(&mut s, changed);
+            let doc = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+            verify(&mut Session::new(doc), changed);
+            s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.doc, original);
+            verify(&mut s, base);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with independently fixed line/point controls"]
+fn fixed_line_support_preserves_free_endpoint_dimension_edits() {
+    use solvecraft_engine::doc::sketch::CurveKind;
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-line-support-measurements.json")).unwrap()).unwrap();
+    let base = &api["fixed-line-support-baseline"];
+    let changed = &api["fixed-line-support-changed"];
+    assert_eq!(base["fixed"], true);
+    assert_eq!(base["start_fixed"], true);
+    assert_eq!(base["end_fixed"], false);
+    let verify = |s: &Session, expected: &Value| {
+        let state = s.model.state();
+        let sk = &state.sketches[0].sketch;
+        let CurveKind::Line { a, b } = sk.curves[0].kind else { panic!("line") };
+        for (point, key) in [(a, "start"), (b, "end")] {
+            let p = sk.points[point].pos;
+            assert!((p.x - expected[key][0].as_f64().unwrap() * 10.).abs() < 1e-5);
+            assert!((p.y - expected[key][1].as_f64().unwrap() * 10.).abs() < 1e-5);
+        }
+    };
+    let mut s = Session::default();
+    s.execute("doc.open", &json!({"path":dir.join("fixed-line-support-baseline.f3d")})).unwrap();
+    let original = s.doc.clone();
+    verify(&s, base);
+    s.execute("parameters.change", &json!({"name":base["parameter"],"expression":changed["expression"]})).unwrap();
+    verify(&s, changed);
+    let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+    verify(&Session::new(reopened), changed);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc, original);
+    verify(&s, base);
 }

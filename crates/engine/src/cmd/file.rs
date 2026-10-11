@@ -223,6 +223,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 Ok(sketches) => json!({"records":sketches.iter().map(|s|json!({"geometry":s.geometry,"feature":s.feature,"constraints":s.constraints.iter().map(|c|match c {
                     solvecraft_io::f3d::SketchConstraint::Symmetry {id,axis,entities} => json!({"type":"symmetry","id":id,"axis":axis,"entities":entities}),
                     solvecraft_io::f3d::SketchConstraint::Offset {id,line,entity,binding} => json!({"type":"offset_distance","id":id,"line":line,"entity":entity,"binding":binding}),
+                    solvecraft_io::f3d::SketchConstraint::Angle {id,lines,quadrants,binding,cached_radians} => json!({"type":"angle","id":id,"lines":lines,"quadrants":quadrants,"binding":binding,"radians":cached_radians}),
                     solvecraft_io::f3d::SketchConstraint::Coincident {id,points} => json!({"type":"coincident","id":id,"points":points}),
                     solvecraft_io::f3d::SketchConstraint::Diameter {id,circle,binding} => json!({"type":"diameter","id":id,"circle":circle,"binding":binding}),
                     solvecraft_io::f3d::SketchConstraint::Radius {id,circle,binding} => json!({"type":"radius","id":id,"circle":circle,"binding":binding}),

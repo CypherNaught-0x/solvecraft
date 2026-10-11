@@ -26,7 +26,7 @@ before allocating their buffers; engine reads enforce the same archive limit.
 
 Supported reconstruction includes native parameter names and expressions,
 numeric user parameters, user/model roles, comments and favorites,
-driving radius/diameter, horizontal/vertical and line-offset distance dimensions, coincidence,
+driving radius/diameter, angular, horizontal/vertical and line-offset distance dimensions, coincidence,
 horizontal/vertical line and point alignment, parallel/perpendicular/collinear lines,
 equal lengths/radii, point/line/circle symmetry, concentric/tangent round curves, point-on-curve and line-midpoint
 relationships, independent point/curve fixation, construction curves, rigid root sketch placement, feature names/order/suppression,
@@ -212,7 +212,7 @@ test compares expressions, units, values, circle centers and radii directly to
 the separately recorded Fusion API measurements. Actual Fusion files remain
 outside the repository; ordinary CI uses original synthetic records.
 
-Twenty-six [small editable SolveCraft fixtures](../apps/solvecraft-cli/tests/history/README.md)
+Twenty-seven [small editable SolveCraft fixtures](../apps/solvecraft-cli/tests/history/README.md)
 provide command recipes, saved documents and independent analytic volume/bounds
 checks. They exercise parameter edits, signed heights, placement, all four body
 operations, reordering, suppression, reopening and undo. These native fixtures run
@@ -858,3 +858,52 @@ ten-crate WASM checking. All 22 local import groups and ten inspection groups
 passed against the integrated build. The HardEdgeBasin opening guard passed in
 0.91 seconds. The imported parallel-line-offset prism was rendered after an edit
 and visually checked.
+
+
+### Angular dimensions and independently fixed line supports
+
+Angular-dimension class `6EEAFDE5-59C4-424D-8EBE-77CDBC562017`, versions 0/1,
+retains two line operands, owning sketch, native parameter binding, cached radians
+and two quadrant fields. Quadrants 0/2 measure the direct angle, while 1/3 measure
+the supplement. Opposite annotation quadrants can differ while retaining the same
+constraint semantics. Distinct quadrant parity is essential at 90°: identical
+cached geometry must move in different directions when its parameter changes.
+The importer checks the angle against both the bound parameter and finite native
+line directions, then preserves clockwise direction and the supplementary branch.
+Unknown flags, inconsistent quadrants, wrong owners and truncated records fail.
+
+Twenty-seven fully constrained triangular-prism exports cover acute, obtuse,
+clockwise and reversed-line dimensions and all four 90° quadrants. Eight sketch
+exports check edits from 0° and 180°. Their independently measured geometry,
+solid volumes and bounds are checked after import, edits, reopening and undo.
+Earlier underconstrained controls remain useful for validating imported snapshots,
+but their arbitrary free-endpoint positions are not exact edit oracles.
+The offset edit controls likewise now fix their reference endpoints explicitly;
+the earlier archives and measurements are retained separately. The independent
+free-endpoint test prevents this stronger oracle setup from hiding overconstraint.
+
+Those controls revealed an existing fixation mismatch: native line fixation holds
+the infinite line support while endpoint fixation remains independent. The
+importer previously immobilized both endpoints. It now preserves the support
+using a fixed anchor, point-on-line and orientation constraints. Three additional
+public-API controls fix one endpoint and drive the other through length edits.
+Original record tests also prove that an extruded rectangle's fixed support
+allows its width to change. Circle and arc fixation semantics are separate.
+
+The twenty-seventh original native fixture, `angular-prism`, is a 30 × 20 × 17 mm
+parallelogram prism. Its analytic volume is width × side × sin(angle) × height.
+Edits from 90° to 60° and 120° have equal volumes but different bounds; both are
+checked along with height edits, serialization and undo. No Fusion-generated
+files are committed. Larger feature histories remain incomplete.
+
+Validation: upstream `4af2d06` is integrated without conflicts. Full `cargo xtask
+ci` passed 29 test binaries, including 88 I/O tests, 107 document tests, 560 engine
+tests, 198 kernel tests, 304 UI tests, all 27 original fixtures and ten-crate WASM
+checking. All 24 local import groups and ten inspection groups passed. The
+HardEdgeBasin opening guard passed in 1.41 seconds. An imported triangular prism
+was rendered and visually checked after a supplementary-angle edit.
+
+A new fixed-arc control separately demonstrates that the existing arc importer
+still freezes an otherwise free endpoint after a dimension edit. Its supporting
+circle and endpoint fixation need separate reconstruction; this remains open
+alongside legacy support links, offset-curve generators and other feature types.

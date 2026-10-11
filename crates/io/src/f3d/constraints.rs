@@ -19,6 +19,7 @@ pub enum SketchConstraint {
     Vertical { id: u64, line: u64 },
     Linear { id: u64, points: [u64; 2], orientation: LinearOrientation, binding: u64 },
     Offset { id: u64, line: u64, entity: u64, binding: u64 },
+    Angle { id: u64, lines: [u64; 2], quadrants: [u32; 2], binding: u64, cached_radians: f64 },
     Diameter { id: u64, circle: u64, binding: u64 },
     Radius { id: u64, circle: u64, binding: u64 },
     AlignedPoints { id: u64, points: [u64; 2], vertical: bool },
@@ -172,6 +173,58 @@ impl Design {
                 for id in dimensions {
                     if !seen.insert(id) {
                         return Err(invalid("duplicate sketch dimension"));
+                    }
+                    if let Some(class) = classes.get(&id).filter(|c| c.id == "6EEAFDE5-59C4-424D-8EBE-77CDBC562017") {
+                        if class.version > 1 {
+                            return Err(invalid("unsupported angular dimension version"));
+                        }
+                        let mut r = payload(records.primary(id)?, id)?;
+                        empty(&mut r)?;
+                        one(&mut r)?;
+                        if r.u32()? != 3 || operand(&mut r)? != 0 {
+                            return Err(invalid("unsupported angular dimension operands"));
+                        }
+                        let a = operand(&mut r)?;
+                        let b = operand(&mut r)?;
+                        if a == b || !line(&a) || !line(&b) {
+                            return Err(invalid("angular dimension requires two distinct sketch lines"));
+                        }
+                        attributes::read(&mut r)?;
+                        let cached_radians = f64::from_bits(r.u64()?);
+                        let quadrant = r.u32()?;
+                        zeros(&mut r, 2)?;
+                        let reference_quadrant = r.u32()?;
+                        if !cached_radians.is_finite()
+                            || !(0. ..=std::f64::consts::PI).contains(&cached_radians)
+                            || quadrant > 3
+                            || reference_quadrant > 3
+                            || quadrant % 2 != reference_quadrant % 2
+                        {
+                            return Err(invalid("unsupported angular dimension value or quadrants"));
+                        }
+                        r.take(219)?; // dimension presentation geometry
+                        r.wide_string()?;
+                        r.wide_string()?;
+                        r.take(24)?; // annotation position
+                        if r.u64()? != 0x8000 {
+                            return Err(invalid("unsupported angular dimension flags"));
+                        }
+                        let binding = r.reference()?;
+                        let back = references(&mut r)?;
+                        if bindings.get(&binding) != Some(&feature) || (back != [a, b] && back != [b, a]) {
+                            return Err(invalid("inconsistent angular dimension binding or lines"));
+                        }
+                        zeros(&mut r, 1)?;
+                        finish(&r)?;
+                        dimension_owner(&records, id, *geometry)?;
+                        constraints.push(SketchConstraint::Angle {
+                            id,
+                            lines: [a, b],
+                            quadrants: [quadrant, reference_quadrant],
+                            binding,
+                            cached_radians,
+                        });
+                        continue;
                     }
                     if classes.get(&id).is_some_and(|c| c.id == "8C780195-72C0-4a56-A911-E43AB14357F2") {
                         require_class(&classes, id, "8C780195-72C0-4a56-A911-E43AB14357F2", 3)?;

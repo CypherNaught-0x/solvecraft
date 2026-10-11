@@ -343,9 +343,11 @@ impl Design {
                             let b = point_indices.get(&line.end_point).copied().ok_or_else(|| invalid("line end outside sketch"))?;
                             let i = sketch.add_line_pts(a, b, Some(&format!("c{id}"))).map_err(|e| invalid(&e.to_string()))?;
                             let c = sketch.curves.get_mut(i).ok_or_else(|| invalid("missing imported line"))?;
-                            c.fixed = line.fixed;
                             c.construction = line.construction;
                             c.centerline = line.centerline;
+                            if line.fixed {
+                                fix_line_support(&mut sketch, i, *id)?;
+                            }
                             curve_indices.insert(*id, i);
                             if !consumed.insert(*id) {
                                 return Err(invalid("duplicate sketch entity"));
@@ -447,6 +449,19 @@ impl Design {
                                 consumed.insert(*id);
                                 (ConstraintKind::PointLineDistance { p, l, value: parameter.value * 10. }, Some(parameter.name.clone()))
                             }
+                            SketchConstraint::Angle { id, lines: [a, b], quadrants, binding, cached_radians } => {
+                                let a = curve_indices.get(a).copied().ok_or_else(|| invalid("missing angular dimension line"))?;
+                                let b = curve_indices.get(b).copied().ok_or_else(|| invalid("missing angular dimension line"))?;
+                                let p = bindings.get(binding).ok_or_else(|| invalid("missing angular dimension parameter"))?;
+                                if solvecraft_doc::expr::Kind::from_unit(&p.display_unit) != solvecraft_doc::expr::Kind::Angle
+                                    || (p.value - cached_radians).abs() > 1e-10
+                                {
+                                    return Err(invalid("angular dimension parameter disagrees with its cached value or units"));
+                                }
+                                let [quadrant, _] = *quadrants;
+                                consumed.insert(*id);
+                                (angle_constraint(&sketch, a, b, p.value, quadrant)?, Some(p.name.clone()))
+                            }
                         };
                         sketch.add_constraint(kind, param).map_err(|e| invalid(&e.to_string()))?;
                     }
@@ -541,6 +556,46 @@ fn length_parameter<'a>(bindings: &BTreeMap<u64, &'a Parameter>, binding: u64) -
         return Err(invalid("dimension requires a length parameter"));
     }
     Ok(p)
+}
+
+pub(super) fn angle_constraint(sketch: &Sketch, a: usize, b: usize, value: f64, quadrant: u32) -> Result<ConstraintKind> {
+    let direction = |i: usize| {
+        let Some(solvecraft_doc::sketch::CurveKind::Line { a, b }) = sketch.curves.get(i).map(|c| &c.kind) else {
+            return Err(invalid("angular dimension requires finite lines"));
+        };
+        let start = sketch.point(*a).ok_or_else(|| invalid("missing angular line endpoint"))?;
+        let end = sketch.point(*b).ok_or_else(|| invalid("missing angular line endpoint"))?;
+        (end - start).normalized().ok_or_else(|| invalid("degenerate angular dimension line"))
+    };
+    let da = direction(a)?;
+    let db = direction(b)?;
+    let cross = da.cross(db);
+    let direct = cross.abs().atan2(da.dot(db));
+    let flip = quadrant % 2 == 1;
+    let expected = if flip { std::f64::consts::PI - value } else { value };
+    if !direct.is_finite() || (direct - expected).abs() > 1e-7 {
+        return Err(invalid("angular dimension quadrant disagrees with native line geometry"));
+    }
+    // Odd quadrants measure the supplement. Swapping the directed lines retains
+    // clockwise dimensions, including at 90 degrees where cached angles coincide.
+    let (a, b) = if (cross < 0.) != flip { (b, a) } else { (a, b) };
+    Ok(ConstraintKind::Angle { a, b, value, flip })
+}
+
+fn fix_line_support(sketch: &mut Sketch, line: usize, id: u64) -> Result<()> {
+    let Some(solvecraft_doc::sketch::CurveKind::Line { a, b }) = sketch.curves.get(line).map(|c| &c.kind) else {
+        return Err(invalid("fixed support requires a line"));
+    };
+    let start = sketch.point(*a).ok_or_else(|| invalid("missing fixed line endpoint"))?;
+    let end = sketch.point(*b).ok_or_else(|| invalid("missing fixed line endpoint"))?;
+    // Native curve fixation holds the infinite support, independently of endpoint
+    // fixation. SolidCraft's curve.fixed holds both endpoints and would lose DOFs.
+    let anchor = sketch.add_point(start, Some(&format!("line{id}_support"))).map_err(|e| invalid(&e.to_string()))?;
+    sketch.points.get_mut(anchor).ok_or_else(|| invalid("missing fixed support anchor"))?.fixed = true;
+    for kind in [ConstraintKind::PointOnCurve { p: anchor, c: line }, ConstraintKind::LineAngle { l: line, value: (end - start).angle() }] {
+        sketch.add_constraint(kind, None).map_err(|e| invalid(&e.to_string()))?;
+    }
+    Ok(())
 }
 
 fn profile_selection(profile: &SketchProfile) -> Result<ProfileSel> {
