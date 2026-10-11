@@ -23,6 +23,7 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-circle-measurements.json",
         "fusion-history-measurements.json",
         "fusion-extent-measurements.json",
+        "fusion-polygon-measurements.json",
     ] {
         let cases: Value = serde_json::from_slice(&std::fs::read(dir.join(source)).unwrap()).unwrap();
         for (name, api) in cases.as_object().unwrap() {
@@ -92,6 +93,62 @@ fn supplied_minimal_imports_without_a_fusion_roundtrip() {
     s.execute("doc.open", &json!({"path":dir.join("Minimal.f3d")})).unwrap();
     assert_eq!(s.doc.features.len(), 2);
     volume(&mut s, std::f64::consts::PI * 5. * 5. * 10., "supplied Minimal");
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
+fn imported_rectangle_dimensions_regenerate_and_undo() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let mut s = Session::default();
+    s.execute("doc.open", &json!({"path":dir.join("rectangle-baseline.f3d")})).unwrap();
+    let original = s.doc.clone();
+    for (name, expr, want) in [("d1", "45 mm", 36.), ("d2", "35 mm", 42.), ("d3", "55 mm", 33.), ("d1", "d2 * 2", 32.)] {
+        s.execute("parameters.change", &json!({"name":name,"expression":expr})).unwrap();
+        volume(&mut s, want, name);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(*s.doc, *original);
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
+fn isolated_lines_keep_endpoints_fixation_and_construction() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let cases: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-line-measurements.json")).unwrap()).unwrap();
+    for (name, api) in cases.as_object().unwrap() {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap();
+        let solvecraft_engine::doc::FeatureKind::Sketch { sketch, .. } = &s.doc.features[0].kind else { panic!("sketch") };
+        let line = &sketch.curves[0];
+        assert_eq!(line.fixed, api["fixed"].as_bool().unwrap());
+        assert_eq!(line.construction, api["construction"].as_bool().unwrap());
+        let solvecraft_engine::doc::sketch::CurveKind::Line { a, b } = line.kind else { panic!("line") };
+        for (p, key) in [(a, "start"), (b, "end")] {
+            let point = sketch.points[p].pos;
+            assert!((point.x - api[key][0].as_f64().unwrap() * 10.).abs() < 1e-8);
+            assert!((point.y - api[key][1].as_f64().unwrap() * 10.).abs() < 1e-8);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
+fn driven_dimensions_cannot_silently_become_driving_constraints() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let cases: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-dimension-measurements.json")).unwrap()).unwrap();
+    for (name, api) in cases.as_object().unwrap() {
+        let mut s = Session::default();
+        let before = s.doc.clone();
+        let model = s.model.state();
+        let result = s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))}));
+        if api["driving"].as_bool().unwrap() {
+            result.unwrap_or_else(|e| panic!("{name}: {e}"));
+        } else {
+            assert!(result.unwrap_err().to_string().contains("parameter expression metadata"), "{name}");
+            assert!(std::sync::Arc::ptr_eq(&before, &s.doc));
+            assert!(std::sync::Arc::ptr_eq(&model, &s.model.state()));
+        }
+    }
 }
 
 #[test]

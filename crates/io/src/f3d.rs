@@ -15,16 +15,20 @@ mod history;
 mod import;
 #[cfg(test)]
 mod import_tests;
+mod lines;
 mod parameters;
 mod points;
+#[cfg(test)]
+mod polygon_tests;
 mod profiles;
 pub use circles::SketchCircle;
 pub use constraints::{SketchConstraint, SketchConstraints};
 pub use history::{HistoryFeature, HistoryKind, SketchPlacement};
 pub use import::import_f3d;
+pub use lines::SketchLine;
 pub use parameters::Parameter;
 pub use points::SketchPoint;
-pub use profiles::CircleProfile;
+pub use profiles::{CircleProfile, SketchProfile};
 
 pub const MAX_F3D_BYTES: usize = 256 << 20;
 const MAX_STREAM: usize = 128 << 20;

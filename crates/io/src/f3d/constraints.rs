@@ -1,4 +1,4 @@
-//! Coincidence and circle-diameter relationships observed in controlled sketches.
+//! Point, line and driving-dimension relationships observed in controlled sketches.
 //! Other relationships sharing the generic constraint class fail explicitly.
 use super::history::{empty, finish, payload, references, require_class, zeros};
 use super::*;
@@ -13,6 +13,9 @@ pub struct SketchConstraints {
 #[derive(Debug, PartialEq)]
 pub enum SketchConstraint {
     Coincident { id: u64, points: [u64; 2] },
+    Horizontal { id: u64, line: u64 },
+    Vertical { id: u64, line: u64 },
+    Linear { id: u64, points: [u64; 2], vertical: bool, binding: u64 },
     Diameter { id: u64, circle: u64, binding: u64 },
 }
 
@@ -47,6 +50,7 @@ impl Design {
         let parameters = self.parameters()?;
         let bindings: BTreeMap<_, _> = parameters.iter().map(|p| (p.binding, p.owner)).collect();
         let circles: BTreeMap<_, _> = self.sketch_circles()?.into_iter().map(|c| (c.id, c.sketch)).collect();
+        let lines: BTreeMap<_, _> = self.sketch_lines()?.into_iter().map(|c| (c.id, c.sketch)).collect();
         class
             .objects
             .iter()
@@ -78,15 +82,14 @@ impl Design {
                     let mut r = payload(records.primary(id)?, id)?;
                     empty(&mut r)?;
                     one(&mut r)?;
-                    if r.u32()? != 2 {
-                        return Err(invalid("unsupported coincidence arity"));
+                    let count = r.u32()?;
+                    if count != 1 && count != 2 {
+                        return Err(invalid("unsupported geometric constraint arity"));
                     }
-                    let a = r.reference()?;
-                    zeros(&mut r, 4)?;
-                    let b = r.reference()?;
-                    zeros(&mut r, 4)?;
-                    for p in [a, b] {
-                        require_class(&classes, p, "C2CEDAE7-1716-47C1-B7B1-07B70081D0FB", 11)?;
+                    let mut operands = Vec::new();
+                    for _ in 0..count {
+                        operands.push(r.reference()?);
+                        zeros(&mut r, 4)?;
                     }
                     one(&mut r)?;
                     attributes(&mut r)?;
@@ -95,20 +98,80 @@ impl Design {
                     }
                     // The class is shared by geometric relationships; operand
                     // count and point types alone do not establish coincidence.
-                    if r.u64()? != 1 {
-                        return Err(invalid("unsupported geometric constraint kind"));
-                    }
+                    let kind = r.u64()?;
                     let back = references(&mut r)?;
-                    if back.len() != 2 || !back.contains(&a) || !back.contains(&b) || a == b {
+                    let operands_set: BTreeSet<_> = operands.iter().copied().collect();
+                    if back.len() != operands.len()
+                        || operands_set.len() != operands.len()
+                        || back.iter().copied().collect::<BTreeSet<_>>() != operands_set
+                    {
                         return Err(invalid("inconsistent coincidence references"));
                     }
                     zeros(&mut r, 1)?;
                     finish(&r)?;
-                    constraints.push(SketchConstraint::Coincident { id, points: [a, b] });
+                    constraints.push(match (kind, operands.as_slice()) {
+                        (1, [a, b]) => {
+                            for p in [a, b] {
+                                require_class(&classes, *p, "C2CEDAE7-1716-47C1-B7B1-07B70081D0FB", 11)?;
+                            }
+                            SketchConstraint::Coincident { id, points: [*a, *b] }
+                        }
+                        (64 | 128, [line]) if lines.get(line) == Some(geometry) => {
+                            if kind == 64 {
+                                SketchConstraint::Horizontal { id, line: *line }
+                            } else {
+                                SketchConstraint::Vertical { id, line: *line }
+                            }
+                        }
+                        _ => return Err(invalid("unsupported geometric constraint kind")),
+                    });
                 }
                 for id in dimensions {
                     if !seen.insert(id) {
                         return Err(invalid("duplicate sketch dimension"));
+                    }
+                    if classes.get(&id).is_some_and(|c| c.id == "8C780195-72C0-4a56-A911-E43AB14357F2") {
+                        require_class(&classes, id, "8C780195-72C0-4a56-A911-E43AB14357F2", 3)?;
+                        let mut r = payload(records.primary(id)?, id)?;
+                        empty(&mut r)?;
+                        one(&mut r)?;
+                        if r.u32()? != 3 || r.reference()? != 0 {
+                            return Err(invalid("unsupported linear dimension operands"));
+                        }
+                        let vertical = match r.u32()? {
+                            4 => false,
+                            5 => true,
+                            _ => return Err(invalid("unsupported linear dimension orientation")),
+                        };
+                        let a = r.reference()?;
+                        if r.u32()? != u32::from(vertical) {
+                            return Err(invalid("unsupported linear dimension axis"));
+                        }
+                        let b = r.reference()?;
+                        zeros(&mut r, 4)?;
+                        if a == b {
+                            return Err(invalid("duplicate dimension points"));
+                        }
+                        for p in [a, b] {
+                            require_class(&classes, p, "C2CEDAE7-1716-47C1-B7B1-07B70081D0FB", 11)?;
+                        }
+                        one(&mut r)?;
+                        attributes(&mut r)?;
+                        r.take(224)?;
+                        r.wide_string()?;
+                        r.take(44)?;
+                        if r.u64()? != if vertical { 0x800000 } else { 0x400000 } {
+                            return Err(invalid("unsupported linear dimension flags"));
+                        }
+                        let binding = r.reference()?;
+                        if bindings.get(&binding) != Some(&feature) || references(&mut r)? != [a, b] {
+                            return Err(invalid("inconsistent linear dimension binding or points"));
+                        }
+                        zeros(&mut r, 1)?;
+                        finish(&r)?;
+                        dimension_owner(&records, id, *geometry)?;
+                        constraints.push(SketchConstraint::Linear { id, points: [a, b], vertical, binding });
+                        continue;
                     }
                     require_class(&classes, id, "664AD49F-207F-4CD5-8555-DD269E9F09EA", 0)?;
                     let mut r = payload(records.primary(id)?, id)?;
@@ -134,20 +197,24 @@ impl Design {
                     }
                     zeros(&mut r, 1)?;
                     finish(&r)?;
-                    let mut r = payload(records.secondary(id)?, id)?;
-                    empty(&mut r)?;
-                    if r.reference()? != *geometry {
-                        return Err(invalid("inconsistent diameter owner"));
-                    }
-                    r.take(18)?;
-                    if r.reference()? != *geometry {
-                        return Err(invalid("inconsistent diameter owner back-reference"));
-                    }
-                    finish(&r)?;
+                    dimension_owner(&records, id, *geometry)?;
                     constraints.push(SketchConstraint::Diameter { id, circle, binding });
                 }
                 Ok(SketchConstraints { geometry: *geometry, feature, constraints })
             })
             .collect()
     }
+}
+
+fn dimension_owner(records: &Records<'_>, id: u64, geometry: u64) -> Result<()> {
+    let mut r = payload(records.secondary(id)?, id)?;
+    empty(&mut r)?;
+    if r.reference()? != geometry {
+        return Err(invalid("inconsistent dimension owner"));
+    }
+    r.take(18)?;
+    if r.reference()? != geometry {
+        return Err(invalid("inconsistent dimension owner back-reference"));
+    }
+    finish(&r)
 }

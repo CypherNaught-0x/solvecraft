@@ -1,7 +1,7 @@
 # Native F3D investigation
 
 Status: bounded archive inspection and **editable import of verified layout-8
-circle-sketch/one-sided-extrusion history**. General F3D history support remains
+circle/line-sketch and one-sided-extrusion history**. General F3D history support remains
 incomplete; the three larger supplied designs do not import yet.
 The project owner authorized clean-room investigation on 2026-10-11 as an
 exception to AGENTS.md's public-specification requirement. Only the supplied
@@ -23,9 +23,9 @@ An imported document is unsaved with no source path: saving it uses a new
 dialog includes F3D, and the CLI supports opening, measuring and benchmarking it.
 
 Supported reconstruction includes native parameter names and expressions,
-driving diameter/coincidence constraints, independent point/circle fixation,
-construction circles, rigid root sketch placement, feature names/order/suppression,
-single-circle selected profiles, signed extrusion distances and taper. New-body
+driving diameter and horizontal/vertical distance dimensions, coincidence and
+horizontal/vertical constraints, independent point/curve fixation, construction curves, rigid root sketch placement, feature names/order/suppression,
+single-loop circle and polygon profiles, signed extrusion distances and taper. New-body
 operations and booleans against a sole existing body are supported. Multiple-body
 boolean targeting, two-sided/start/to-object extents, other sketch geometry and
 constraint schemas, assembly transforms and other feature types fail explicitly.
@@ -140,7 +140,7 @@ diameter and coincidence constraints. All 25 controls remain local.
 * Selected circular profiles follow container → profile → tracking record →
   `(primary, secondary)` curve tags, scoped to the referenced sketch. A curve's
   object ID is not its profile tag. The verified schema is a single loop containing
-  one full circle; other topologies fail explicitly. Ownership and back-references
+  one full circle or a chain of finite lines; multiple loops fail explicitly. Ownership and back-references
   are checked, rather than selecting the first circle in a sketch.
 * Generic constraint class `60403D47-0C49-49B0-BDE8-1679608164A2`, version 3, uses
   kind 1 for coincidence between two points. The importer checks kind and operands;
@@ -156,7 +156,7 @@ remain retained in the raw streams, not interpreted as defaults.
 ## Remaining history work
 
 Full extent/start/direction schemas, other sketch geometry and constraints,
-non-circular profiles, assemblies and native B-reps remain unresolved. Parameter
+multi-loop profiles, assemblies and native B-reps remain unresolved. Parameter
 expressions are preserved and checked against the native cached values; unsupported
 units or expressions fail instead of becoming constants. Native parameter names
 currently coexist with SolveCraft's generated feature-input aliases.
@@ -203,7 +203,7 @@ test compares expressions, units, values, circle centers and radii directly to
 the separately recorded Fusion API measurements. Actual Fusion files remain
 outside the repository; ordinary CI uses original synthetic records.
 
-Nine [small editable SolveCraft fixtures](../apps/solvecraft-cli/tests/history/README.md)
+Eleven [small editable SolveCraft fixtures](../apps/solvecraft-cli/tests/history/README.md)
 provide command recipes, saved documents and independent analytic volume/bounds
 checks. They exercise parameter edits, signed heights, placement, all four body
 operations, reordering, suppression, reopening and undo. These native fixtures run
@@ -237,3 +237,41 @@ manifest was regenerated to resolve its version conflict. Full CI passed again:
 25 binaries, 187 kernel tests, 549 engine tests, 292 UI tests, the ten-crate WASM
 check and the opening guard (2.65 seconds for the performance test). All eight
 local import/inspection tests passed against this integrated build as well.
+
+## Finite lines and rectangular history
+
+Three independent rectangle exports vary width and height. Line class
+`DCA267ED-D615-4934-B64F-AD805E8003E2`, version 2, stores a start, delta,
+normalized direction and endpoint references (end first, then start). Imported
+endpoints must agree with the independently decoded point records. Five isolated
+line controls establish fixation and construction flags separately.
+
+The generic geometric relationship class uses kind 64 for horizontal and 128 for
+vertical, each with one line operand. Linear dimension class
+`8C780195-72C0-4a56-A911-E43AB14357F2`, version 3, links two points to a
+driving parameter, with separate horizontal and vertical orientations. Profile
+tracking resolves every curve tag in its original selected loop, rather than
+relying on geometry registration order. Synthetic tests intentionally reverse it.
+
+Six diameter/linear dimension controls toggle
+[isDriving](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/fusion_SketchLinearDimension_isDriving.htm).
+Driven dimensions change parameter expression metadata and remain explicitly
+unsupported: importing them as driving constants would lose their semantics.
+Both actual-file atomicity checks and an original synthetic metadata test guard
+that behavior. These observations do not establish support for other dimension
+orientations or attached sketches.
+
+The two new original rectangular-prism fixtures use 30 × 20 × 17 mm dimensions
+and analytic 10,200 mm³ volume, including negative height. They test width/depth/
+height edits, a dependent expression, world bounds, serialization, reopening and
+undo without requiring Fusion. Local rectangular imports additionally compare
+volumes to independent API measurements and exercise native parameter edits.
+
+This rectangle milestone passes full `cargo xtask ci` with upstream `2f78d3e`
+(merged PR #149) integrated without conflicts: 25 test binaries, 31 IO tests,
+552 engine tests, 187 kernel tests, the eleven native fixtures, and ten-crate
+WASM validation. The opening-performance test completed in 1.97 seconds.
+All eleven local evidence tests passed (seven import, four inspection), including
+38 supported original/rectangle/line imports plus four driving-dimension controls
+and atomic rejection of the two driven-dimension controls. The imported rectangle
+was also rendered and visually checked; local generated evidence stays outside Git.

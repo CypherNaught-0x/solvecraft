@@ -198,6 +198,10 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 }).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
+            let lines = match d.sketch_lines() {
+                Ok(lines) => json!({"coordinate_frame":"sketch_local","length_unit":"cm","records":lines.iter().map(|l|json!({"id":l.id,"sketch":l.sketch,"start_point":l.start_point,"end_point":l.end_point,"start":l.start,"end":l.end,"fixed":l.fixed,"construction":l.construction,"profile_id":l.profile_id})).collect::<Vec<_>>()}),
+                Err(e) => json!({"unsupported":e.to_string()}),
+            };
             let profiles = match d.circle_profiles() {
                 Ok(profiles) => json!({"records":profiles.iter().map(|p|json!({"id":p.id,"feature":p.feature,"geometry":p.geometry,"circle":p.circle})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
@@ -206,16 +210,23 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 Ok(sketches) => json!({"records":sketches.iter().map(|s|json!({"geometry":s.geometry,"feature":s.feature,"constraints":s.constraints.iter().map(|c|match c {
                     solvecraft_io::f3d::SketchConstraint::Coincident {id,points} => json!({"type":"coincident","id":id,"points":points}),
                     solvecraft_io::f3d::SketchConstraint::Diameter {id,circle,binding} => json!({"type":"diameter","id":id,"circle":circle,"binding":binding}),
+                    solvecraft_io::f3d::SketchConstraint::Horizontal{id,line}=>json!({"type":"horizontal","id":id,"line":line}),
+                    solvecraft_io::f3d::SketchConstraint::Vertical{id,line}=>json!({"type":"vertical","id":id,"line":line}),
+                    solvecraft_io::f3d::SketchConstraint::Linear{id,points,vertical,binding}=>json!({"type":if *vertical{"distance_y"}else{"distance_x"},"id":id,"points":points,"binding":binding}),
                 }).collect::<Vec<_>>()})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
+            let sketch_profiles=match d.single_loop_profiles() {
+                Ok(profiles)=>json!({"records":profiles.iter().map(|p|json!({"id":p.id,"feature":p.feature,"geometry":p.geometry,"curves":p.curves})).collect::<Vec<_>>()}),
+                Err(e)=>json!({"unsupported":e.to_string()}),
+            };
             json!({"path": d.path, "build": d.build, "layout": d.layout, "classes": d.classes.len(),
             "objects": d.records.len(), "secondary_records": d.records.iter().filter(|r| r.secondary_offset.is_some()).count(),
-            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_circles":circles,"history":history,"circle_profiles":profiles,"sketch_constraints":constraints})
+            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_circles":circles,"sketch_lines":lines,"history":history,"circle_profiles":profiles,"sketch_profiles":sketch_profiles,"sketch_constraints":constraints})
         })
         .collect();
     Ok(json!({"path": path, "editable_history_imported": false, "designs": summaries,
-        "warnings": ["Supported history relationships inspected. Editable feature reconstruction, complete extent and constraint semantics, and native B-reps are not yet decoded."]}))
+        "warnings": ["Inspection does not regenerate or import a document. Use doc.open for supported editable history; general history and native B-reps remain unsupported."]}))
 }
 
 fn write(s: &mut Session, path: &str) -> Result<Value> {

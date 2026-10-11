@@ -4,13 +4,13 @@ use solvecraft_doc::{Document, FeatureKind, Model};
 
 // Original, field-authored records extending the relationship fixture. Values,
 // identities, strings and archive framing are authored here, not copied exports.
-type TestRecord = (String, u32, Vec<u8>, Option<Vec<u8>>);
-struct Fixture(BTreeMap<u64, TestRecord>);
+pub(super) type TestRecord = (String, u32, Vec<u8>, Option<Vec<u8>>);
+pub(super) struct Fixture(pub(super) BTreeMap<u64, TestRecord>);
 impl Fixture {
-    fn put(&mut self, id: u64, guid: &str, version: u32, b: Vec<u8>, secondary: Option<Vec<u8>>) {
+    pub(super) fn put(&mut self, id: u64, guid: &str, version: u32, b: Vec<u8>, secondary: Option<Vec<u8>>) {
         self.0.insert(id, (guid.into(), version, b, secondary));
     }
-    fn design(self) -> Design {
+    pub(super) fn design(self) -> Design {
         let mut d =
             Design { path: "original".into(), build: 1, layout: 8, classes: vec![], roots: vec![3], records: vec![], metadata: vec![], bulk: vec![] };
         for (id, (guid, version, b, secondary)) in self.0 {
@@ -33,7 +33,7 @@ impl Fixture {
         d
     }
 }
-fn common(b: &mut Vec<u8>, name: &str, suppressed: bool) {
+pub(super) fn common(b: &mut Vec<u8>, name: &str, suppressed: bool) {
     wide(b, "");
     b.extend([0; 3]);
     refs(b, &[]);
@@ -47,7 +47,7 @@ fn common(b: &mut Vec<u8>, name: &str, suppressed: bool) {
     tail[51] = tail[5];
     b.extend(tail);
 }
-fn fixture(suppressed: bool) -> Fixture {
+pub(super) fn fixture(suppressed: bool) -> Fixture {
     let d = super::relationship_tests::fixture(false, 17);
     let r = Records::new(&d);
     let payload = |b: &[u8]| {
@@ -170,7 +170,7 @@ fn fixture(suppressed: bool) -> Fixture {
     f.put(9, "DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8, b, None);
     f
 }
-fn volume(doc: &Document, want: f64) {
+pub(super) fn volume(doc: &Document, want: f64) {
     let mut model = Model::new();
     model.evaluate(doc);
     for result in &model.results {

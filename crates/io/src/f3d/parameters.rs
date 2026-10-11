@@ -141,5 +141,13 @@ mod tests {
         let mut extra = bytes;
         extra.push(0);
         assert!(decode(&extra).is_err());
+
+        // Reference/driven dimensions carry nonzero expression metadata.
+        // Until measurement dependencies are reconstructed, do not freeze them
+        // into independent driving parameters.
+        let mut driven = parameter(13.0);
+        let metadata = 4 + 2 + 8 + 4 + 16 + 4 + 11 + 4 + "130 mm".len() * 2;
+        driven[metadata + 6] = 1;
+        assert!(decode(&driven).is_err());
     }
 }

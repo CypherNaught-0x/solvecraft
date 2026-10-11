@@ -35,8 +35,9 @@ impl Design {
         let bindings: BTreeMap<_, _> = parameters.iter().map(|p| (p.binding, p)).collect();
         let points: BTreeMap<_, _> = self.sketch_points()?.into_iter().map(|p| (p.id, p)).collect();
         let circles: BTreeMap<_, _> = self.sketch_circles()?.into_iter().map(|c| (c.id, c)).collect();
+        let lines: BTreeMap<_, _> = self.sketch_lines()?.into_iter().map(|l| (l.id, l)).collect();
         let constraints: BTreeMap<_, _> = self.sketch_constraints()?.into_iter().map(|c| (c.geometry, c)).collect();
-        let profiles: BTreeMap<_, _> = self.circle_profiles()?.into_iter().map(|p| (p.id, p)).collect();
+        let profiles: BTreeMap<_, _> = self.single_loop_profiles()?.into_iter().map(|p| (p.id, p)).collect();
         let mut doc = Document::new(name);
         let mut names = BTreeSet::new();
         for p in &parameters {
@@ -121,6 +122,29 @@ impl Design {
                             }
                         }
                     }
+                    for id in &placement.entities {
+                        if let Some(line) = lines.get(id) {
+                            if line.sketch != geometry {
+                                return Err(invalid("line belongs to another sketch"));
+                            }
+                            for (point, position) in [(line.start_point, line.start), (line.end_point, line.end)] {
+                                let p = points.get(&point).filter(|p| p.sketch == geometry).ok_or_else(|| invalid("missing line endpoint"))?;
+                                if p.position.iter().zip(position).any(|(a, b)| (a - b).abs() > 1e-10) {
+                                    return Err(invalid("line and endpoint disagree"));
+                                }
+                            }
+                            let a = point_indices.get(&line.start_point).copied().ok_or_else(|| invalid("line start outside sketch"))?;
+                            let b = point_indices.get(&line.end_point).copied().ok_or_else(|| invalid("line end outside sketch"))?;
+                            let i = sketch.add_line_pts(a, b, Some(&format!("c{id}"))).map_err(|e| invalid(&e.to_string()))?;
+                            let c = sketch.curves.get_mut(i).ok_or_else(|| invalid("missing imported line"))?;
+                            c.fixed = line.fixed;
+                            c.construction = line.construction;
+                            curve_indices.insert(*id, i);
+                            if !consumed.insert(*id) {
+                                return Err(invalid("duplicate sketch entity"));
+                            }
+                        }
+                    }
                     for constraint in &relations.constraints {
                         let (kind, param) = match constraint {
                             SketchConstraint::Coincident { points: [a, b], .. } => {
@@ -133,6 +157,28 @@ impl Design {
                                 let parameter = bindings.get(binding).ok_or_else(|| invalid("missing diameter parameter"))?;
                                 consumed.insert(*id);
                                 (ConstraintKind::Diameter { c, value: parameter.value * 10. }, Some(parameter.name.clone()))
+                            }
+                            SketchConstraint::Horizontal { line, .. } | SketchConstraint::Vertical { line, .. } => {
+                                let l = curve_indices.get(line).copied().ok_or_else(|| invalid("missing constrained line"))?;
+                                (
+                                    if matches!(constraint, SketchConstraint::Horizontal { .. }) {
+                                        ConstraintKind::Horizontal { l }
+                                    } else {
+                                        ConstraintKind::Vertical { l }
+                                    },
+                                    None,
+                                )
+                            }
+                            SketchConstraint::Linear { id, points: [a, b], vertical, binding } => {
+                                let p = point_indices.get(a).copied().ok_or_else(|| invalid("missing dimension point"))?;
+                                let q = point_indices.get(b).copied().ok_or_else(|| invalid("missing dimension point"))?;
+                                let parameter = bindings.get(binding).ok_or_else(|| invalid("missing linear dimension parameter"))?;
+                                consumed.insert(*id);
+                                let value = parameter.value * 10.;
+                                (
+                                    if *vertical { ConstraintKind::DistanceY { p, q, value } } else { ConstraintKind::DistanceX { p, q, value } },
+                                    Some(parameter.name.clone()),
+                                )
                             }
                         };
                         sketch.add_constraint(kind, param).map_err(|e| invalid(&e.to_string()))?;
@@ -166,7 +212,7 @@ impl Design {
                     };
                     FeatureKind::Extrude {
                         sketch,
-                        profiles: ProfileSel::Curves { loops: vec![vec![format!("c{}", profile.circle)]] },
+                        profiles: ProfileSel::Curves { loops: vec![profile.curves.iter().map(|id| format!("c{id}")).collect()] },
                         extent,
                         operation,
                         targets,
@@ -214,10 +260,10 @@ fn plane(matrix: &[f64; 16]) -> Result<Plane> {
 
 fn selected<'a>(
     records: &Records<'_>,
-    profiles: &'a BTreeMap<u64, CircleProfile>,
+    profiles: &'a BTreeMap<u64, SketchProfile>,
     feature: u64,
     containers: &[u64],
-) -> Result<Vec<&'a CircleProfile>> {
+) -> Result<Vec<&'a SketchProfile>> {
     let mut selected = Vec::new();
     let mut seen = BTreeSet::new();
     for id in containers {
