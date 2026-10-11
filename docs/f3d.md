@@ -1,7 +1,7 @@
 # Native F3D investigation
 
 Status: bounded archive inspection and **editable import of verified layout-8
-circle/line/arc sketches and one-sided-extrusion history**. General F3D history support remains
+circle/line/arc sketches, offset construction planes and one-sided-extrusion history**. General F3D history support remains
 incomplete; the three larger supplied designs do not import yet.
 The project owner authorized clean-room investigation on 2026-10-11 as an
 exception to AGENTS.md's public-specification requirement. Only the supplied
@@ -15,12 +15,14 @@ object index against its bulk records, leaving the current design untouched:
 cargo run --profile ci -p solvecraft-cli -- exec file.inspect_f3d '{"path":"/path/to/part.f3d"}'
 ```
 
-`doc.open` reconstructs supported sketches, constraints and extrusions and
+`doc.open` reconstructs supported sketches, constraints, offset planes and extrusions and
 regenerates the model before replacing the current document. Unsupported schemas
 or regeneration failures leave the current document/model/undo state intact.
 An imported document is unsaved with no source path: saving it uses a new
 `.solvecraft` file, never JSON written over the original F3D. The desktop open
-dialog includes F3D, and the CLI supports opening, measuring and benchmarking it.
+dialog and browser fallback picker include F3D, and the CLI supports opening,
+measuring and benchmarking it. Browser file pickers reject oversized F3D files
+before allocating their buffers; engine reads enforce the same archive limit.
 
 Supported reconstruction includes native parameter names and expressions,
 driving radius/diameter and horizontal/vertical distance dimensions, coincidence,
@@ -28,7 +30,9 @@ horizontal/vertical line and point alignment, parallel/perpendicular/collinear l
 equal lengths/radii, concentric/tangent round curves, point-on-curve and line-midpoint
 relationships, independent point/curve fixation, construction curves, rigid root sketch placement, feature names/order/suppression,
 complete outer and inner boundaries for circle, polygon and arc profiles, signed extrusion distances and taper. New-body
-operations and booleans against a sole existing body are supported. Multiple-body
+operations and booleans against a sole existing body are supported. Offset planes
+retain named construction-plane and sketch dependencies for verified root frames,
+including chained and signed offsets. Multiple-body
 boolean targeting, two-sided/start/to-object extents, other sketch geometry and
 constraint schemas, assembly transforms and other feature types fail explicitly.
 
@@ -371,3 +375,38 @@ validation. The thirteen native fixtures pass; the opening guard completed in
 0.85 seconds. All fifteen local evidence tests pass (eleven import, four
 inspection). The edited arc extrusion was rendered and visually checked. The
 larger supplied designs still require legacy schemas and additional feature types.
+
+## Offset construction planes
+
+Six independent API controls cover XY, XZ, negative offsets and two-plane chains.
+The version-4 timeline class `D869265F-F339-4751-A066-91D30F81FF08` points to
+plane geometry and a version-15 definition (`7B6C3C2D-4096-4E6D-B225-699E8C2D9355`).
+The verified offset method is `2`. Its distance binding belongs to the plane
+feature; its base follows a version-1 reference wrapper to a version-0 entity
+tracker. A chain must terminate in a named plane belonging to the root origin.
+Missing, forward, cyclic, foreign-owner and unsupported-method references fail.
+
+The cached definition matrix validates reconstructed origin/normal, but does not
+replace the dependency. Native surface axes can differ from the attached sketch
+axes (observed on XZ). The supported origin frames use SolveCraft's matching
+sketch axes and validate each attached sketch's full frame. Unverified relative
+frames fail explicitly. Nonzero or expression-dependent internal `ExtraOffset`
+slots are unsupported; the observed literal-zero slot is not a public Fusion
+parameter and is excluded from the imported parameter table.
+
+Two original field-authored tests cover chained plane edits, native input names,
+reopening, invalid references and every truncated interpreted record. Three new
+native `.solvecraft` fixtures bring the editable history set to sixteen. Their
+radius-10 mm, height-15 mm cylinders have analytic volume 1500π mm³; bounds must
+move after parent parameter and timeline edits, including negative offsets.
+The shared fixture runner now checks bounds after edits, reopening and undo as
+well as at initial opening. Local native controls independently check API volumes,
+bounds and timeline names; the edited dependency tests cover XY, XZ and chains.
+
+Validation: full `cargo xtask ci` passes all 25 binaries, 48 IO tests, sixteen
+native fixtures and ten-crate WASM checks. The opening guard completed in 0.87
+seconds. All sixteen local evidence tests pass (twelve import, four inspection),
+including the six new plane archives. The native chain fixture and an imported
+XZ cylinder after a negative offset edit were rendered and visually checked.
+Browser picker changes compile for WASM; a browser UI import run remains to be
+verified. General F3D history support is still incomplete.

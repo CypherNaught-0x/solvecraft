@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These thirteen designs and their JSON command recipes are original SolveCraft test
+These sixteen designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -10,6 +10,9 @@ recipe, independent expectations and optional edits.
 | circle-extrude | Driving diameter, height expression | 5040π |
 | negative-extrude | Signed height, downward bounds | 5040π |
 | placed-circle | Offset local center, explicit XZ placement | 324π |
+| plane-xy | Offset plane, parent edits and negative placement | 1500π |
+| plane-xz | XZ plane offset toward +Y, parent edits | 1500π |
+| plane-chained | Two dependent planes, parameter and feature edits | 1500π |
 | suppressed-extrude | Suppression and unsuppression | 0 → 5040π |
 | new_body-extrude | Two independent bodies | 5340π |
 | join-extrude | Contained cylinder joined into base | 5040π |
@@ -25,6 +28,10 @@ The annulus uses radii 30 and 10 mm with height 12 mm, giving π(R² − r²)h.
 The semicircular segment uses radius 15 mm and height 12 mm, giving πr²h/2.
 
 The rectangular prisms are 30 × 20 × 17 mm; expectations use width × depth × height.
+
+The plane fixtures use radius 10 mm and height 15 mm. Editing their parent plane
+changes world bounds while preserving volume. Bounds are checked after each edit,
+reopening and undo, so a frozen sketch placement cannot pass on volume alone.
 
 The base cylinder has radius 12 mm and height 35 mm. The second cylinder has
 radius 5 mm and height 12 mm. Expectations use πr²h and sum/difference, not output

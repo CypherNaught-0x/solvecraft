@@ -173,6 +173,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                     let kind = match &f.kind {
                         solvecraft_io::f3d::HistoryKind::Sketch { geometry, placement } => json!({"type":"sketch","geometry":geometry,"transform":placement.matrix,"transform_length_unit":"cm","placement_owner":placement.owner,"entities":placement.entities}),
                         solvecraft_io::f3d::HistoryKind::Extrude { operation, profile_containers } => json!({"type":"extrude","operation":operation,"profile_containers":profile_containers}),
+                        solvecraft_io::f3d::HistoryKind::OffsetPlane { geometry, definition, extra_offset } => json!({"type":"offset_plane","geometry":geometry,"definition":definition,"extra_offset_binding":extra_offset}),
                     };
                     json!({"id":f.id,"name":f.name,"suppressed":f.suppressed,"dependencies":f.dependencies,"kind":kind})
                 }).collect::<Vec<_>>()}),

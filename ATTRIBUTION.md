@@ -17,6 +17,9 @@ Generated-in-code assets are original and have no file to list:
 
 | File | Author | Source | Licence |
 |---|---|---|---|
+| apps/solvecraft-cli/tests/history/plane-xy.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/plane-xz.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/plane-chained.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/annulus-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/arc-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/rectangle-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |

@@ -17,6 +17,7 @@ pub fn import_f3d(bytes: &[u8], name: &str) -> Result<Document> {
 impl Design {
     pub fn to_document(&self, name: &str) -> Result<Document> {
         let history = self.history()?;
+        let has_offset_planes = history.iter().any(|f| matches!(f.kind, HistoryKind::OffsetPlane { .. }));
         if history.len() > solvecraft_doc::MAX_FEATURES {
             return Err(invalid("too many imported features"));
         }
@@ -34,6 +35,25 @@ impl Design {
         }
         let bindings: BTreeMap<_, _> = parameters.iter().map(|p| (p.binding, p)).collect();
         let named_parameters: BTreeMap<_, _> = parameters.iter().map(|p| (p.name.as_str(), p)).collect();
+        let mut internal_offsets = BTreeSet::new();
+        for f in &history {
+            if let HistoryKind::OffsetPlane { extra_offset, .. } = &f.kind {
+                let p = length_parameter(&bindings, *extra_offset)?;
+                let mut expression = p.expression.split_whitespace();
+                if p.owner != f.id
+                    || p.label != "ExtraOffset"
+                    || p.value != 0.
+                    || expression.next().and_then(|s| s.parse::<f64>().ok()) != Some(0.)
+                    || expression.next() != Some(p.display_unit.as_str())
+                    || expression.next().is_some()
+                {
+                    return Err(invalid("unsupported internal plane offset"));
+                }
+                // Fusion does not expose this zero internal slot as a model
+                // parameter. It is verified neutral, never a guessed input.
+                internal_offsets.insert(p.id);
+            }
+        }
         let points: BTreeMap<_, _> = self.sketch_points()?.into_iter().map(|p| (p.id, p)).collect();
         let circles: BTreeMap<_, _> = self.sketch_circles()?.into_iter().map(|c| (c.id, c)).collect();
         let arcs: BTreeMap<_, _> = self.sketch_arcs()?.into_iter().map(|a| (a.circle.id, a)).collect();
@@ -43,6 +63,9 @@ impl Design {
         let mut doc = Document::new(name);
         let mut names = BTreeSet::new();
         for p in &parameters {
+            if internal_offsets.contains(&p.id) {
+                continue;
+            }
             if solvecraft_doc::expr::unit_info(&p.display_unit).is_none() {
                 return Err(invalid(&format!("unsupported parameter unit: {}", p.display_unit)));
             }
@@ -58,16 +81,52 @@ impl Design {
             });
         }
         let mut sketches = BTreeMap::new();
+        let mut planes: BTreeMap<u64, (String, Plane)> = BTreeMap::new();
         let mut active_bodies = Vec::new();
         let mut body_number = 0;
         for f in history {
             let mut new_body = None;
+            let mut new_plane = None;
             let kind = match f.kind {
+                HistoryKind::OffsetPlane { geometry, definition, extra_offset } => {
+                    let definition = super::planes::definition(&records, &classes, definition, f.id)?;
+                    if definition.extra != Some(extra_offset) {
+                        return Err(invalid("inconsistent internal plane offset binding"));
+                    }
+                    let p = length_parameter(&bindings, definition.distance.ok_or_else(|| invalid("missing plane distance"))?)?;
+                    if p.owner != f.id || p.label != "AlongDistance" {
+                        return Err(invalid("plane distance belongs to another feature"));
+                    }
+                    let (base, cached) = plane_base(&records, &classes, &planes, definition.base, root)?;
+                    let cached = cached.offset(p.value * 10.);
+                    if !super::planes::same_surface(cached, definition.plane) {
+                        return Err(invalid("plane definition disagrees with its dependencies"));
+                    }
+                    new_plane = Some((geometry, cached));
+                    FeatureKind::ConstructionPlane { plane: PlaneRef::Offset { base: Box::new(base), distance: p.name.clone() } }
+                }
                 HistoryKind::Sketch { geometry, placement } => {
                     if placement.owner != root {
                         return Err(invalid("non-root sketch placement is not supported yet"));
                     }
                     let plane = plane(&placement.matrix)?;
+                    let plane_ref = if !has_offset_planes {
+                        PlaneRef::Custom { plane }
+                    } else {
+                        let definition = super::planes::definition(&records, &classes, placement.support, f.id)?;
+                        if definition.extra.is_some() || definition.distance.is_some() {
+                            return Err(invalid("unsupported sketch support offset"));
+                        }
+                        let (base, cached) = plane_base(&records, &classes, &planes, definition.base, root)?;
+                        if !super::planes::same_surface(cached, definition.plane)
+                            || !super::planes::same_surface(cached, plane)
+                            || (cached.x - plane.x).len() > 1e-9
+                            || (cached.y - plane.y).len() > 1e-9
+                        {
+                            return Err(invalid("unsupported sketch frame relative to its construction plane"));
+                        }
+                        base
+                    };
                     let relations =
                         constraints.get(&geometry).filter(|c| c.feature == f.id).ok_or_else(|| invalid("missing sketch relationships"))?;
                     let mut sketch = Sketch::new();
@@ -263,7 +322,7 @@ impl Design {
                         return Err(invalid("unsupported sketch entity; import would lose history"));
                     }
                     sketches.insert(geometry, (doc.next_id, plane));
-                    FeatureKind::Sketch { plane: PlaneRef::Custom { plane }, sketch }
+                    FeatureKind::Sketch { plane: plane_ref, sketch }
                 }
                 HistoryKind::Extrude { operation, profile_containers } => {
                     let selected = selected(&records, &profiles, f.id, &profile_containers)?;
@@ -292,6 +351,11 @@ impl Design {
             let id = doc.add_feature(kind, Some(&f.name))?;
             let feature = doc.features.iter_mut().find(|f| f.id == id).ok_or_else(|| invalid("missing imported feature"))?;
             feature.suppressed = f.suppressed;
+            if let Some((geometry, plane)) = new_plane
+                && planes.insert(geometry, (feature.name.clone(), plane)).is_some()
+            {
+                return Err(invalid("duplicate construction-plane geometry"));
+            }
             // Feature inputs own their native parameter identity. Keeping a second
             // stored parameter would leave downstream expressions stale after a
             // timeline edit. Reserve all names above, then transfer these inputs.
@@ -321,6 +385,9 @@ impl Design {
             return Err(invalid(&format!("parameter expressions cannot be reconstructed: {errors:?}")));
         }
         for p in &parameters {
+            if internal_offsets.contains(&p.id) {
+                continue;
+            }
             let kind = solvecraft_doc::expr::Kind::from_unit(&p.display_unit);
             let value = values.get(&p.name).ok_or_else(|| invalid("missing imported parameter"))?.to_kind(kind)?;
             let expected = p.value * if kind == solvecraft_doc::expr::Kind::Length { 10. } else { 1. };
@@ -335,7 +402,7 @@ impl Design {
 fn length_parameter<'a>(bindings: &BTreeMap<u64, &'a Parameter>, binding: u64) -> Result<&'a Parameter> {
     let p = bindings.get(&binding).copied().ok_or_else(|| invalid("missing dimension parameter"))?;
     if solvecraft_doc::expr::Kind::from_unit(&p.display_unit) != solvecraft_doc::expr::Kind::Length {
-        return Err(invalid("sketch dimension requires a length parameter"));
+        return Err(invalid("dimension requires a length parameter"));
     }
     Ok(p)
 }
@@ -352,7 +419,10 @@ fn profile_selection(profile: &SketchProfile) -> Result<ProfileSel> {
     Ok(ProfileSel::WholeBoundaries { profiles: vec![solvecraft_doc::WholeProfileBoundary { outer: ids(outer), holes }] })
 }
 
-fn plane(matrix: &[f64; 16]) -> Result<Plane> {
+pub(super) fn plane(matrix: &[f64; 16]) -> Result<Plane> {
+    if matrix.iter().any(|n| !n.is_finite()) {
+        return Err(invalid("non-finite plane placement"));
+    }
     let [xx, yx, nx, ox, xy, yy, ny, oy, xz, yz, nz, oz, a, b, c, d] = *matrix;
     if [a, b, c, d] != [0., 0., 0., 1.] {
         return Err(invalid("non-affine sketch placement"));
@@ -364,6 +434,20 @@ fn plane(matrix: &[f64; 16]) -> Result<Plane> {
         return Err(invalid("non-rigid sketch placement"));
     }
     Plane::new(Vec3::new(ox, oy, oz) * 10., x, y).ok_or_else(|| invalid("invalid sketch placement"))
+}
+
+fn plane_base(
+    records: &Records<'_>,
+    classes: &BTreeMap<u64, &Class>,
+    planes: &BTreeMap<u64, (String, Plane)>,
+    id: u64,
+    root: u64,
+) -> Result<(PlaneRef, Plane)> {
+    if let Some((name, plane)) = planes.get(&id) {
+        return Ok((PlaneRef::Construction { name: name.clone() }, *plane));
+    }
+    let (name, plane) = super::planes::origin(records, classes, id, root)?;
+    Ok((PlaneRef::Origin { name }, plane))
 }
 
 fn selected<'a>(

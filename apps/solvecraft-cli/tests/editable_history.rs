@@ -8,7 +8,7 @@ fn recipes() -> Vec<PathBuf> {
     let mut paths: Vec<_> =
         std::fs::read_dir(dir).unwrap().map(|p| p.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
     paths.sort();
-    assert_eq!(paths.len(), 13);
+    assert_eq!(paths.len(), 16);
     paths
 }
 
@@ -40,6 +40,22 @@ fn volume(s: &mut Session, want: f64, label: &str) -> Value {
     measure
 }
 
+fn bounds(measure: &Value, expected: &Value, label: &str) {
+    let Some(bounds) = expected["bounds"].as_array() else { return };
+    for (end, key) in [(0, "min"), (1, "max")] {
+        for axis in 0..3 {
+            let value = measure["bodies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|b| b["bbox"][key][axis].as_f64().unwrap())
+                .reduce(|a, b| if end == 0 { a.min(b) } else { a.max(b) })
+                .unwrap();
+            assert!((value - bounds[end][axis].as_f64().unwrap()).abs() < 1e-5, "{label}: bounds {end}/{axis}: {value}");
+        }
+    }
+}
+
 #[test]
 fn simple_history_files_replay_reopen_edit_and_undo() {
     for path in recipes() {
@@ -57,29 +73,16 @@ fn simple_history_files_replay_reopen_edit_and_undo() {
         assert_eq!(measure["body_count"], expected["body_count"], "{label}");
         assert_eq!(json!(s.doc.features.iter().map(|f| &f.name).collect::<Vec<_>>()), expected["features"], "{label}");
         // Aggregate world bounds catch incorrect sketch placement and direction.
-        if let Some(bounds) = expected["bounds"].as_array() {
-            for (end, is_min) in [(0, true), (1, false)] {
-                for axis in 0..3 {
-                    let value = measure["bodies"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|b| b["bbox"][if is_min { "min" } else { "max" }][axis].as_f64().unwrap())
-                        .reduce(|a, b| if is_min { a.min(b) } else { a.max(b) })
-                        .unwrap();
-                    assert!((value - bounds[end][axis].as_f64().unwrap()).abs() < 1e-5, "{label}: bounds {end}/{axis}");
-                }
-            }
-        }
+        bounds(&measure, expected, &label);
         for edit in recipe["edits"].as_array().unwrap() {
             s.execute(edit["command"].as_str().unwrap(), &edit["params"]).unwrap();
             let edited_volume = expected_volume(edit);
-            volume(&mut s, edited_volume, &label);
+            bounds(&volume(&mut s, edited_volume, &label), edit, &label);
             let reopened = Document::from_json(&s.doc.to_json()).unwrap();
             assert_eq!(reopened, *s.doc);
-            volume(&mut Session::new(reopened), edited_volume, &label);
+            bounds(&volume(&mut Session::new(reopened), edited_volume, &label), edit, &label);
             s.execute("edit.undo", &json!({})).unwrap();
-            volume(&mut s, original_volume, &label);
+            bounds(&volume(&mut s, original_volume, &label), expected, &label);
         }
     }
 }

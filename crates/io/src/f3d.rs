@@ -19,6 +19,9 @@ mod import;
 mod import_tests;
 mod lines;
 mod parameters;
+#[cfg(test)]
+mod plane_tests;
+mod planes;
 mod points;
 #[cfg(test)]
 mod polygon_tests;

@@ -21,11 +21,13 @@ pub struct HistoryFeature {
 #[derive(Debug, PartialEq)]
 pub enum HistoryKind {
     Sketch { geometry: u64, placement: SketchPlacement },
+    OffsetPlane { geometry: u64, definition: u64, extra_offset: u64 },
     Extrude { operation: Operation, profile_containers: Vec<u64> },
 }
 
 #[derive(Debug, PartialEq)]
 pub struct SketchPlacement {
+    pub support: u64,
     /// Row-major local-to-world matrix; translations are native centimetres.
     pub matrix: [f64; 16],
     /// The placement's owning object. Assembly placement is not yet reconstructed.
@@ -75,8 +77,29 @@ impl Design {
                         let plane = r.reference()?;
                         validate_refs(&classes, &[plane])?;
                         r.take(12)?;
-                        let (placement, name) = placement(&records, &classes, geometry)?;
+                        let (mut placement, name) = placement(&records, &classes, geometry)?;
+                        placement.support = plane;
                         (HistoryKind::Sketch { geometry, placement }, name)
+                    }
+                    ("D869265F-F339-4751-A066-91D30F81FF08", 4) => {
+                        empty(&mut r)?;
+                        zeros(&mut r, 2)?;
+                        if r.take(5)? != [1, 0, 0, 0, 0] {
+                            return Err(invalid("unsupported plane binding flags"));
+                        }
+                        let extra_offset = r.reference()?;
+                        require_class(&classes, extra_offset, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
+                        if r.take(1)? != [1] {
+                            return Err(invalid("unsupported plane flags"));
+                        }
+                        let geometry = r.reference()?;
+                        require_class(&classes, geometry, super::planes::GEOMETRY, 1)?;
+                        let definition = r.reference()?;
+                        require_class(&classes, definition, super::planes::DEFINITION, 15)?;
+                        if r.take(1)? != [1] {
+                            return Err(invalid("unsupported plane definition flags"));
+                        }
+                        (HistoryKind::OffsetPlane { geometry, definition, extra_offset }, String::new())
                     }
                     (EXTRUDE, 8) => {
                         empty(&mut r)?;
@@ -125,7 +148,7 @@ impl Design {
                 } else if !feature_name.is_empty() {
                     feature_name
                 } else {
-                    format!("{base}{sequence}")
+                    format!("{}{sequence}", if base == "WorkPlane" { "Plane" } else { &base })
                 };
                 Ok(HistoryFeature { id, name, suppressed, dependencies, kind })
             })
@@ -176,7 +199,7 @@ fn placement(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, geometry: u
     let owner = r.reference()?;
     validate_refs(classes, &[owner])?;
     finish(&r)?;
-    Ok((SketchPlacement { matrix, owner, entities }, name))
+    Ok((SketchPlacement { support: 0, matrix, owner, entities }, name))
 }
 
 pub(super) fn payload(bytes: &[u8], id: u64) -> Result<Reader<'_>> {

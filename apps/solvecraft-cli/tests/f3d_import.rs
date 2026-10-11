@@ -26,6 +26,7 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-polygon-measurements.json",
         "fusion-loop-measurements.json",
         "fusion-arc-measurements.json",
+        "fusion-plane-measurements.json",
     ] {
         let cases: Value = serde_json::from_slice(&std::fs::read(dir.join(source)).unwrap()).unwrap();
         for (name, api) in cases.as_object().unwrap() {
@@ -96,6 +97,33 @@ fn supplied_minimal_imports_without_a_fusion_roundtrip() {
     s.execute("doc.open", &json!({"path":dir.join("Minimal.f3d")})).unwrap();
     assert_eq!(s.doc.features.len(), 2);
     volume(&mut s, std::f64::consts::PI * 5. * 5. * 10., "supplied Minimal");
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
+fn imported_plane_dependencies_move_bodies_after_parameter_and_feature_edits() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    for (name, axis, child) in [("plane-xy-baseline", 2, 0.), ("plane-xz-baseline", 1, 0.), ("plane-chained-baseline", 2, 10.)] {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let original = s.doc.clone();
+        assert_eq!(s.doc.features[0].param_names, ["d1"]);
+        for (command, params, start) in [
+            ("parameters.change", json!({"name":"d1","expression":"35 mm"}), 35. + child),
+            ("timeline.edit", json!({"feature":s.doc.features[0].id,"set":{"plane":{"distance":"-20 mm"}}}), -20. + child),
+        ] {
+            s.execute(command, &params).unwrap();
+            let measure = volume(&mut s, 1.5 * std::f64::consts::PI, name);
+            assert!((measure["bodies"][0]["bbox"]["min"][axis].as_f64().unwrap() - start).abs() < 1e-5, "{name}");
+            assert!((measure["bodies"][0]["bbox"]["max"][axis].as_f64().unwrap() - start - 15.).abs() < 1e-5, "{name}");
+            let doc = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+            assert_eq!(doc, *s.doc);
+            let measure = volume(&mut Session::new(doc), 1.5 * std::f64::consts::PI, name);
+            assert!((measure["bodies"][0]["bbox"]["min"][axis].as_f64().unwrap() - start).abs() < 1e-5, "{name}: reopen");
+            s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.doc, original);
+        }
+    }
 }
 
 #[test]
