@@ -665,3 +665,41 @@ Validation: upstream `1d30480` is integrated. Full `cargo xtask ci` passed
 The opening-performance test passed in 0.91 seconds. All eighteen local F3D import
 groups passed; the actual imported overlapping-body control was rendered after
 source diameter and height edits.
+
+
+### Editable rectangular body-edge projections
+
+Finite cap edges of positive, untapered, independent rectangular extrusions now
+import as associative line links. Four-term edge recipes validate side/cap/adjacent
+face labels, operation ownership, the complete recipe tree and tracking roles.
+The finite cached line has independently checked tracking identity, finite geometry
+and complete framing; it is never used as replacement sketch geometry.
+
+Native profile ordering differs even between independently authored equivalent
+rectangles. Side-face labels must not be mapped by that ordering. Instead, the
+complete finite 3D source edge must match exactly one side of the explicitly owned
+rectangular profile, at the verified cap height. Endpoint incidence and right angles
+are checked, then the regenerated body's persistent edge and the native target
+projection must agree. Ambiguous or inconsistent matches fail without a nearest-edge
+fallback. Subsequent edits use persistent body/edge names. Adjacent projected curves
+retain native curve IDs and canonical source-corner aliases.
+
+Twelve local exports cover top/bottom edges, overlapping bodies and independent
+width/depth/source-height changes. Import, subsequent parameter edits, reopening
+and undo match public-API volumes. Original record tests cover all rectangular
+recipe roles, truncated/malformed identities, finite-edge cache tracking and native
+profile-order permutations. The twenty-third original fixture,
+`projected-body-rectangle`, checks analytic volume and bounds for three overlapping
+extrusions through large width/depth/height changes, reopening and undo.
+
+This remains bounded rectangular support. General body-edge recipes, arbitrary
+polygons, modified producers, tapered or negative source extrusions, and the larger
+supplied feature histories remain unfinished. No Fusion-generated assets are committed.
+
+Validation: upstream `1d30480` remains integrated. Full `cargo xtask ci` passed
+all 28 test binaries, including 71 I/O tests, 107 document tests, 559 engine tests,
+198 kernel tests, 301 UI tests, 23 original fixtures and ten-crate WASM checking.
+The HardEdgeBasin opening regression passed in 0.90 seconds. All nineteen local
+F3D import groups passed (the corpus-only Minimal check was run separately with
+its required corpus path). The edited overlapping rectangular-body import was
+rendered and visually checked.

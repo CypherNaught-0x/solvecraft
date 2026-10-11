@@ -285,7 +285,7 @@ fn lost(reference: &str) -> DocError {
 
 /// Resolve the actual named edge, without a second position-based selection that
 /// could choose another edge at a shared vertex or an overlapping body.
-fn resolve_named_edge(st: &ModelState, plane: &Plane, kind: LinkKind, src: &LinkSource, name: &str) -> Result<Resolved> {
+pub fn resolve_named_edge(st: &ModelState, plane: &Plane, kind: LinkKind, src: &LinkSource, name: &str) -> Result<Resolved> {
     let LinkSource::Edge { body, .. } = src else { return Err(DocError::Invalid("edge identity requires an edge source".into())) };
     let target = st.body(body).ok_or_else(|| lost("named projection body"))?;
     let mesh = target.mesh();

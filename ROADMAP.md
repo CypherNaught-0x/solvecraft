@@ -181,6 +181,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   edge names across large edits and overlapping bodies. Verified circular cap-edge
   projections from positive, untapered independent extrusions now import as single
   associated circles, including when the kernel boundary uses multiple edges.
+  Rectangular cap-edge projections retain shared corners and follow the correct
+  source body through dimension edits and reopening. Unique complete finite-edge
+  correspondence verifies source curves without depending on native profile order.
   Other body-edge projections and unresolved source schemas remain unsupported;
   driven dimensions fail atomically. Native mm/degree feature-input
   names now survive timeline edits with their expression dependencies. Arc endpoints,

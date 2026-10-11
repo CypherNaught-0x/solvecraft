@@ -91,6 +91,7 @@ impl Design {
         let mut active_bodies = Vec::new();
         let mut body_number = 0;
         let mut feature_ids = BTreeMap::new();
+        let mut source_profiles = BTreeMap::new();
         let mut operation_owners = None;
         let mut projection_model = solvecraft_doc::Model::new();
         for f in history {
@@ -167,12 +168,13 @@ impl Design {
                                 let state = projection_model.state();
                                 let context = super::body_projections::Context {
                                     native: &native,
+                                    profiles: &source_profiles,
                                     doc: &doc,
                                     model: &state,
                                     features: &feature_ids,
                                     operations: operation_owners.as_ref().ok_or_else(|| invalid("missing topology operation ownership"))?,
                                 };
-                                (context.attach(&projection, geometry, plane, &mut sketch)?, (1_u8, edge.body))
+                                (context.attach(&projection, geometry, plane, &mut sketch)?, (if edge.recipe.end { 2_u8 } else { 1_u8 }, edge.body))
                             }
                         };
                         for (id, index, source_point) in entities.points {
@@ -428,6 +430,7 @@ impl Design {
                     };
                     let (sketch, plane) = sketches.get(&profile.geometry).copied().ok_or_else(|| invalid("extrusion precedes its source sketch"))?;
                     let extent = extent(&records, &classes, &bindings, f.id, &plane)?;
+                    source_profiles.insert(f.id, *profile);
                     let targets = if operation == Operation::NewBody {
                         body_number += 1;
                         let body = format!("Body{body_number}");

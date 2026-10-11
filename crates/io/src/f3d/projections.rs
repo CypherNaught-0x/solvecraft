@@ -205,6 +205,24 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id:
         Source::Sketch { .. } => ("CB4F4CC2-9D6F-48BA-9B1F-20C1992C9C9C", 2),
         Source::Body(_) => ("4B31DA1B-FCD6-4527-BC3E-BE1FBAF867FE", 1),
     };
+    let tracked_identity = tracking_identity(records, classes, tracking, tracking_class, tracking_version)?;
+    let agrees = match &source {
+        Source::Sketch { geometry, tag } => source_identity(records, classes, tracked_identity)? == (*geometry, *tag),
+        Source::Body(edge) => super::body_projections::identity(records, classes, tracked_identity, true)? == edge.recipe,
+    };
+    if !agrees {
+        return Err(invalid("projection mapping disagrees with its source selector"));
+    }
+    Ok(Projection { target, source })
+}
+
+pub(super) fn tracking_identity(
+    records: &Records<'_>,
+    classes: &BTreeMap<u64, &Class>,
+    tracking: u64,
+    tracking_class: &str,
+    tracking_version: u32,
+) -> Result<u64> {
     require_class(classes, tracking, tracking_class, tracking_version)?;
     let mut r = payload(records.primary(tracking)?, tracking)?;
     empty(&mut r)?;
@@ -226,14 +244,7 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id:
     let tracked_identity = r.reference()?;
     zeros(&mut r, 1)?;
     finish(&r)?;
-    let agrees = match &source {
-        Source::Sketch { geometry, tag } => source_identity(records, classes, tracked_identity)? == (*geometry, *tag),
-        Source::Body(edge) => super::body_projections::identity(records, classes, tracked_identity, true)? == edge.recipe,
-    };
-    if !agrees {
-        return Err(invalid("projection mapping disagrees with its source selector"));
-    }
-    Ok(Projection { target, source })
+    Ok(tracked_identity)
 }
 
 fn source_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64) -> Result<(u64, u64)> {

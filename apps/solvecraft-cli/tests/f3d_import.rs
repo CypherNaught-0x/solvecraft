@@ -37,6 +37,9 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-body-reference-top-measurements.json",
         "fusion-body-reference-bottom-measurements.json",
         "fusion-body-reference-second-measurements.json",
+        "fusion-body-rectangle-top-measurements.json",
+        "fusion-body-rectangle-bottom-measurements.json",
+        "fusion-body-rectangle-second-measurements.json",
     ] {
         let cases: Value = serde_json::from_slice(&std::fs::read(dir.join(source)).unwrap()).unwrap();
         for (name, api) in cases.as_object().unwrap() {
@@ -540,5 +543,55 @@ fn projected_rectangle_keeps_shared_source_vertices_through_edits() {
         s.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(s.doc, original);
         volume(&mut s, 24., "projected rectangle undo");
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with rectangular body-edge controls"]
+fn projected_body_rectangle_keeps_corners_and_body_identity_through_edits() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    for case in ["top", "bottom", "second"] {
+        let name = format!("body-rectangle-{case}");
+        let api: Value = serde_json::from_slice(&std::fs::read(dir.join(format!("fusion-{name}-measurements.json"))).unwrap()).unwrap();
+        let base = &api[format!("{name}-baseline")];
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}-baseline.f3d"))})).unwrap();
+        let original = s.doc.clone();
+        let producer = s.doc.find_feature(base["source_feature"].as_str().unwrap()).unwrap().id;
+        let verify = |s: &Session| {
+            let state = s.model.state();
+            let sk = state.sketch(if case == "second" { 4 } else { 3 }).unwrap();
+            assert_eq!(sk.sketch.curves.len(), 4);
+            assert_eq!(sk.sketch.links.len(), 4);
+            for link in &sk.sketch.links {
+                assert!(!link.lost);
+                let role = if case == "bottom" { "start" } else { "top" };
+                assert!(link.edge_name.as_ref().unwrap().contains(&format!("F{producer}:{role}")));
+                assert!(
+                    matches!(&link.source, solvecraft_engine::doc::sketch::LinkSource::Edge {body,..} if body==base["source_body"].as_str().unwrap())
+                );
+            }
+        };
+        verify(&s);
+        for (param, expression, stage) in [
+            ("width_parameter", "45 mm", "width45"),
+            ("depth_parameter", "35 mm", "depth35"),
+            ("source_height_parameter", "10 mm", "source-height10"),
+        ] {
+            s.execute("parameters.change", &json!({"name":base[param], "expression":expression})).unwrap();
+            verify(&s);
+            let expected = api[format!("{name}-{stage}")]["volume"].as_f64().unwrap();
+            volume(&mut s, expected, &name);
+            let doc = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+            let mut reopened = Session::new(doc);
+            verify(&reopened);
+            volume(&mut reopened, expected, &name);
+        }
+        for _ in 0..3 {
+            s.execute("edit.undo", &json!({})).unwrap();
+        }
+        assert_eq!(s.doc, original);
+        verify(&s);
+        volume(&mut s, base["volume"].as_f64().unwrap(), &name);
     }
 }
