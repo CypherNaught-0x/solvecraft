@@ -81,9 +81,13 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   extensions require a reflex joint; endpoint and section bounds remain conservative.
   Endpoint sections can also cross planar and cylindrical neighbours, consuming short seams
   left by earlier blends; this supports adjacent and combined basin-floor fillets. Curved
-  sections use a tolerance-checked cubic fit. Endings requiring a new transition patch
-  (including the shallow front basin corners and concave corners meeting convex rim rounds)
-  remain unsupported;
+  sections use a tolerance-checked cubic fit. Local bounded spline transitions support
+  shallow concave corners and corners meeting earlier cylindrical rim or floor rounds,
+  while keeping the main fillet cylindrical. Exact end curves preserve neighboring
+  faces, and crease fans retain their existing sharp meeting. Shared projections check
+  that transition domains do not overlap; boundary position, tangency and control-hull
+  bounds are checked before accepting a patch. Non-cylindrical ends, folded domains and
+  transitions outside these conservative bounds still return an error;
   whole smooth loops of a planar face, picked whole or by one edge (tangent
   chain), including circles and walls at any angle (boss bases and tops, bores, pocket floors,
   plate outlines), loops with sharp corners between straight edges (the blends meet in mitres), runs of
