@@ -5,7 +5,7 @@
 //! intersect their offset rails with the end planes, including sloped walls. The end faces get an arc
 //! (fillet) or a line (chamfer) at the corner, and a cylindrical (or planar) face is inserted.
 //! The result is exact. Edges meeting at an already blended corner, curved edges and other
-//! configurations are reported as not supported yet.
+//! configurations use the specialised loop, corner, and endpoint-fan builders below.
 
 use std::collections::HashMap;
 
@@ -1390,7 +1390,13 @@ fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, c
                         && Body::unique_edges(&solid).iter().any(|x| ids.contains(&x.id()) && !matches!(x.curve(), mt::Curve::Line(_)))
                         && !(shape == Shape::Round && into_round(ids))
                 });
-            let local = || guard(what, || blend_one(&solid, &edge, size, r, shape));
+            let local = || guard(what, || blend_one(&solid, &edge, size, r, shape)).or_else(|e| {
+                if shape == Shape::Round && crate::blend_end::can_trim(&solid, &edge) {
+                    guard(what, || crate::blend_end::fillet_one(&solid, &edge, size, r))
+                } else {
+                    Err(e)
+                }
+            });
             let attempt = match chain.as_deref().filter(|_| runs_on).map(roll) {
                 Some(Ok(o)) => Ok(o),
                 // The chain cannot be rolled: the edge alone, locally or as a ball rolled along it
@@ -2719,7 +2725,7 @@ mod tests {
     }
 
     #[test]
-    fn local_chamfer_intersects_sloped_end_planes() {
+    fn local_blends_intersect_sloped_end_planes() {
         for slope in [-0.5, 0.5] {
             let region = Region2 {
                 outer: Loop2::polygon(&[Vec2::ZERO, Vec2::new(40.0, 0.0), Vec2::new(40.0 - slope * 20.0, 20.0), Vec2::new(slope * 20.0, 20.0)]),
@@ -2747,6 +2753,7 @@ mod tests {
             // `measure` reads a round about 6e-4 heavy, square ends too.
             assert!((actual - removed).abs() < 1e-3 * removed, "{actual} vs {removed}");
             assert!(rounded.validity().is_empty());
+            assert_eq!(rounded.unmeshed_faces(), 0);
         }
     }
 }
