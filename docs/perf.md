@@ -1,5 +1,7 @@
 # Design loading
 
+See [HardEdgeBasin regression](project-open-regression.md) for the native-design opening guard and the separate fillet comparison.
+
 `solvecraft-cli bench-open design.solvecraft` reports JSON lines for file reading,
 JSON decoding and migrations (including input-name repair), timeline evaluation, individual
 features, and world placement/display meshing. `--parse-only` stops before geometry evaluation.

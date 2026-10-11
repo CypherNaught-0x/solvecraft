@@ -104,6 +104,14 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   offset surfaces and pcurve-only edges are not read yet,
   and assembly components are flattened into bodies. Closed periodic faces (torus, B-spline
   bands) are split in two for meshing; measure() uses a finer tolerance for small radii.
+- Native F3D investigation: bounded archive/index inspection via `file.inspect_f3d`
+  validates four supplied local files without changing the current design. Layout 8
+  supports Zstandard archives and inspection of parameter expressions, values,
+  owner references and local circle geometry, checked against eight controlled
+  Fusion API exports (dimension edits, reversal, renaming and an offset XZ circle).
+  Editable feature history and native B-rep decoding are not implemented; see
+  [the observed format and remaining work](docs/f3d.md). HardEdgeBasin opening now
+  has a child-process performance guard ([measurements](docs/project-open-regression.md)).
 - Persistent naming (plan/adr/0002) names faces from their history and edges by their faces;
   references resolve by name first and warn when the entity split or vanished. Kernel-reported
   face history (exact through coincident surfaces) is not wired in yet.

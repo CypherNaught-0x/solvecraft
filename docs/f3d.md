@@ -1,0 +1,136 @@
+# Native F3D investigation
+
+Status: archive/index, parameter and local circle inspection, **not editable-history import**.
+The project owner authorized clean-room investigation on 2026-10-11 as an
+exception to AGENTS.md's public-specification requirement. Only the supplied
+files and locally generated controlled variants were observed through Fusion's
+public API; no proprietary or GPL/LGPL/AGPL implementation was used.
+
+`file.inspect_f3d {"path":"...f3d"}` validates the archive and checks the native
+object index against its bulk records, leaving the current design untouched:
+
+```sh
+cargo run --profile ci -p solvecraft-cli -- exec file.inspect_f3d '{"path":"/path/to/part.f3d"}'
+```
+
+`doc.open` reports that editable F3D history is not implemented, instead of a
+misleading JSON/UTF-8 error. It never substitutes flattened geometry for history.
+
+## Evidence
+
+| Supplied archive | Layout | Classes | Objects | Secondary records |
+|---|---:|---:|---:|---:|
+| adapter-x20-makita.f3d | 4 | 213 | 5,538 | 849 |
+| R36S Grip.f3d | 5 | 207 | 3,952 | 629 |
+| Gridfinity Storage Box Shelves (Parametric) V1.0.f3d | 5 | 223 | 4,899 | 784 |
+| Minimal.f3d | 8 | 176 | 259 | 36 |
+
+All contain `Manifest.dat` and paired `MetaStream.dat` and `BulkStream.dat`
+parts beneath `Design1` (layouts 4/5) or `FusionDesignSegmentType1` (layout 8).
+Minimal uses ZIP method 93 (Zstandard). The pure-Rust decoder checks frame window
+and content bounds before allocation, limits expanded output, checks ZIP CRC32,
+and rejects trailing frames. Separate browser/activity streams are not design
+streams. Native B-rep geometry lives in
+`.smb`/`.smbh` parts, not STEP. Previews and appearance payloads are not read or
+extracted. None of the Fusion-produced files is copied into this repository.
+
+Observed metadata layout (little-endian integers):
+
+1. Length-prefixed UTF-8 `Design`, an empty string, and a length-prefixed UTF-16
+   identity; two u32 values (build tag and layout), then `Design`, 0, 1, 0.
+2. A u32-counted class table: identity string, parent string, u32 version, group
+   string, and a u32-counted array of u64 object IDs for each class.
+3. A u32-counted array of u64 root IDs.
+4. A u32-counted primary index of `(u64 object ID, u64 bulk offset)` pairs.
+5. A secondary index with the same pair layout.
+6. An uninterpreted trailer: 8 bytes in observed layout 4, 12 in layout 5.
+
+Layout 8 uses `FusionDesignSegmentType` in place of `Design`, adds two u32 header
+fields after the layout, and uses the namespace string `Fusion`. Its trailer is
+a u64 next identity, a zero u32, and counted `(UTF-8 name, u32 version)` pairs.
+The class, root and record-index structures are otherwise unchanged in the
+observed files.
+
+Each indexed bulk record starts with a length-prefixed decimal tag and matching
+u64 object identity. Decimal tags vary across files and are not stable feature
+types. Class order, object ID order and index order do not establish timeline
+order. Secondary records can lie between successive primary offsets, so those
+intervals are not primary payload lengths.
+
+The Rust reader retains both streams verbatim. It caps sizes, counts and strings;
+rejects missing streams, unsafe/duplicate archive paths, duplicate identities,
+out-of-range offsets and unsupported layouts; and validates identities in both
+record tables. Index validity does not certify feature semantics.
+
+## Verified parameter and circle records
+
+In layout 8, parameter class `7A6A3D31-BE74-4E19-9115-20642944C2E4`, version 9,
+contains UTF-16 expressions, names, labels and display units, plus numeric values.
+Bindings (`D91D429C-1BB5-4640-B49F-69AF14F463E9`, version 0) connect parameters to
+their owning objects. Both binding back-references and duplicate numeric values
+are checked. Numeric length values are **centimetres**, angles are **radians**;
+`display_unit` is separate. The inspector exposes these units explicitly.
+
+The supplied Minimal model has d1 = `100 mm` (native 10), d2 = `100.00 mm`
+(native 10), and d3 = `0.0 deg` (native 0). d1 belongs to the sketch; d2/d3
+belong to the extrusion. Controlled exports independently check:
+
+| Edit | API/native observation |
+|---|---|
+| Height 125 mm | d2 becomes `125 mm`, value 12.5 |
+| Diameter 80 mm | d1 becomes `80 mm`, value 8; circle radius becomes 4 |
+| Restore original | All three original expressions and values restored |
+| Reverse extrusion | d2 becomes `-( 100 mm )`, value -10; body extends downward |
+| Restore positive extent | d2 becomes `100 mm`, value 10 |
+| Rename sketch/extrusion | Parameter ownership and circle geometry retained |
+| New offset circle on XZ | Local center (2, 3, 0), radius 4; world placement differs |
+
+Full-circle class `F0130424-8B7E-4092-93C9-1CA807482534`, version 0, stores
+center, normal, x-axis, radius and angle limits after counted integer attributes.
+Its center-point and owning sketch references are validated by class/version.
+The inspector reports **sketch-local centimetres**, not world coordinates.
+Presentation/construction flags remain opaque; these records alone are not a
+constraint-preserving sketch. Partial arcs and unsupported payloads fail explicitly.
+
+The original input plus eight API-exported cases cover these observations. The
+local probe imports a temporary copy, exports locally, records API measurements,
+and closes without saving the source cloud document. No Fusion installation is
+needed to run the Rust inspector. Probe outputs remain outside Git.
+
+## Remaining history work
+
+Feature payload schemas, timeline ordering, expression dependencies, other sketch
+geometry and constraints, profile references, placements, suppression and native
+B-reps remain undecoded. Finding feature-name strings does not establish those
+semantics. The next stage is to decode these relationships and reconstruct native
+SolveCraft sketch/extrusion features, then edit and regenerate them and compare
+volumes/bounds against Fusion. General history preservation is not implemented.
+Opaque-byte retention alone must not be called editable import.
+
+Autodesk's public [ImportManager](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/core_ImportManager.htm)
+and [TimelineObject](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/fusion_TimelineObject.htm)
+APIs offer an independent validation route inside Fusion. They are not native
+stream specifications; the inspector itself does not require Fusion.
+
+## Validation
+
+Original synthetic tests cover all three layouts, opaque-byte retention, secondary
+records, truncated/malformed indexes, unsafe packages, Zstandard CRC/size limits,
+UTF-16 parameter fields and invalid circle geometry. The engine test checks
+that failed opening preserves the current model and undo history. The local
+corpus test checks all four files, expected counts, a five-second budget, and
+unchanged document state:
+
+```sh
+SOLVECRAFT_F3D_CORPUS=/path/to/test_files cargo test --profile ci -p solvecraft-cli --test f3d_inspection supplied_f3d_indexes -- --ignored --nocapture
+SOLVECRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solvecraft-cli --test f3d_inspection controlled_parameter_edits_match_fusion_api -- --ignored
+```
+
+Observed inspection times were under 8 ms per archive. The controlled-variant
+test compares expressions, units, values, circle centers and radii directly to
+the separately recorded Fusion API measurements. Actual Fusion files remain
+outside the repository; ordinary CI uses original synthetic records.
+
+Full `cargo xtask ci` passed on upstream `463441a`, including all 23 test binaries
+and the ten-crate WASM check. Both local evidence tests passed again after that
+upstream integration. This validates inspection, not editable-history import.

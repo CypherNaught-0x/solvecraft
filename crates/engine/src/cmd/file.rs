@@ -23,6 +23,9 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "INSERT")
         .icon("import")
         .params("path: .3mf or .stl file (its meshes join the design as mesh bodies); name?"),
+    CommandSpec::new("file.inspect_f3d", "Inspect F3D Archive", inspect_f3d)
+        .noundo()
+        .params("path: native .f3d archive → index, supported parameter and sketch-circle records; does not import editable history"),
     CommandSpec::new("file.save", "Save", save).icon("save").key("Ctrl+S").noundo().params("path? (default: current file)"),
     CommandSpec::new("file.save_as", "Save As", save_as).icon("save").noundo().params("path"),
     CommandSpec::new("doc.recovery_list", "Recoverable Designs", recovery_list)
@@ -122,6 +125,12 @@ fn insert_step(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_arg(p, "doc.open")?;
+    if solvecraft_io::f3d::is_f3d_path(path) {
+        return Err(bad(
+            "doc.open",
+            "native F3D editable-history import is not implemented; file.inspect_f3d can inspect the archive without changing the design",
+        ));
+    }
     if solvecraft_io::is_step_path(path) || solvecraft_io::is_mesh_path(path) {
         // A new, unsaved design holding the file's bodies.
         let stem = std::path::Path::new(path).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
@@ -142,6 +151,38 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
     s.path = Some(path.to_string());
     let errors = s.model.results.iter().filter(|r| r.error.is_some()).count();
     Ok(json!({"path": path, "features": s.doc.features.len(), "errors": errors}))
+}
+
+fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
+    let path = path_arg(p, "file.inspect_f3d")?;
+    let len = solvecraft_io::vfs::len(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    if len > solvecraft_io::f3d::MAX_F3D_BYTES as u64 {
+        return Err(bad("file.inspect_f3d", "F3D archive exceeds 256 MiB"));
+    }
+    let bytes = solvecraft_io::vfs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let designs = solvecraft_io::f3d::read_f3d(&bytes)?;
+    let summaries: Vec<_> = designs
+        .iter()
+        .map(|d| {
+            let mut groups = std::collections::BTreeMap::<&str, usize>::new();
+            for class in &d.classes {
+                *groups.entry(&class.group).or_default() += class.objects.len();
+            }
+            let parameters = match d.parameters() {
+                Ok(parameters) => json!({"native_units":{"length":"cm","angle":"rad"},"records": parameters.iter().map(|p| json!({"id":p.id,"binding":p.binding,"owner":p.owner,"name":p.name,"expression":p.expression,"label":p.label,"display_unit":p.display_unit,"native_value":p.value})).collect::<Vec<_>>()}),
+                Err(e) => json!({"unsupported":e.to_string()}),
+            };
+            let circles = match d.sketch_circles() {
+                Ok(circles) => json!({"coordinate_frame":"sketch_local","length_unit":"cm","records":circles.iter().map(|c| json!({"id":c.id,"sketch":c.sketch,"center_point":c.center_point,"center":c.center,"normal":c.normal,"x_axis":c.x_axis,"radius":c.radius})).collect::<Vec<_>>()}),
+                Err(e) => json!({"unsupported":e.to_string()}),
+            };
+            json!({"path": d.path, "build": d.build, "layout": d.layout, "classes": d.classes.len(),
+            "objects": d.records.len(), "secondary_records": d.records.iter().filter(|r| r.secondary_offset.is_some()).count(),
+            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_circles":circles})
+        })
+        .collect();
+    Ok(json!({"path": path, "editable_history_imported": false, "designs": summaries,
+        "warnings": ["Archive indexes validated; supported parameter and circle records inspected. Editable feature reconstruction, sketch placement and native B-reps are not yet decoded."]}))
 }
 
 fn write(s: &mut Session, path: &str) -> Result<Value> {

@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod dxf;
+pub mod f3d;
 pub mod safe_write;
 mod sketch2d;
 mod svg;
