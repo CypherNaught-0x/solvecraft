@@ -347,6 +347,8 @@ pub fn read_f3d(bytes: &[u8]) -> Result<Vec<Design>> {
 #[cfg(test)]
 mod angular_dimension_tests;
 #[cfg(test)]
+mod midpoint_tests;
+#[cfg(test)]
 mod offset_dimension_tests;
 #[cfg(test)]
 mod relationship_tests;

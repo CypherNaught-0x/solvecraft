@@ -24,6 +24,7 @@ pub enum SketchConstraint {
     Radius { id: u64, circle: u64, binding: u64 },
     AlignedPoints { id: u64, points: [u64; 2], vertical: bool },
     PointCurve { id: u64, point: u64, curve: u64, midpoint: bool },
+    LineMidpoints { id: u64, lines: [u64; 2] },
     Curves { id: u64, curves: [u64; 2], relation: CurveRelation },
     Symmetry { id: u64, axis: u64, entities: [u64; 2] },
 }
@@ -145,6 +146,7 @@ impl Design {
                         (1 | 0x1000, [p, c]) if point(p) && (line(c) || (kind == 1 && round(c))) => {
                             SketchConstraint::PointCurve { id, point: *p, curve: *c, midpoint: kind == 0x1000 }
                         }
+                        (0x1000, [a, b]) if line(a) && line(b) => SketchConstraint::LineMidpoints { id, lines: [*a, *b] },
                         (64 | 128, [a, b]) if point(a) && point(b) => SketchConstraint::AlignedPoints { id, points: [*a, *b], vertical: kind == 128 },
                         (2 | 16 | 32, [a, b]) if line(a) && line(b) => SketchConstraint::Curves {
                             id,

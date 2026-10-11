@@ -893,3 +893,98 @@ fn symmetry_roles_survive_axis_creation_order_and_reversed_entity_pairs() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with isolated native line-midpoint controls"]
+fn line_midpoints_preserve_rotation_and_reject_center_translation() {
+    use solvecraft_engine::doc::{
+        Document,
+        sketch::{ConstraintKind, CurveKind},
+    };
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-midpoint-isolation-measurements.json")).unwrap()).unwrap();
+    let verify = |s: &Session, expected: &Value| {
+        assert!(s.model.results.iter().all(|r| r.error.is_none()));
+        let state = s.model.state();
+        let sk = &state.sketches[0].sketch;
+        let constrained = !expected["constraints"].as_array().unwrap().is_empty();
+        assert_eq!(sk.constraints.iter().filter(|c| matches!(c.kind, ConstraintKind::Midpoint { .. })).count(), if constrained { 2 } else { 0 });
+        for key in ["outer", "inner"] {
+            assert!(
+                sk.curves.iter().any(|c| {
+                    let CurveKind::Line { a, b } = c.kind else { return false };
+                    [(a, "start"), (b, "end")].iter().all(|(p, end)| {
+                        let point = sk.points[*p].pos;
+                        (point.x - expected[key][end][0].as_f64().unwrap() * 10.).abs() < 1e-5
+                            && (point.y - expected[key][end][1].as_f64().unwrap() * 10.).abs() < 1e-5
+                    })
+                }),
+                "missing {key}: {expected}"
+            );
+        }
+    };
+    for suffix in ["baseline", "translated", "endpoint-moved", "constraint-deleted", "unconstrained-translated"] {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("midpoint-isolated-{suffix}.f3d"))})).unwrap_or_else(|e| panic!("{suffix}: {e}"));
+        verify(&s, &api[suffix]);
+        verify(&Session::new(Document::from_json(&s.doc.to_json()).unwrap()), &api[suffix]);
+        if suffix == "baseline" {
+            let original = s.doc.clone();
+            s.execute("sketch.edit", &json!({"sketch":s.doc.features[0].id})).unwrap();
+            s.execute("sketch.move", &json!({"entities":["c250"],"translate":[0,10]})).unwrap();
+            s.execute("sketch.finish", &json!({})).unwrap();
+            verify(&s, &api["translated"]);
+            verify(&Session::new(Document::from_json(&s.doc.to_json()).unwrap()), &api["translated"]);
+            s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.doc, original);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with native line-midpoint extrusion controls"]
+fn line_midpoint_profile_edits_preserve_volume_bounds_and_history() {
+    use solvecraft_engine::doc::Document;
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-midpoint-solid-measurements.json")).unwrap()).unwrap();
+    let verify = |s: &mut Session, expected: &Value| {
+        let m = volume(s, expected["volume"].as_f64().unwrap(), "line-midpoint extrusion");
+        assert_eq!(m["body_count"], 1);
+        for (end, key) in [(0, "min"), (1, "max")] {
+            for axis in 0..3 {
+                assert!((m["bodies"][0]["bbox"][key][axis].as_f64().unwrap() - expected["bounds"][end][axis].as_f64().unwrap() * 10.).abs() < 1e-5);
+            }
+        }
+    };
+    for (suffix, expected) in api.as_object().unwrap() {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("midpoint-solid-{suffix}.f3d"))})).unwrap_or_else(|e| panic!("{suffix}: {e}"));
+        verify(&mut s, expected);
+        verify(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), expected);
+    }
+    let base = &api["baseline"];
+    let mut s = Session::default();
+    s.execute("doc.open", &json!({"path":dir.join("midpoint-solid-baseline.f3d")})).unwrap();
+    let original = s.doc.clone();
+    for name in ["d7", "d9", "d10"] {
+        assert!(!s.doc.params.iter().find(|p| p.name == name).unwrap().model);
+    }
+    s.execute("parameters.change", &json!({"name":base["x_parameter"],"expression":"d7 + 1.1 mm"})).unwrap();
+    verify(&mut s, &api["dependent-baseline"]);
+    s.execute("parameters.change", &json!({"name":"d7","expression":"9 mm"})).unwrap();
+    verify(&mut s, &api["dependent-changed"]);
+    verify(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), &api["dependent-changed"]);
+    for _ in 0..2 {
+        s.execute("edit.undo", &json!({})).unwrap();
+    }
+    assert_eq!(s.doc, original);
+    verify(&mut s, base);
+    for (parameter, expression, suffix) in [("x_parameter", "8.1 mm", "x-changed"), ("y_parameter", "10 mm", "y-changed")] {
+        s.execute("parameters.change", &json!({"name":base[parameter],"expression":expression})).unwrap();
+        verify(&mut s, &api[suffix]);
+        verify(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), &api[suffix]);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc, original);
+        verify(&mut s, base);
+    }
+}

@@ -169,7 +169,7 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   construction, selected circular profiles and coincidence/diameter relationships.
   Twenty-five local Fusion controls cover dimension edits, reversal, renaming,
   placement, reordering, body operations, suppression and constraint removal.
-  Twenty-seven original native SolidCraft fixtures check analytic volumes/bounds and edits.
+  Twenty-nine original native SolidCraft fixtures check analytic volumes/bounds and edits.
   `doc.open` now reconstructs verified layout-8 circle/line/arc sketches and one-sided
   extrusions as editable history, with driving parameters, fixation, taper and
   atomic failure. Thirty local native imports check volumes/placement; original
@@ -212,6 +212,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   including 0°, 90° and 180° controls. Native fixed line supports and arc centers/radii leave unfixed
   endpoints editable instead of freezing their positions; an original arc-segment
   fixture checks endpoint edits against analytic volume and bounds.
+  Line-to-line midpoint relationships preserve independent rotation and lengths
+  through a shared editable center. Converted dimensions retain their user-parameter
+  expressions and dependencies, including validated references to deleted bindings.
   Signed extrusion start offsets preserve expressions
   and parameter bindings through edits, reopening and undo; zero-angle taper inputs
   remain editable. Other feature types and native B-reps remain unsupported; see

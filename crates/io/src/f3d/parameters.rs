@@ -6,6 +6,8 @@ pub struct Parameter {
     pub id: u64,
     /// User parameters have no feature binding or owner.
     pub binding: Option<u64>,
+    /// A converted dimension can retain the identity of its deleted binding.
+    retired_binding: Option<u64>,
     pub owner: Option<u64>,
     pub name: String,
     pub expression: String,
@@ -46,6 +48,9 @@ impl Design {
                 let mut p = decode(records.primary(*id)?, class.version)?;
                 if p.id != *id {
                     return Err(invalid("invalid parameter identity"));
+                }
+                if p.retired_binding.is_some_and(|id| records.by_id.contains_key(&id)) {
+                    return Err(invalid("converted parameter retains a live binding"));
                 }
                 let Some(binding) = p.binding else { return Ok(p) };
                 let integer = *bindings.get(&binding).ok_or_else(|| invalid("invalid parameter binding"))?;
@@ -91,7 +96,7 @@ fn decode(bytes: &[u8], version: u32) -> Result<Parameter> {
     r.take(flags)?; // inherited flags and unit identity
     let comment = r.wide_string()?;
     r.u32()?; // parameter sequence number
-    let binding = match r.bytes.get(r.at) {
+    let mut binding = match r.bytes.get(r.at) {
         Some(0) => {
             r.take(1)?;
             None
@@ -103,10 +108,14 @@ fn decode(bytes: &[u8], version: u32) -> Result<Parameter> {
     if r.take(metadata_prefix)?.iter().any(|b| *b != 0) {
         return Err(invalid("unsupported parameter expression metadata"));
     }
-    let (driven, favorite, user) = match r.take(5)? {
-        [0, driven @ (0 | 1), favorite @ (0 | 1), 0, user @ (0 | 1)] => (*driven != 0, *favorite != 0, *user != 0),
+    let (driven, favorite, user, converted) = match r.take(5)? {
+        [0, driven @ (0 | 1), favorite @ (0 | 1), 0, user @ (0 | 1)] => (*driven != 0, *favorite != 0, *user != 0, false),
+        // Deleting a dimension still referenced by other expressions can
+        // convert it to an unbound UserParameter, retaining its model name.
+        [0, 0, favorite @ (0 | 1), 1, 0] if version == 9 => (false, *favorite != 0, true, true),
         _ => return Err(invalid("unsupported parameter expression metadata")),
     };
+    let retired_binding = if converted { binding.take() } else { None };
     if user != binding.is_none() || (user && driven) {
         return Err(invalid("inconsistent parameter role and binding"));
     }
@@ -124,7 +133,7 @@ fn decode(bytes: &[u8], version: u32) -> Result<Parameter> {
     if r.at != bytes.len() {
         return Err(invalid("unsupported parameter payload tail"));
     }
-    Ok(Parameter { id, binding, owner: None, name, expression, label, display_unit, comment, driven, favorite, value })
+    Ok(Parameter { id, binding, retired_binding, owner: None, name, expression, label, display_unit, comment, driven, favorite, value })
 }
 
 #[cfg(test)]
@@ -334,5 +343,68 @@ mod tests {
         let reopened = crate::read_design(&crate::write_design(&doc)).unwrap();
         assert_eq!(doc, reopened);
         volume(&reopened, std::f64::consts::PI * 20. * 20. * 17.);
+    }
+
+    #[test]
+    fn converted_dimension_parameters_remain_editable_dependencies() {
+        use super::super::import_tests::{fixture, volume};
+        let mut bytes = authored(9, true, false, true);
+        let mut r = Reader { bytes: &bytes, at: 14 + 4 + 12 };
+        r.wide_string().unwrap();
+        r.u32().unwrap();
+        assert_eq!(r.take(1).unwrap(), [0]);
+        r.wide_string().unwrap();
+        let metadata = r.at;
+        bytes[metadata + 8] = 1;
+        bytes[metadata + 9] = 0;
+        let parameter = decode(&bytes, 9).unwrap();
+        assert!(parameter.binding.is_none());
+        assert!(parameter.favorite);
+        let mut f = fixture(false);
+        f.put(123, "7A6A3D31-BE74-4E19-9115-20642944C2E4", 9, bytes[14..].to_vec(), None);
+        let b = &mut f.0.get_mut(&62).unwrap().2;
+        let mut r = Reader { bytes: b, at: 35 };
+        r.wide_string().unwrap();
+        let end = r.at;
+        let mut expression = Vec::new();
+        wide(&mut expression, "base");
+        b.splice(35..end, expression);
+        let mut doc = f.design().to_document("Converted parameter dependency").unwrap();
+        assert!(!doc.params.iter().find(|p| p.name == "base").unwrap().model);
+        doc.change_param("base", "40 mm", None, None).unwrap();
+        volume(&doc, std::f64::consts::PI * 20. * 20. * 17.);
+        volume(&crate::read_design(&crate::write_design(&doc)).unwrap(), std::f64::consts::PI * 20. * 20. * 17.);
+        for (at, value) in [(metadata + 6, 1), (metadata + 8, 2), (metadata + 9, 1)] {
+            let mut bad = bytes.clone();
+            bad[at] = value;
+            assert!(decode(&bad, 9).is_err());
+        }
+    }
+
+    #[test]
+    fn converted_parameters_may_reference_only_deleted_bindings() {
+        use super::super::import_tests::Fixture;
+        let mut bytes = authored(9, false, false, false);
+        let mut r = Reader { bytes: &bytes, at: 14 + 4 + 12 };
+        r.wide_string().unwrap();
+        r.u32().unwrap();
+        r.reference().unwrap();
+        r.wide_string().unwrap();
+        let metadata = r.at;
+        bytes[metadata + 8] = 1;
+        let mut f = Fixture(BTreeMap::new());
+        f.put(123, "7A6A3D31-BE74-4E19-9115-20642944C2E4", 9, bytes[14..].to_vec(), None);
+        let p = Fixture(f.0.clone()).design().parameters().unwrap().remove(0);
+        assert_eq!(p.retired_binding, Some(124));
+        assert!(p.binding.is_none());
+        assert!(p.owner.is_none());
+        assert_eq!(p.name, "d7");
+        f.put(124, "original-live-binding", 0, vec![], None);
+        assert!(Fixture(f.0.clone()).design().parameters().is_err());
+        f.0.remove(&124);
+        // An ordinary bound parameter must still resolve its binding.
+        bytes[metadata + 8] = 0;
+        f.put(123, "7A6A3D31-BE74-4E19-9115-20642944C2E4", 9, bytes[14..].to_vec(), None);
+        assert!(f.design().parameters().is_err());
     }
 }

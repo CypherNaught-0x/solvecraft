@@ -2,7 +2,8 @@
 
 Status: bounded archive inspection and **editable import of verified layout-8
 circle/line/arc sketches, offset construction planes and one-sided-extrusion history**. General F3D history support remains
-incomplete; the three larger supplied designs do not import yet.
+incomplete; the three larger supplied designs and the additional knob/clamp archives
+do not import yet.
 The project owner authorized clean-room investigation on 2026-10-11 as an
 exception to AGENTS.md's public-specification requirement. Only the supplied
 files and locally generated controlled variants were observed through Fusion's
@@ -28,7 +29,7 @@ Supported reconstruction includes native parameter names and expressions,
 numeric user parameters, user/model roles, comments and favorites,
 driving radius/diameter, angular, horizontal/vertical and line-offset distance dimensions, coincidence,
 horizontal/vertical line and point alignment, parallel/perpendicular/collinear lines,
-equal lengths/radii, point/line/circle symmetry, concentric/tangent round curves, point-on-curve and line-midpoint
+equal lengths/radii, point/line/circle symmetry, concentric/tangent round curves, point-on-curve and point/line-to-line-midpoint
 relationships, independent point/curve fixation, construction curves, rigid root sketch placement, feature names/order/suppression,
 complete outer and inner boundaries for circle, polygon and arc profiles, signed extrusion distances and taper. New-body
 operations and booleans against a sole existing body are supported. Offset planes
@@ -961,3 +962,42 @@ including 90 I/O tests, all 28 original history fixtures, the HardEdgeBasin
 opening guard and ten-crate WASM checking. All 26 local import groups passed.
 The edited imported cylinder pair was rendered and visually checked; upstream
 `4af2d06` remains integrated without additional commits to merge.
+
+### Common line midpoints and converted dimension parameters
+
+Generic kind `0x1000` with two line operands equates their centers while leaving
+their lengths and directions independent. Reconstruction uses an unfixed shared
+point with a midpoint constraint on each line. Native centers must agree before
+import; missing, repeated, wrong-type and truncated references fail explicitly.
+Two original record tests check operand order, rotation, moving reference centers,
+dimension edits, volume and reopening.
+
+Five local controls isolate an existing legacy midpoint relationship. Fusion
+blocks translation of one center away from the other, allows independent rotation,
+and permits translation after removing the constraint. Six triangular-prism
+controls check parameter edits, expression dependencies, world bounds, analytic
+volume, reopening and undo. Those controls also expose dimensions converted to
+user parameters after deletion of their original features. Modern parameter
+metadata preserves that role separately from explicit user parameters. An export
+can retain a reference to a deleted binding until resaved; the importer accepts
+that reference only when the conversion flag is present and the binding object
+is absent. Live conflicting bindings and inconsistent role flags fail.
+
+The twenty-ninth original fixture, `line-midpoint-prism`, is a 30 × 20 × 17 mm
+prism whose bottom-edge midpoint follows a construction line. Its 10,200 mm³
+analytic volume and world bounds are checked after width, depth, height and
+reference-elevation edits, serialization, reopening and undo. Elevation changes
+preserve volume while moving the body. Fusion exports remain local evidence.
+
+Thirteen further archives from the supplied knob/clamp ZIPs have been inspected.
+All use layout 5; their indexes expose 156 timeline entries in total. Unsupported
+legacy entity framing, auxiliary relationships, extent schemas and additional
+feature types still prevent full editable imports. The smaller controls establish
+specific supported behavior; they do not imply general F3D compatibility.
+
+Validation: upstream `d8beaed` is integrated without conflicts. Full `cargo xtask
+ci` passed all 29 test binaries, including 94 I/O tests, 560 engine tests,
+198 kernel tests, 305 UI tests, all 29 original history fixtures and ten-crate
+WASM checking. The HardEdgeBasin opening guard passed in 0.87 seconds. All 28
+local import groups and ten inspection groups passed. The edited imported
+triangular prism was rendered and visually checked.

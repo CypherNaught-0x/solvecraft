@@ -229,6 +229,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                     solvecraft_io::f3d::SketchConstraint::Radius {id,circle,binding} => json!({"type":"radius","id":id,"circle":circle,"binding":binding}),
                     solvecraft_io::f3d::SketchConstraint::AlignedPoints {id,points,vertical} => json!({"type":if *vertical{"vertical_points"}else{"horizontal_points"},"id":id,"points":points}),
                     solvecraft_io::f3d::SketchConstraint::PointCurve {id,point,curve,midpoint} => json!({"type":if *midpoint{"midpoint"}else{"point_on_curve"},"id":id,"point":point,"curve":curve}),
+                    solvecraft_io::f3d::SketchConstraint::LineMidpoints {id,lines} => json!({"type":"line_midpoints","id":id,"lines":lines}),
                     solvecraft_io::f3d::SketchConstraint::Curves {id,curves,relation} => json!({"type":format!("{relation:?}").to_lowercase(),"id":id,"curves":curves}),
                     solvecraft_io::f3d::SketchConstraint::Horizontal{id,line}=>json!({"type":"horizontal","id":id,"line":line}),
                     solvecraft_io::f3d::SketchConstraint::Vertical{id,line}=>json!({"type":"vertical","id":id,"line":line}),

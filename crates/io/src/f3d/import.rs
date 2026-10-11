@@ -364,6 +364,12 @@ impl Design {
                     }
                     for constraint in &relations.constraints {
                         let (kind, param) = match constraint {
+                            SketchConstraint::LineMidpoints { id, lines: [a, b] } => {
+                                let a = curve_indices.get(a).copied().ok_or_else(|| invalid("missing midpoint line"))?;
+                                let b = curve_indices.get(b).copied().ok_or_else(|| invalid("missing midpoint line"))?;
+                                line_midpoints(&mut sketch, [a, b], *id)?;
+                                continue;
+                            }
                             SketchConstraint::Symmetry { axis, entities, .. } => {
                                 for kind in symmetry(&sketch, &point_indices, &curve_indices, *axis, *entities)? {
                                     sketch.add_constraint(kind, None).map_err(|e| invalid(&e.to_string()))?;
@@ -602,6 +608,29 @@ fn fix_line_support(sketch: &mut Sketch, line: usize, id: u64) -> Result<()> {
     sketch.points.get_mut(anchor).ok_or_else(|| invalid("missing fixed support anchor"))?.fixed = true;
     for kind in [ConstraintKind::PointOnCurve { p: anchor, c: line }, ConstraintKind::LineAngle { l: line, value: (end - start).angle() }] {
         sketch.add_constraint(kind, None).map_err(|e| invalid(&e.to_string()))?;
+    }
+    Ok(())
+}
+
+pub(super) fn line_midpoints(sketch: &mut Sketch, lines: [usize; 2], id: u64) -> Result<()> {
+    let center = |line: usize| {
+        let Some(solvecraft_doc::sketch::CurveKind::Line { a, b }) = sketch.curves.get(line).map(|c| &c.kind) else {
+            return Err(invalid("common midpoint requires two lines"));
+        };
+        let a = sketch.point(*a).ok_or_else(|| invalid("missing midpoint endpoint"))?;
+        let b = sketch.point(*b).ok_or_else(|| invalid("missing midpoint endpoint"))?;
+        Ok((a + b) * 0.5)
+    };
+    let [a, b] = lines;
+    let (ma, mb) = (center(a)?, center(b)?);
+    if !ma.is_finite() || !mb.is_finite() || (ma - mb).len() > 1e-7 * ma.len().max(mb.len()).max(1.) {
+        return Err(invalid("line midpoints disagree with native geometry"));
+    }
+    // A shared, unfixed point equates the centers without constraining line
+    // angle or length. Native line-to-line midpoint allows independent rotation.
+    let p = sketch.add_point(ma, Some(&format!("midpoint{id}"))).map_err(|e| invalid(&e.to_string()))?;
+    for l in lines {
+        sketch.add_constraint(ConstraintKind::Midpoint { p, l }, None).map_err(|e| invalid(&e.to_string()))?;
     }
     Ok(())
 }
