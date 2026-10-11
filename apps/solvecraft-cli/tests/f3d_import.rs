@@ -622,3 +622,42 @@ fn extrusion_start_offset_expressions_follow_edits_reopening_and_undo() {
     assert_eq!(s.doc, original);
     verify(&mut s, 250. * std::f64::consts::PI, 10., 110.);
 }
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with independent symmetry controls"]
+fn symmetry_history_preserves_points_lines_circles_and_solid_edits() {
+    use solvecraft_engine::doc::{Document, FeatureKind, sketch::ConstraintKind};
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    for (kind, symmetric, equal) in [("points", 1, 0), ("lines", 2, 0), ("circles", 1, 1)] {
+        for suffix in ["baseline", "constrained", "restored"] {
+            let mut s = Session::default();
+            s.execute("doc.open", &json!({"path":dir.join(format!("symmetry-{kind}-{suffix}.f3d"))})).unwrap();
+            let FeatureKind::Sketch { sketch, .. } = &s.doc.features[0].kind else { panic!("sketch") };
+            assert_eq!(
+                sketch.constraints.iter().filter(|c| matches!(c.kind, ConstraintKind::Symmetric { .. })).count(),
+                if suffix == "constrained" { symmetric } else { 0 }
+            );
+            assert_eq!(
+                sketch.constraints.iter().filter(|c| matches!(c.kind, ConstraintKind::Equal { .. })).count(),
+                if suffix == "constrained" { equal } else { 0 }
+            );
+            assert_eq!(Document::from_json(&s.doc.to_json()).unwrap(), *s.doc);
+        }
+    }
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-symmetry-solid-measurements.json")).unwrap()).unwrap();
+    for (name, expected) in api.as_object().unwrap() {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap();
+        let m = volume(&mut s, expected["volume"].as_f64().unwrap(), name);
+        assert_eq!(m["body_count"], 2);
+    }
+    let mut s = Session::default();
+    s.execute("doc.open", &json!({"path":dir.join("symmetry-solids-base.f3d")})).unwrap();
+    s.execute("parameters.change", &json!({"name":"d1","expression":"30 mm"})).unwrap();
+    volume(&mut s, 13.5 * std::f64::consts::PI, "symmetry diameter edit");
+    let mut reopened = Session::new(Document::from_json(&s.doc.to_json()).unwrap());
+    reopened.execute("parameters.change", &json!({"name":"d1","expression":"40 mm"})).unwrap();
+    volume(&mut reopened, 24. * std::f64::consts::PI, "symmetry after reopening");
+    s.execute("edit.undo", &json!({})).unwrap();
+    volume(&mut s, 6. * std::f64::consts::PI, "symmetry undo");
+}

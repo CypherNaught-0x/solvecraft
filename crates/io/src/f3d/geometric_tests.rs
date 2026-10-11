@@ -2,7 +2,7 @@ use super::import_tests::{Fixture, fixture, volume};
 use super::polygon_tests::rectangle;
 use super::relationship_tests::{reference, refs, u32, u64};
 
-fn relation(f: &mut Fixture, id: u64, kind: u64, operands: &[u64]) {
+pub(super) fn relation(f: &mut Fixture, id: u64, kind: u64, operands: &[u64]) {
     let mut b = vec![0; 4];
     b.push(1);
     u32(&mut b, operands.len() as u32);
@@ -46,7 +46,7 @@ fn geometric_relationships_keep_a_prism_rectangular_after_dimension_edits() {
 
 #[test]
 fn constraint_kind_arity_and_operand_classes_must_agree() {
-    for (kind, operands) in [(4, vec![31, 33]), (0x10, vec![42, 41]), (0x20, vec![31]), (1, vec![31, 42]), (0x800, vec![31, 42])] {
+    for (kind, operands) in [(4, vec![31, 33]), (0x10, vec![42, 41]), (0x20, vec![31]), (1, vec![31, 33]), (0x800, vec![31, 42])] {
         let mut f = rectangle();
         relation(&mut f, 55, kind, &operands);
         assert!(f.design().sketch_constraints().is_err());

@@ -354,6 +354,12 @@ impl Design {
                     }
                     for constraint in &relations.constraints {
                         let (kind, param) = match constraint {
+                            SketchConstraint::Symmetry { axis, entities, .. } => {
+                                for kind in symmetry(&sketch, &point_indices, &curve_indices, *axis, *entities)? {
+                                    sketch.add_constraint(kind, None).map_err(|e| invalid(&e.to_string()))?;
+                                }
+                                continue;
+                            }
                             SketchConstraint::Coincident { points: [a, b], .. } => {
                                 let p = point_indices.get(a).copied().ok_or_else(|| invalid("missing coincidence point"))?;
                                 let q = point_indices.get(b).copied().ok_or_else(|| invalid("missing coincidence point"))?;
@@ -636,4 +642,49 @@ fn extent(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, parameters: &B
         to_offset: None,
         from: None,
     })
+}
+
+pub(super) fn symmetry(
+    sketch: &Sketch,
+    points: &BTreeMap<u64, usize>,
+    curves: &BTreeMap<u64, usize>,
+    axis: u64,
+    entities: [u64; 2],
+) -> Result<Vec<ConstraintKind>> {
+    use solvecraft_doc::sketch::CurveKind;
+    let [a, b] = entities;
+    let l = curves.get(&axis).copied().ok_or_else(|| invalid("missing symmetry axis"))?;
+    if let (Some(p), Some(q)) = (points.get(&a), points.get(&b)) {
+        return Ok(vec![ConstraintKind::Symmetric { p: *p, q: *q, l }]);
+    }
+    let ca = curves.get(&a).copied().ok_or_else(|| invalid("missing symmetric curve"))?;
+    let cb = curves.get(&b).copied().ok_or_else(|| invalid("missing symmetric curve"))?;
+    let kind = |i| sketch.curves.get(i).map(|c: &solvecraft_doc::sketch::Curve| &c.kind).ok_or_else(|| invalid("missing symmetry curve"));
+    match (kind(ca)?, kind(cb)?) {
+        (CurveKind::Circle { c: p, .. }, CurveKind::Circle { c: q, .. }) => {
+            Ok(vec![ConstraintKind::Symmetric { p: *p, q: *q, l }, ConstraintKind::Equal { a: ca, b: cb }])
+        }
+        (CurveKind::Line { a: p0, b: p1 }, CurveKind::Line { a: q0, b: q1 }) => {
+            let CurveKind::Line { a: la, b: lb } = kind(l)? else { return Err(invalid("symmetry axis is not a line")) };
+            let point = |i| sketch.points.get(i).map(|p: &solvecraft_doc::sketch::SPoint| p.pos).ok_or_else(|| invalid("missing symmetry point"));
+            let start = point(*la)?;
+            let direction = point(*lb)? - start;
+            let length2 = direction.len2();
+            if !length2.is_finite() || length2 < 1e-20 {
+                return Err(invalid("degenerate symmetry axis"));
+            }
+            let reflect = |p: Vec2| start + direction * (2. * (p - start).dot(direction) / length2) - (p - start);
+            let [r0, r1] = [reflect(point(*p0)?), reflect(point(*p1)?)];
+            let close = |p: Vec2, q: Vec2| (p - q).len() <= 1e-7 * p.len().max(q.len()).max(1.);
+            let (q0, q1) = if close(r0, point(*q0)?) && close(r1, point(*q1)?) {
+                (*q0, *q1)
+            } else if close(r0, point(*q1)?) && close(r1, point(*q0)?) {
+                (*q1, *q0)
+            } else {
+                return Err(invalid("symmetric line endpoints disagree with native geometry"));
+            };
+            Ok(vec![ConstraintKind::Symmetric { p: *p0, q: q0, l }, ConstraintKind::Symmetric { p: *p1, q: q1, l }])
+        }
+        _ => Err(invalid("unsupported symmetric entity types")),
+    }
 }

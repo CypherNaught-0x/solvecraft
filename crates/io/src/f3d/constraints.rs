@@ -2,6 +2,8 @@
 //! Other relationships sharing the generic constraint class fail explicitly.
 use super::history::{empty, finish, payload, references, require_class, zeros};
 use super::*;
+mod graph;
+pub use graph::SketchConstraintGraph;
 
 #[derive(Debug, PartialEq)]
 pub struct SketchConstraints {
@@ -21,6 +23,7 @@ pub enum SketchConstraint {
     AlignedPoints { id: u64, points: [u64; 2], vertical: bool },
     PointCurve { id: u64, point: u64, curve: u64, midpoint: bool },
     Curves { id: u64, curves: [u64; 2], relation: CurveRelation },
+    Symmetry { id: u64, axis: u64, entities: [u64; 2] },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -59,13 +62,7 @@ fn operand(r: &mut Reader<'_>) -> Result<u64> {
 
 impl Design {
     pub fn sketch_constraints(&self) -> Result<Vec<SketchConstraints>> {
-        if self.layout != 8 {
-            return Err(invalid("constraint decoding requires metadata layout 8"));
-        }
-        let Some(class) = self.classes.iter().find(|c| c.id == "44A64366-4BD3-4B24-881A-F94C206E8F2D") else { return Ok(vec![]) };
-        if class.version != 18 {
-            return Err(invalid("unsupported sketch geometry version"));
-        }
+        let graphs = self.sketch_constraint_graphs()?;
         let records = Records::new(self);
         let classes: BTreeMap<_, _> = self.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
         let parameters = self.parameters()?;
@@ -73,28 +70,24 @@ impl Design {
         let circles: BTreeMap<_, _> =
             self.sketch_circles()?.into_iter().chain(self.sketch_arcs()?.into_iter().map(|a| a.circle)).map(|c| (c.id, c.sketch)).collect();
         let lines: BTreeMap<_, _> = self.sketch_lines()?.into_iter().map(|c| (c.id, c.sketch)).collect();
-        class
-            .objects
-            .iter()
-            .map(|geometry| {
-                let mut r = payload(records.primary(*geometry)?, *geometry)?;
-                empty(&mut r)?;
-                zeros(&mut r, 1)?;
-                attributes::read(&mut r)?;
-                r.wide_string()?;
-                r.u64()?;
-                one(&mut r)?;
-                let relations = references(&mut r)?;
-                one(&mut r)?;
-                let dimensions = references(&mut r)?;
-                r.take(17)?;
-                let feature = r.reference()?;
-                require_class(&classes, feature, "8DA771B7-52ED-42FC-94E2-2353FE141373", 5)?;
-                r.take(4)?;
-                finish(&r)?;
+        let arcs: BTreeSet<_> = self.sketch_arcs()?.into_iter().map(|a| a.circle.id).collect();
+        graphs
+            .into_iter()
+            .map(|graph| {
+                let geometry = &graph.geometry;
+                if graph.support.is_some() || !graph.auxiliary.is_empty() {
+                    return Err(invalid("sketch container relationships are not supported yet"));
+                }
+                let feature = graph.feature;
+                let feature_class = classes.get(&feature).ok_or_else(|| invalid("missing sketch feature"))?;
+                if feature_class.id != "8DA771B7-52ED-42FC-94E2-2353FE141373" || !matches!(feature_class.version, 3..=5) {
+                    return Err(invalid("unsupported sketch feature owner"));
+                }
+                let relations = graph.relations;
+                let dimensions = graph.dimensions;
                 let mut seen = BTreeSet::new();
                 let mut constraints = Vec::new();
-                let point = |id: &u64| classes.get(id).is_some_and(|c| c.id == "C2CEDAE7-1716-47C1-B7B1-07B70081D0FB" && c.version == 11);
+                let point = |id: &u64| entity::require_point(&classes, *id).is_ok();
                 let line = |id: &u64| lines.get(id) == Some(geometry);
                 let round = |id: &u64| circles.get(id) == Some(geometry);
                 for id in relations {
@@ -106,7 +99,7 @@ impl Design {
                     empty(&mut r)?;
                     one(&mut r)?;
                     let count = r.u32()?;
-                    if count != 1 && count != 2 {
+                    if !(1..=3).contains(&count) {
                         return Err(invalid("unsupported geometric constraint arity"));
                     }
                     let mut operands = Vec::new();
@@ -132,6 +125,17 @@ impl Design {
                     finish(&r)?;
                     constraints.push(match (kind, operands.as_slice()) {
                         (1, [a, b]) if point(a) && point(b) => SketchConstraint::Coincident { id, points: [*a, *b] },
+                        (0x400, [axis, a, b])
+                            if line(axis)
+                                && ((point(a) && point(b))
+                                    || (line(a) && line(b))
+                                    || (round(a) && round(b) && !arcs.contains(a) && !arcs.contains(b))) =>
+                        {
+                            SketchConstraint::Symmetry { id, axis: *axis, entities: [*a, *b] }
+                        }
+                        (1 | 0x1000, [c, p]) if point(p) && (line(c) || (kind == 1 && round(c))) => {
+                            SketchConstraint::PointCurve { id, point: *p, curve: *c, midpoint: kind == 0x1000 }
+                        }
                         (1 | 0x1000, [p, c]) if point(p) && (line(c) || (kind == 1 && round(c))) => {
                             SketchConstraint::PointCurve { id, point: *p, curve: *c, midpoint: kind == 0x1000 }
                         }

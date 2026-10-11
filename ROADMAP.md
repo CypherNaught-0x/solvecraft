@@ -169,7 +169,7 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   construction, selected circular profiles and coincidence/diameter relationships.
   Twenty-five local Fusion controls cover dimension edits, reversal, renaming,
   placement, reordering, body operations, suppression and constraint removal.
-  Twenty-four original native SolidCraft fixtures check analytic volumes/bounds and edits.
+  Twenty-five original native SolidCraft fixtures check analytic volumes/bounds and edits.
   `doc.open` now reconstructs verified layout-8 circle/line/arc sketches and one-sided
   extrusions as editable history, with driving parameters, fixation, taper and
   atomic failure. Thirty local native imports check volumes/placement; original
@@ -201,7 +201,10 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   now expose every ordered timeline entry and all seventeen timeline sketches, but
   still need full reconstruction. Legacy analytic geometry now decodes all 775 points
   and 599 curves in the supplied files, including split primary/secondary entities;
-  unresolved metadata and relationships remain explicit. Signed extrusion start offsets preserve expressions
+  unresolved metadata and relationships remain explicit. Legacy constraint containers preserve
+  complete relation/dimension lists across versions 16–18. Verified point, line and circle
+  symmetry imports preserve editable relationships, including equal circle radii.
+  Signed extrusion start offsets preserve expressions
   and parameter bindings through edits, reopening and undo; zero-angle taper inputs
   remain editable. Other feature types and native B-reps remain unsupported; see
   [the observed format and remaining work](docs/f3d.md). HardEdgeBasin opening now

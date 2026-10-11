@@ -396,3 +396,35 @@ fn original_and_resaved_legacy_geometry_matches_public_api() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_CORPUS and SOLVECRAFT_F3D_PROBES with legacy constraint measurements"]
+fn legacy_constraint_containers_preserve_complete_relationship_lists() {
+    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-legacy-constraints.json")).unwrap()).unwrap();
+    for (name, relationships, dimensions) in
+        [("adapter-x20-makita.f3d", 258, 121), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 272, 68), ("R36S Grip.f3d", 42, 6)]
+    {
+        let mut expected = None;
+        for path in [corpus.join(name), probes.join(format!("corpus-{name}"))] {
+            let ds = solvecraft_engine::io::f3d::read_f3d(&std::fs::read(path).unwrap()).unwrap();
+            let graphs = ds[0].sketch_constraint_graphs().unwrap();
+            assert_eq!(graphs.iter().map(|g| g.relations.len()).sum::<usize>(), relationships);
+            assert_eq!(graphs.iter().map(|g| g.dimensions.len()).sum::<usize>(), dimensions);
+            let measured = &api[format!("corpus-{name}")];
+            assert_eq!(graphs.len(), measured.as_array().unwrap().len());
+            let total = measured.as_array().unwrap().iter().map(|s| s["constraints"].as_array().unwrap().len()).sum::<usize>();
+            // Adapter's four additional native relationship records are not exposed
+            // as public geometric constraints. Keep them in the native graph.
+            assert_eq!(relationships + dimensions, total + if name == "adapter-x20-makita.f3d" { 4 } else { 0 });
+            let current: Vec<_> =
+                graphs.iter().map(|g| (g.geometry, g.feature, g.relations.clone(), g.dimensions.clone(), g.auxiliary.clone(), g.support)).collect();
+            if let Some(expected) = &expected {
+                assert_eq!(&current, expected);
+            } else {
+                expected = Some(current);
+            }
+        }
+    }
+}

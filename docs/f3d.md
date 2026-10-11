@@ -28,7 +28,7 @@ Supported reconstruction includes native parameter names and expressions,
 numeric user parameters, user/model roles, comments and favorites,
 driving radius/diameter and horizontal/vertical distance dimensions, coincidence,
 horizontal/vertical line and point alignment, parallel/perpendicular/collinear lines,
-equal lengths/radii, concentric/tangent round curves, point-on-curve and line-midpoint
+equal lengths/radii, point/line/circle symmetry, concentric/tangent round curves, point-on-curve and line-midpoint
 relationships, independent point/curve fixation, construction curves, rigid root sketch placement, feature names/order/suppression,
 complete outer and inner boundaries for circle, polygon and arc profiles, signed extrusion distances and taper. New-body
 operations and booleans against a sole existing body are supported. Offset planes
@@ -212,7 +212,7 @@ test compares expressions, units, values, circle centers and radii directly to
 the separately recorded Fusion API measurements. Actual Fusion files remain
 outside the repository; ordinary CI uses original synthetic records.
 
-Thirteen [small editable SolveCraft fixtures](../apps/solvecraft-cli/tests/history/README.md)
+Twenty-five [small editable SolveCraft fixtures](../apps/solvecraft-cli/tests/history/README.md)
 provide command recipes, saved documents and independent analytic volume/bounds
 checks. They exercise parameter edits, signed heights, placement, all four body
 operations, reordering, suppression, reopening and undo. These native fixtures run
@@ -785,3 +785,42 @@ Validation: upstream `af536a7` remains integrated. Full `cargo xtask ci` passed
 198 kernel tests, 304 UI tests, all 24 native fixtures and ten-crate WASM checking.
 All twenty local F3D import groups and nine local inspection groups passed.
 The HardEdgeBasin opening regression passed in 0.88 seconds.
+
+### Legacy constraint containers and editable symmetry
+
+The inspector now exposes `constraint_graphs` separately from supported constraint
+semantics. Geometry versions 16, 17 and 18 have distinct framing for counted
+relationship/dimension lists, optional support references and external identities.
+Every reference is retained and checked. All eighteen containers in the three
+larger designs agree before and after a modern Fusion save: 572 geometric
+relationships and 195 dimensions in total. Unresolved auxiliary/support links
+still prevent reconstruction; decoding a reference list does not imply support
+for every constraint in it.
+
+Generic geometric kind `0x400` has three operands: the symmetry axis followed by
+the two related entities. Nine independently authored public-API controls add and
+remove symmetry between points, finite lines and full circles. Imported circles
+retain both center symmetry and equal radii. Imported lines pair endpoints using
+complete reflected incidence, allowing either native line direction and rejecting
+inconsistent geometry. Arc symmetry remains unsupported. The public
+[addSymmetry API](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/fusion_GeometricConstraints_addSymmetry.htm)
+provides the independent behavioral reference, not a binary-format specification.
+
+Three further controls extrude two symmetric circles and independently vary
+diameter and height. Native imports match API volumes and retain diameter edits,
+serialization/reopening and undo. Original field-authored records test circle
+edits, both line directions, invalid axis types, truncated symmetry payloads and
+all three constraint-container schemas. No Fusion-generated records enter Git.
+
+The twenty-fifth original fixture, `symmetric-cylinders`, extrudes two 20 mm
+diameter circles by 30 mm, for a total volume of 6,000π mm³. Diameter and height
+edits check analytic volumes, world bounds, reopening and undo in ordinary CI.
+Offset/angular dimensions, other constraint schemas and the larger designs'
+remaining feature types still require editable reconstruction.
+
+Validation: upstream `6ce472c` is integrated without conflicts. Full `cargo xtask
+ci` passed all 28 test binaries, including 82 I/O tests, 107 document tests,
+560 engine tests, 198 kernel tests, 304 UI tests, all 25 original fixtures and
+ten-crate WASM checking. All 21 local import groups and ten inspection groups
+passed. The HardEdgeBasin opening regression passed in 0.87 seconds. The actual
+two-cylinder import was rendered after a diameter edit and visually checked.

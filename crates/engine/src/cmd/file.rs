@@ -215,8 +215,13 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 Ok(profiles) => json!({"records":profiles.iter().map(|p|json!({"id":p.id,"feature":p.feature,"geometry":p.geometry,"circle":p.circle})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
+            let constraint_graphs = match d.sketch_constraint_graphs() {
+                Ok(graphs) => json!({"records":graphs.iter().map(|g| json!({"geometry":g.geometry,"feature":g.feature,"relations":g.relations,"dimensions":g.dimensions,"auxiliary":g.auxiliary,"support":g.support})).collect::<Vec<_>>()}),
+                Err(e) => json!({"unsupported":e.to_string()}),
+            };
             let constraints = match d.sketch_constraints() {
                 Ok(sketches) => json!({"records":sketches.iter().map(|s|json!({"geometry":s.geometry,"feature":s.feature,"constraints":s.constraints.iter().map(|c|match c {
+                    solvecraft_io::f3d::SketchConstraint::Symmetry {id,axis,entities} => json!({"type":"symmetry","id":id,"axis":axis,"entities":entities}),
                     solvecraft_io::f3d::SketchConstraint::Coincident {id,points} => json!({"type":"coincident","id":id,"points":points}),
                     solvecraft_io::f3d::SketchConstraint::Diameter {id,circle,binding} => json!({"type":"diameter","id":id,"circle":circle,"binding":binding}),
                     solvecraft_io::f3d::SketchConstraint::Radius {id,circle,binding} => json!({"type":"radius","id":id,"circle":circle,"binding":binding}),
@@ -239,7 +244,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
             };
             json!({"path": d.path, "build": d.build, "layout": d.layout, "classes": d.classes.len(),
             "objects": d.records.len(), "secondary_records": d.records.iter().filter(|r| r.secondary_offset.is_some()).count(),
-            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_points":points,"sketch_circles":circles,"sketch_arcs":arcs,"sketch_lines":lines,"history":history,"timeline":timeline,"operation_owners":operation_owners,"circle_profiles":profiles,"sketch_profiles":sketch_profiles,"sketch_constraints":constraints})
+            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_points":points,"sketch_circles":circles,"sketch_arcs":arcs,"sketch_lines":lines,"history":history,"timeline":timeline,"operation_owners":operation_owners,"circle_profiles":profiles,"sketch_profiles":sketch_profiles,"sketch_constraints":constraints,"constraint_graphs":constraint_graphs})
         })
         .collect();
     Ok(json!({"path": path, "editable_history_imported": false, "designs": summaries,

@@ -42,7 +42,7 @@ mod radial_tests;
 #[cfg(test)]
 mod round_profile_tests;
 pub use circles::{SketchArc, SketchCircle};
-pub use constraints::{CurveRelation, LinearOrientation, SketchConstraint, SketchConstraints};
+pub use constraints::{CurveRelation, LinearOrientation, SketchConstraint, SketchConstraintGraph, SketchConstraints};
 pub use entity::EntityMetadata;
 pub use history::{HistoryFeature, HistoryKind, SketchPlacement, TimelineEntry};
 pub use import::import_f3d;
@@ -346,5 +346,7 @@ pub fn read_f3d(bytes: &[u8]) -> Result<Vec<Design>> {
 
 #[cfg(test)]
 mod relationship_tests;
+#[cfg(test)]
+mod symmetry_tests;
 #[cfg(test)]
 mod tests;
