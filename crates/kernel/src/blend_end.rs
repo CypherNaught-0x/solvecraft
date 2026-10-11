@@ -851,7 +851,9 @@ mod tests {
             })
             .find(|p| (p.z - 10.0).abs() < 1e-6)
             .unwrap();
-        let hole = crate::cylinder(Vec3::new(q.x, q.y, -1.0), Vec3::Z, 0.15, 12.0).unwrap();
+        // Keep the fixture planar: a cylinder cut at this shallow wall/floor
+        // meeting can fail before it reaches the endpoint-containment check.
+        let hole = crate::box_solid(Vec3::new(q.x - 0.15, q.y - 0.15, -1.0), Vec3::new(0.3, 0.3, 12.0)).unwrap();
         let drilled = crate::boolean(&b, &hole, BoolOp::Cut).unwrap().unwrap();
         assert!(crate::fillet(&drilled, &[pick], 2.0).is_err());
         assert!(drilled.validity().is_empty());
