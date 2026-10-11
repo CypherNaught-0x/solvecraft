@@ -65,7 +65,13 @@ headline counts in-scope tabs only and lists the deferred ones separately.
 
 - Fillets and chamfers: constant, variable-radius and chord-length fillets; a radius per edge,
   rounds next to earlier rounds of another radius, and smooth corner patches where three rounds
-  meet (a sphere for equal radii); straight edges (convex or concave) between planar faces with perpendicular
+  meet (a sphere for equal radii). At orthogonal corners with a unique smallest radius,
+  a single trimmed setback patch meets all six neighboring faces; a dominant radius uses a
+  four-sided patch. Sequential fillets rebuild connected earlier rounds together. Both patch
+  forms preserve ten faces on the reference box, with checked boundary
+  tangency and control-hull containment. The interior is an approximation (reference volumes
+  within 0.1%), not an exact reproduction of another kernel's proprietary surface;
+  straight edges (convex or concave) between planar faces with perpendicular
   planar end faces (equal-distance chamfers also meet sloped planar end faces, including inner
   basin rims within the rim width); convex fillets also meet sloped planar ends and reflex
   corners around pocket rims, with unequal wall slopes and extensions confined to the face;
