@@ -110,6 +110,9 @@ pub struct Link {
     /// Persistent model face identity, resolved by the document before geometry refresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub face_name: Option<String>,
+    /// Persistent edge identity. Missing identities keep cached geometry and report loss.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_name: Option<String>,
     /// Automatically projected borders owned by a durable sketch face attachment.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_face: bool,
@@ -430,7 +433,7 @@ impl Sketch {
             return Err(SketchError::TooLarge);
         }
         let id = self.fresh("j")?;
-        self.links.push(Link { id: id.clone(), kind, source, face_name: None, auto_face: false, lost: false });
+        self.links.push(Link { id: id.clone(), kind, source, face_name: None, edge_name: None, auto_face: false, lost: false });
         self.build_link(&id, &lay)?;
         Ok(id)
     }

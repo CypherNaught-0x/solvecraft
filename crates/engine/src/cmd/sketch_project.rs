@@ -202,9 +202,17 @@ pub(super) fn add_link(s: &Session, doc: &Document, id: u64, sk: &mut Sketch, ki
     } else {
         None
     };
+    let edge_name = if let LinkSource::Edge { body, .. } = &r.source {
+        st.body(body).and_then(|body| {
+            r.edge_index.and_then(|index| solvecraft_doc::naming::edge_names(body).get(index).filter(|name| !name.is_empty()).cloned())
+        })
+    } else {
+        None
+    };
     let link = sk.add_link_with_wires(kind, r.source, &r.geom, &r.wires)?;
     if let Some(l) = sk.links.iter_mut().find(|l| l.id == link) {
         l.face_name = name;
+        l.edge_name = edge_name;
     }
     Ok(link)
 }

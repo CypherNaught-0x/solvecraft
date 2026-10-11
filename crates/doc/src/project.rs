@@ -35,6 +35,8 @@ pub struct Resolved {
     /// Exact face selected during this resolution, before its closest point is
     /// projected onto an edge shared with another face. Computed metadata only.
     pub face_index: Option<usize>,
+    /// Exact edge selected before any projection or closest-point conversion.
+    pub edge_index: Option<usize>,
 }
 
 /// Resolutions of body-based references, keyed by the reference, the sketch plane and the
@@ -98,6 +100,7 @@ fn resolve_uncached(
     let lost = |what: &str| DocError::Invalid(format!("{what} no longer exists"));
     let mut moved = false;
     let mut face_index = None;
+    let mut edge_index = None;
     let mut source = src.clone();
     let mut wires: Vec<Vec<Vec3>> = Vec::new();
     // Included curves that leave the sketch plane stay 3D.
@@ -109,6 +112,7 @@ fn resolve_uncached(
         LinkSource::Edge { body, at } => {
             let (bi, mesh) = body_mesh(st, body, *at)?;
             let (e, q, d) = nearest_edge(&mesh, *at).ok_or_else(|| lost("the edge"))?;
+            edge_index = Some(e);
             let size = mesh.bounds().diagonal().max(1e-9);
             if d > size * 0.25 {
                 return Err(lost("the edge"));
@@ -270,13 +274,46 @@ fn resolve_uncached(
     if geom.is_empty() && wires.is_empty() {
         return Err(DocError::Invalid(format!("the {} projects to nothing on this sketch plane", src.describe())));
     }
-    Ok(Resolved { geom: merge_split_circles(geom), wires, source, moved, face_index })
+    Ok(Resolved { geom: merge_split_circles(geom), wires, source, moved, face_index, edge_index })
 }
 
 /// Re-resolve every link of a sketch (in place). Returns warnings for lost, moved or rebuilt
 /// links; lost links keep their last geometry.
 fn lost(reference: &str) -> DocError {
     DocError::Unknown(format!("{reference} no longer exists"))
+}
+
+/// Resolve the actual named edge, without a second position-based selection that
+/// could choose another edge at a shared vertex or an overlapping body.
+fn resolve_named_edge(st: &ModelState, plane: &Plane, kind: LinkKind, src: &LinkSource, name: &str) -> Result<Resolved> {
+    let LinkSource::Edge { body, .. } = src else { return Err(DocError::Invalid("edge identity requires an edge source".into())) };
+    let target = st.body(body).ok_or_else(|| lost("named projection body"))?;
+    let mesh = target.mesh();
+    if name.is_empty() || mesh.edges.len() > 2_000_000 || mesh.triangles.len() > 2_000_000 {
+        return Err(DocError::Invalid("invalid named edge projection or work limit exceeded".into()));
+    }
+    let names = crate::naming::edge_names(target);
+    let mut matches = names.iter().enumerate().filter(|(_, candidate)| candidate.as_str() == name);
+    let index = matches.next().map(|(i, _)| i).ok_or_else(|| lost("named projection edge"))?;
+    if matches.next().is_some() {
+        return Err(DocError::Invalid("ambiguous named projection edge".into()));
+    }
+    let pts = mesh.edges.get(index).ok_or_else(|| lost("named projection edge"))?;
+    let at = pts.first().copied().ok_or_else(|| lost("empty named projection edge"))?;
+    let mut wires = Vec::new();
+    let size = pts.iter().fold(1.0_f64, |m, p| m.max(p.len()));
+    let geom = match kind {
+        LinkKind::Intersect => section_of_polyline(plane, pts),
+        LinkKind::Include if pts.iter().any(|p| plane.height(*p).abs() > size * 1e-7) => {
+            wires.push(pts.clone());
+            Vec::new()
+        }
+        _ => fit_world(plane, pts),
+    };
+    if geom.is_empty() && wires.is_empty() {
+        return Err(DocError::Invalid("named edge projects to nothing on this sketch plane".into()));
+    }
+    Ok(Resolved { geom, wires, source: LinkSource::Edge { body: body.clone(), at }, moved: false, face_index: None, edge_index: Some(index) })
 }
 
 fn resolve_named_face(st: &ModelState, plane: &Plane, kind: LinkKind, body: &str, index: usize, at: Vec3) -> Result<Resolved> {
@@ -302,7 +339,7 @@ fn resolve_named_face(st: &ModelState, plane: &Plane, kind: LinkKind, body: &str
     if geom.is_empty() {
         return Err(DocError::Invalid("named face projects to nothing on this sketch plane".into()));
     }
-    Ok(Resolved { geom, wires: Vec::new(), source: LinkSource::Face { body: body.into(), at }, moved: false, face_index })
+    Ok(Resolved { geom, wires: Vec::new(), source: LinkSource::Face { body: body.into(), at }, moved: false, face_index, edge_index: None })
 }
 
 fn projection_face_edges(body: &crate::ModelBody, mesh: &Mesh, index: u32, plane: &Plane) -> Result<Vec<usize>> {
@@ -388,6 +425,7 @@ pub fn resolve_face_indices(st: &ModelState, plane: &Plane, kind: LinkKind, body
         source: LinkSource::Face { body: body.name.clone(), at: point },
         moved: false,
         face_index: if indices.len() == 1 { indices.first().copied() } else { None },
+        edge_index: None,
     })
 }
 
@@ -515,7 +553,9 @@ fn refresh_links_in(
                 continue;
             }
         }
-        let resolved = if l.auto_face {
+        let resolved = if let Some(name) = &l.edge_name {
+            resolve_named_edge(st, plane, l.kind, &source, name)
+        } else if l.auto_face {
             anchor
                 .filter(|anchor| {
                     l.face_name.as_ref() == Some(&anchor.target.name) && matches!(&l.source,LinkSource::Face {body,..} if *body==anchor.target.body)

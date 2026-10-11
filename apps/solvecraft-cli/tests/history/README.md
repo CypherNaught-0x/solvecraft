@@ -23,6 +23,7 @@ recipe, independent expectations and optional edits.
 | arc-extrude | Shared arc/chord endpoints, radius and height edits | 1350π |
 | rectangle-extrude | Width/depth dimensions, dependent expression | 10200 |
 | projected-circle | Source sketch link, diameter edits, extrusion | 5040π |
+| projected-body-edge | Persistent edge of one of two overlapping bodies, large edits | 7920π |
 | centerline-extrude | Axis crossing a rectangle stays out of profiles, dimension edits | 10200 |
 | aligned-dimension | Width and diagonal distance, dependent side and bounds | 12000 |
 | rectangle-negative | Rectangular prism with downward height | 10200 |
@@ -30,6 +31,13 @@ recipe, independent expectations and optional edits.
 
 The annulus uses radii 30 and 10 mm with height 12 mm, giving π(R² − r²)h.
 The semicircular segment uses radius 15 mm and height 12 mm, giving πr²h/2.
+
+The body-edge fixture has three independent overlapping cylinders, all with
+radius 12 mm and heights 35, 11 and 9 mm. The last circle projects the top edge
+of the first extrusion, selecting both semicircular boundary edges. Their summed
+volume is πr²(35 + 11 + 9). Increasing
+diameter to 120 mm and reducing the first height to 5 mm exercise persistent
+edge selection beyond the original position-based search tolerance.
 
 The rectangular prisms are 30 × 20 × 17 mm; expectations use width × depth × height.
 The aligned-dimension prism has width 30 mm, diagonal 50 mm and height 10 mm.

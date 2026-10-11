@@ -2,6 +2,24 @@ use serde_json::json;
 use solvecraft_engine::Session;
 
 #[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with the body-reference API controls"]
+fn topology_operation_owners_distinguish_overlapping_source_extrusions() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let mut s = Session::default();
+    let original = s.doc.clone();
+    for (name, expected) in [
+        ("body-reference-top", vec![(300, 207), (301, 242), (302, 242), (303, 279), (304, 334), (305, 334)]),
+        ("body-reference-bottom", vec![(300, 207), (301, 242), (302, 242), (303, 279), (304, 334), (305, 334)]),
+        ("body-reference-second", vec![(300, 207), (301, 242), (302, 242), (303, 275), (304, 275), (305, 310), (306, 365), (307, 365)]),
+    ] {
+        let result = s.execute("file.inspect_f3d", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap();
+        let got = &result["designs"][0]["operation_owners"]["records"];
+        assert_eq!(*got, json!(expected.into_iter().map(|(tag, feature)| json!({"tag":tag,"feature":feature})).collect::<Vec<_>>()), "{name}");
+        assert!(std::sync::Arc::ptr_eq(&original, &s.doc));
+    }
+}
+
+#[test]
 fn oversized_f3d_reads_fail_before_archive_decoding() {
     let path = std::env::temp_dir().join(format!("solvecraft-f3d-cap-{}.f3d", std::process::id()));
     let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();

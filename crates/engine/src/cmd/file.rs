@@ -168,6 +168,10 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 Ok(circles) => json!({"coordinate_frame":"sketch_local","length_unit":"cm","records":circles.iter().map(|c| json!({"id":c.id,"sketch":c.sketch,"center_point":c.center_point,"center":c.center,"normal":c.normal,"x_axis":c.x_axis,"radius":c.radius,"construction":c.construction,"reference":c.reference,"profile_id":c.profile_id})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
+            let operation_owners = match d.operation_owners() {
+                Ok(owners) => json!({"records":owners.into_iter().map(|(tag,feature)|json!({"tag":tag,"feature":feature})).collect::<Vec<_>>()}),
+                Err(e) => json!({"unsupported":e.to_string()}),
+            };
             let history = match d.history() {
                 Ok(features) => json!({"records":features.iter().map(|f| {
                     let kind = match &f.kind {
@@ -218,7 +222,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
             };
             json!({"path": d.path, "build": d.build, "layout": d.layout, "classes": d.classes.len(),
             "objects": d.records.len(), "secondary_records": d.records.iter().filter(|r| r.secondary_offset.is_some()).count(),
-            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_circles":circles,"sketch_arcs":arcs,"sketch_lines":lines,"history":history,"circle_profiles":profiles,"sketch_profiles":sketch_profiles,"sketch_constraints":constraints})
+            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_circles":circles,"sketch_arcs":arcs,"sketch_lines":lines,"history":history,"operation_owners":operation_owners,"circle_profiles":profiles,"sketch_profiles":sketch_profiles,"sketch_constraints":constraints})
         })
         .collect();
     Ok(json!({"path": path, "editable_history_imported": false, "designs": summaries,

@@ -585,3 +585,41 @@ circle exports and three projected rectangle exports. Source edits, reopening,
 undo and edited-cylinder rendering were verified. Integrated upstream main
 through 6f872c7 passes full CI: 26 binaries, 64 IO tests, twenty native fixtures,
 553 engine tests and WASM. The opening guard completes in 0.91 seconds.
+
+
+### Topology-operation ownership and persistent edge projections
+
+Modern operation-map records (`5D89B935-3F04-4CAB-81F5-E7B309E7E13F`,
+version 1) associate native topology tags with feature records in both directions.
+`file.inspect_f3d` reports these as `operation_owners`. The bounded reader rejects
+duplicate tags/features, missing objects, conflicting maps, unsupported metadata
+and truncated payloads. Top/bottom circular-edge controls share a producing
+extrusion; a second overlapping extrusion has different operation tags. The native
+feature identities were checked against independently captured public API tokens.
+Tags are not bulk-record IDs and no geometry matching is used for this inspection.
+The additional populated list in legacy files and the version 0 map remain
+unsupported; their meaning is not inferred from empty modern controls.
+
+New SolveCraft edge projection links also retain a persistent edge name and resolve
+that exact edge on the specified body. This prepares the document layer for native
+body-edge references. Large radius/height edits cannot reselect a nearby edge or
+an overlapping body. A missing or ambiguous name marks the link lost and keeps its
+last geometry. Existing unnamed links keep their historical behavior. Clone
+remapping preserves both feature and body identities.
+
+The twenty-first original fixture, `projected-body-edge`, checks three overlapping
+cylinders and a projection of the first cylinder's top edge. Analytic summed
+volume, bounds, a fivefold diameter increase, height reduction, reopening and undo
+are covered. Separate regression tests verify lost-reference handling even when
+another body remains at the old coordinates. No Fusion output is committed.
+
+F3D body-edge import itself remains unsupported: the native selector, body
+metadata and complete edge-recipe interpretation still need verified decoding.
+This operation map and persistent link support do not imply general F3D history
+reconstruction.
+
+Validation: upstream `ef8f6ca` is integrated. Full `cargo xtask ci` passed
+27 test binaries, 66 I/O tests, 107 document tests, 558 engine tests, 198 kernel
+tests, 299 UI tests, all 21 native fixtures and ten-crate WASM checking. The
+opening-performance test passed in 0.86 seconds. All seventeen local F3D import
+groups and the three body-reference operation-map controls passed separately.

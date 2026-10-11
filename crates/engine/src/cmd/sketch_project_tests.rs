@@ -14,6 +14,45 @@ fn ids(v: &Value) -> Vec<String> {
 }
 
 #[test]
+fn named_edge_projection_follows_large_edits_and_never_switches_bodies() {
+    let mut s = Session::default();
+    for name in ["Control", "Target"] {
+        run(&mut s, "solid.cylinder", json!({"radius":12,"height":35,"body_name":name,"name":name}));
+    }
+    let producer = s.doc.find_feature("Target").unwrap().id;
+    let radius = s.doc.find_feature("Target").unwrap().param_names[0].clone();
+    let height = s.doc.find_feature("Target").unwrap().param_names[1].clone();
+    let id = run(&mut s, "sketch.create", json!({"plane":"XY"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.project", json!({"refs":[{"body":"Target","edge":[12,0,35]}]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let name = s.doc.sketch(id).unwrap().links[0].edge_name.clone().unwrap();
+    assert!(name.contains(&format!("F{producer}:")), "{name}");
+    run(&mut s, "parameters.change", json!({"name":radius,"expression":"60 mm"}));
+    run(&mut s, "parameters.change", json!({"name":height,"expression":"5 mm"}));
+    let verify = |s: &Session| {
+        let state = s.model.state();
+        let sk = &state.sketch(id).unwrap().sketch;
+        assert!(!sk.links[0].lost);
+        assert_eq!(sk.links[0].edge_name.as_ref(), Some(&name));
+        assert!(matches!(&sk.links[0].source,solvecraft_sketch::LinkSource::Edge {body,at} if body=="Target" && (at.z-5.).abs()<1e-6));
+        let radius = match sk.curves[0].kind {
+            solvecraft_sketch::CurveKind::Circle { r, .. } => r,
+            solvecraft_sketch::CurveKind::Arc { c, a, .. } => sk.points[c].pos.dist(sk.points[a].pos),
+            ref curve => panic!("expected circular edge, got {curve:?}"),
+        };
+        assert!((radius - 60.).abs() < 1e-6, "radius {radius}");
+    };
+    verify(&s);
+    s = Session::new(solvecraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    verify(&s);
+    run(&mut s, "timeline.suppress", json!({"feature":producer,"suppressed":true}));
+    assert!(s.model.state().body("Control").is_some());
+    assert!(s.model.state().sketch(id).unwrap().sketch.links[0].lost);
+    run(&mut s, "edit.undo", json!({}));
+    verify(&s);
+}
+
+#[test]
 fn manual_projection_captures_the_requested_coincident_body_producer() {
     let mut s = Session::default();
     run(&mut s, "solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Control","name":"ControlFeature"}));

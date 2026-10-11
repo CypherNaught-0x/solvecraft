@@ -21,6 +21,7 @@ mod import;
 #[cfg(test)]
 mod import_tests;
 mod lines;
+mod operations;
 mod parameters;
 #[cfg(test)]
 mod plane_tests;
