@@ -8,7 +8,7 @@ fn recipes() -> Vec<PathBuf> {
     let mut paths: Vec<_> =
         std::fs::read_dir(dir).unwrap().map(|p| p.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
     paths.sort();
-    assert_eq!(paths.len(), 21);
+    assert_eq!(paths.len(), 22);
     paths
 }
 
@@ -72,6 +72,14 @@ fn simple_history_files_replay_reopen_edit_and_undo() {
         let measure = volume(&mut s, original_volume, &label);
         assert_eq!(measure["body_count"], expected["body_count"], "{label}");
         assert_eq!(json!(s.doc.features.iter().map(|f| &f.name).collect::<Vec<_>>()), expected["features"], "{label}");
+        if let Some(sketches) = expected["sketches"].as_array() {
+            for check in sketches {
+                let f = s.doc.find_feature(check["name"].as_str().unwrap()).unwrap();
+                let sketch = s.doc.sketch(f.id).unwrap();
+                assert_eq!(json!(sketch.curves.len()), check["curves"], "{label}");
+                assert_eq!(json!(sketch.links.len()), check["links"], "{label}");
+            }
+        }
         // Aggregate world bounds catch incorrect sketch placement and direction.
         bounds(&measure, expected, &label);
         for edit in recipe["edits"].as_array().unwrap() {

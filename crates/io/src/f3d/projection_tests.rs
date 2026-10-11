@@ -1,7 +1,7 @@
 use super::import_tests::{Fixture, common, fixture, volume};
 use super::relationship_tests::{reference, refs, string, u32, u64, wide};
 
-fn projected_circle() -> Fixture {
+pub(super) fn projected_circle() -> Fixture {
     let mut f = fixture(false);
     let mut b = vec![0; 6];
     reference(&mut b, 4);

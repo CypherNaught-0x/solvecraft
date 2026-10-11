@@ -316,6 +316,66 @@ fn resolve_named_edge(st: &ModelState, plane: &Plane, kind: LinkKind, src: &Link
     Ok(Resolved { geom, wires, source: LinkSource::Edge { body: body.clone(), at }, moved: false, face_index: None, edge_index: Some(index) })
 }
 
+/// Join an explicitly named closed edge chain and require a circular projection.
+/// Names determine membership; endpoint incidence determines order. A missing
+/// edge or changed shape fails instead of falling back to a nearby boundary.
+pub fn resolve_edge_circle(st: &ModelState, plane: &Plane, body: &str, selected: &[String]) -> Result<Resolved> {
+    let target = st.body(body).ok_or_else(|| lost("circular projection body"))?;
+    let mesh = target.mesh();
+    if selected.is_empty() || selected.len() > 128 || mesh.edges.len().saturating_mul(selected.len()) > 2_000_000 || mesh.triangles.len() > 2_000_000
+    {
+        return Err(DocError::Invalid("circular edge projection work limit exceeded".into()));
+    }
+    let names = crate::naming::edge_names(target);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut edges = Vec::new();
+    let mut points = 0_usize;
+    for name in selected {
+        if name.is_empty() || !seen.insert(name) {
+            return Err(DocError::Invalid("empty or duplicate circular edge identity".into()));
+        }
+        let mut matching = names.iter().enumerate().filter(|(_, n)| *n == name);
+        let index = matching.next().map(|(i, _)| i).ok_or_else(|| lost("circular projection edge"))?;
+        if matching.next().is_some() {
+            return Err(DocError::Invalid("ambiguous circular projection edge".into()));
+        }
+        let edge = mesh.edges.get(index).filter(|p| p.len() >= 2).ok_or_else(|| lost("circular projection edge geometry"))?;
+        points = points.saturating_add(edge.len());
+        if points > 100_000 {
+            return Err(DocError::Invalid("circular projection point limit exceeded".into()));
+        }
+        edges.push(edge.clone());
+    }
+    let mut chain = edges.pop().ok_or_else(|| lost("circular projection boundary"))?;
+    let tolerance = mesh.bounds().diagonal().max(1.) * 1e-8;
+    while !edges.is_empty() {
+        let last = chain.last().copied().ok_or_else(|| lost("circular boundary endpoint"))?;
+        let mut adjoining = edges.iter().enumerate().filter_map(|(i, e)| {
+            let forward = e.first().is_some_and(|p| p.dist(last) <= tolerance);
+            let reverse = e.last().is_some_and(|p| p.dist(last) <= tolerance);
+            (forward != reverse).then_some((i, reverse))
+        });
+        let next = adjoining.next().ok_or_else(|| lost("connected circular boundary"))?;
+        if adjoining.next().is_some() {
+            return Err(DocError::Invalid("ambiguous circular boundary incidence".into()));
+        }
+        let mut edge = edges.remove(next.0);
+        if next.1 {
+            edge.reverse();
+        }
+        chain.extend(edge.into_iter().skip(1));
+    }
+    if !chain.first().zip(chain.last()).is_some_and(|(a, b)| a.dist(*b) <= tolerance) {
+        return Err(DocError::Invalid("circular boundary is no longer closed".into()));
+    }
+    let geom = fit_world(plane, &chain);
+    if !matches!(geom.as_slice(), [LinkGeom::Circle(_, _)]) {
+        return Err(DocError::Invalid("named boundary no longer projects to one circle".into()));
+    }
+    let at = chain.first().copied().ok_or_else(|| lost("circular boundary endpoint"))?;
+    Ok(Resolved { geom, wires: vec![], source: LinkSource::Edge { body: body.into(), at }, moved: false, face_index: None, edge_index: None })
+}
+
 fn resolve_named_face(st: &ModelState, plane: &Plane, kind: LinkKind, body: &str, index: usize, at: Vec3) -> Result<Resolved> {
     let target = st.body(body).ok_or_else(|| lost("named projection body"))?;
     let mesh = target.mesh();
@@ -553,7 +613,14 @@ fn refresh_links_in(
                 continue;
             }
         }
-        let resolved = if let Some(name) = &l.edge_name {
+        let resolved = if !l.edge_circle.is_empty() {
+            match &source {
+                LinkSource::Edge { body, .. } if l.kind == LinkKind::Project && l.edge_name.is_none() && l.face_name.is_none() && !l.auto_face => {
+                    resolve_edge_circle(st, plane, body, &l.edge_circle)
+                }
+                _ => Err(DocError::Invalid("inconsistent circular projection source".into())),
+            }
+        } else if let Some(name) = &l.edge_name {
             resolve_named_edge(st, plane, l.kind, &source, name)
         } else if l.auto_face {
             anchor

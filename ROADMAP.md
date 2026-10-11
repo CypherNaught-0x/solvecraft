@@ -166,7 +166,7 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   construction, selected circular profiles and coincidence/diameter relationships.
   Twenty-five local Fusion controls cover dimension edits, reversal, renaming,
   placement, reordering, body operations, suppression and constraint removal.
-  Twenty-one original native SolveCraft fixtures check analytic volumes/bounds and edits.
+  Twenty-two original native SolveCraft fixtures check analytic volumes/bounds and edits.
   `doc.open` now reconstructs verified layout-8 circle/line/arc sketches and one-sided
   extrusions as editable history, with driving parameters, fixation, taper and
   atomic failure. Thirty local native imports check volumes/placement; original
@@ -178,8 +178,10 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   geometry. Sketch-to-sketch line/circle projections retain source links, including
   shared vertices, and follow source edits after reopening. Native topology-operation
   tags now expose verified feature ownership. SolveCraft edge links retain persistent
-  edge names across large edits and overlapping bodies. F3D body-edge projections
-  and other unresolved source schemas remain unsupported;
+  edge names across large edits and overlapping bodies. Verified circular cap-edge
+  projections from positive, untapered independent extrusions now import as single
+  associated circles, including when the kernel boundary uses multiple edges.
+  Other body-edge projections and unresolved source schemas remain unsupported;
   driven dimensions fail atomically. Native mm/degree feature-input
   names now survive timeline edits with their expression dependencies. Arc endpoints,
   major/rotated sweeps and profiles with holes retain exact curve references, with

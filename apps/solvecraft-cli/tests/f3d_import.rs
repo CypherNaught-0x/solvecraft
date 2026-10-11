@@ -33,6 +33,10 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-connections-measurements.json",
         "fusion-projection-history-measurements.json",
         "fusion-projected-rectangle-measurements.json",
+        "fusion-body-projection-measurements.json",
+        "fusion-body-reference-top-measurements.json",
+        "fusion-body-reference-bottom-measurements.json",
+        "fusion-body-reference-second-measurements.json",
     ] {
         let cases: Value = serde_json::from_slice(&std::fs::read(dir.join(source)).unwrap()).unwrap();
         for (name, api) in cases.as_object().unwrap() {
@@ -461,6 +465,59 @@ fn projected_history_follows_source_edits_after_reopening() {
         s.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(s.doc, original);
         volume(&mut s, base["volume"].as_f64().unwrap(), "undo projection edit");
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with body-reference controls"]
+fn projected_body_circle_keeps_its_body_through_edits_and_reopening() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    for case in ["top", "bottom", "second"] {
+        let name = format!("body-reference-{case}");
+        let api: Value = serde_json::from_slice(&std::fs::read(dir.join(format!("fusion-{name}-measurements.json"))).unwrap()).unwrap();
+        let api = &api[&name];
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap();
+        let source = s.doc.find_feature(api["source_feature"].as_str().unwrap()).unwrap();
+        let producer = source.id;
+        let height = source.param_names[0].clone();
+        let projected = s
+            .doc
+            .features
+            .iter()
+            .filter_map(|f| match &f.kind {
+                solvecraft_engine::doc::FeatureKind::Sketch { sketch, .. } if !sketch.links.is_empty() => Some(f.id),
+                _ => None,
+            })
+            .next()
+            .unwrap();
+        let verify = |s: &Session| {
+            let state = s.model.state();
+            let sketch = &state.sketch(projected).unwrap().sketch;
+            assert_eq!(sketch.curves.len(), 1);
+            assert!(!sketch.links[0].lost);
+            assert_eq!(sketch.links[0].edge_circle.len(), 2);
+            let role = if case == "bottom" { "start" } else { "top" };
+            assert!(sketch.links[0].edge_circle.iter().all(|n| n.contains(&format!("F{producer}:{role}"))));
+            assert!(
+                matches!(&sketch.links[0].source, solvecraft_engine::doc::sketch::LinkSource::Edge {body,..} if body==api["source_body"].as_str().unwrap())
+            );
+        };
+        verify(&s);
+        s.execute("parameters.change", &json!({"name":api["diameter_parameter"],"expression":"160 mm"})).unwrap();
+        s.execute("parameters.change", &json!({"name":height,"expression":"5 mm"})).unwrap();
+        verify(&s);
+        let expected = 64. * std::f64::consts::PI * if case == "second" { 8.5 } else { 3.5 };
+        volume(&mut s, expected, &name);
+        let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+        let mut reopened = Session::new(reopened);
+        verify(&reopened);
+        volume(&mut reopened, expected, &name);
+        reopened.execute("parameters.change", &json!({"name":api["diameter_parameter"],"expression":"60 mm"})).unwrap();
+        verify(&reopened);
+        volume(&mut reopened, expected * 9. / 64., &name);
+        s.execute("edit.undo", &json!({})).unwrap();
+        verify(&s);
     }
 }
 

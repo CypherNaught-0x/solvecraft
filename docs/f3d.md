@@ -623,3 +623,45 @@ Validation: upstream `ef8f6ca` is integrated. Full `cargo xtask ci` passed
 tests, 299 UI tests, all 21 native fixtures and ten-crate WASM checking. The
 opening-performance test passed in 0.86 seconds. All seventeen local F3D import
 groups and the three body-reference operation-map controls passed separately.
+
+
+### Editable circular body-edge projections
+
+Native body-edge selectors now reconstruct the verified circular start/end cap
+edges of positive, untapered, independent circular extrusions. The selector's
+body handle names both the native body and its producing feature; the feature's
+output list must point back to that handle. The independently decoded operation
+map and mapping-side tracking recipe must agree with the selector. Source and
+tracking identities have distinct verified final role markers. Unknown recipe
+trees, multi-body outputs, mismatched references and unsupported producers fail
+atomically. Cached native circles are validation data, never replacement solids.
+
+The importer resolves the source profile's persistent side/cap identities on the
+regenerated body. SolveCraft's two semicircular edges become one circular sketch
+link, retaining the native curve and center IDs. Every recompute follows the same
+named edges, joins them by endpoint incidence and requires one closed circular
+projection. Lost members or changed shapes retain cached geometry with a lost-link
+warning. Generic body edges, taper, negative source extents, booleans and changed
+topology still need further native schemas and reference policies.
+
+`sketch.project` also accepts `circle: true` with explicitly selected body edges.
+Incomplete chains, duplicate edges, mixed bodies and noncircular projections are
+rejected. The twenty-second original fixture (`projected-body-circle`) checks
+three overlapping extrusions, one projected circle/link, analytic volume/bounds,
+large source edits, reopening and undo. File format 14 preserves grouped circular
+edge identities; existing links keep their previous semantics during migration.
+
+Original field-authored records cover both cap roles, malformed/truncated
+selectors, ownership, tracking and edits in regular CI. Seven local native exports
+cover top/bottom cap selection, overlapping source bodies, diameter edits and target
+height edits. Source diameter/height changes, edits after reopening and volume
+checks also pass against those controls. All eighteen local F3D import groups pass.
+General editable F3D import remains incomplete, including the larger supplied
+feature histories. No Fusion-generated assets are committed.
+
+Validation: upstream `1d30480` is integrated. Full `cargo xtask ci` passed
+28 test binaries, including 68 I/O tests, 107 document tests, 559 engine tests,
+198 kernel tests, 301 UI tests, all 22 native fixtures and ten-crate WASM checking.
+The opening-performance test passed in 0.91 seconds. All eighteen local F3D import
+groups passed; the actual imported overlapping-body control was rendered after
+source diameter and height edits.

@@ -6,8 +6,12 @@ pub(super) const CLASS: &str = "F1451EC8-11A4-4952-84ED-5AB7C13E2E83";
 
 pub(super) struct Projection {
     pub target: u64,
-    pub source_geometry: u64,
-    pub source_tag: u64,
+    pub source: Source,
+}
+
+pub(super) enum Source {
+    Sketch { geometry: u64, tag: u64 },
+    Body(super::body_projections::Edge),
 }
 
 pub(super) struct Geometry<'a> {
@@ -24,13 +28,14 @@ pub(super) struct Entities {
 
 impl Geometry<'_> {
     pub fn source(&self, p: &Projection) -> Result<u64> {
+        let Source::Sketch { geometry, tag } = &p.source else { return Err(invalid("expected projected sketch source")) };
         let mut matching = self
             .lines
             .values()
             .map(|c| (c.id, c.sketch, c.profile_id))
             .chain(self.circles.values().map(|c| (c.id, c.sketch, c.profile_id)))
             .chain(self.arcs.values().map(|a| (a.circle.id, a.circle.sketch, a.circle.profile_id)))
-            .filter(|(_, sketch, tag)| *sketch == p.source_geometry && tag.is_some_and(|(tag, _)| tag == p.source_tag));
+            .filter(|(_, sketch, candidate)| sketch == geometry && candidate.is_some_and(|(candidate, _)| candidate == *tag));
         let source = matching.next().ok_or_else(|| invalid("missing projected source curve"))?.0;
         if matching.next().is_some() {
             return Err(invalid("ambiguous projected source curve tag"));
@@ -48,6 +53,7 @@ impl Geometry<'_> {
     ) -> Result<Entities> {
         use solvecraft_doc::sketch::{LinkGeom, LinkKind, LinkSource};
         use solvecraft_geom::Vec2;
+        let Source::Sketch { geometry: source_geometry, .. } = &p.source else { return Err(invalid("expected projected sketch source")) };
         let source = self.source(p)?;
         let point = |id, expected: [f64; 3]| -> Result<Vec2> {
             let v = self
@@ -98,7 +104,7 @@ impl Geometry<'_> {
         };
         for (target, source) in point_ids.iter().zip(&source_points) {
             let source =
-                self.points.get(source).filter(|v| v.sketch == p.source_geometry).ok_or_else(|| invalid("missing projection source point"))?;
+                self.points.get(source).filter(|v| v.sketch == *source_geometry).ok_or_else(|| invalid("missing projection source point"))?;
             let target = self.points.get(target).ok_or_else(|| invalid("missing projection target point"))?;
             let world = planes.0.to_world(Vec2::new(source.position[0] * 10., source.position[1] * 10.));
             let expected = planes.1.to_local(world);
@@ -160,7 +166,6 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id:
         return Err(invalid("multi-entity projection mapping is not supported yet"));
     }
     let tracking = r.reference()?;
-    require_class(classes, tracking, "CB4F4CC2-9D6F-48BA-9B1F-20C1992C9C9C", 2)?;
     let target = r.u64()?;
     if r.u64()? != 1 {
         return Err(invalid("unsupported projection mapping state"));
@@ -172,7 +177,6 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id:
     zeros(&mut r, 2)?;
     let selected = references(&mut r)?;
     let [selected] = selected.as_slice() else { return Err(invalid("projection requires one source")) };
-    require_class(classes, *selected, "5A1BF548-241F-46FD-9FB5-E4B05126EB9D", 1)?;
     // Both selectors carry their owning feature in the final reference.
     let tail = r.bytes.len().checked_sub(11).filter(|at| *at >= r.at).ok_or_else(|| invalid("truncated projection container"))?;
     r.at = tail;
@@ -180,17 +184,28 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id:
         return Err(invalid("projection container belongs to another feature"));
     }
     finish(&r)?;
-    let mut r = payload(records.primary(*selected)?, *selected)?;
-    empty(&mut r)?;
-    zeros(&mut r, 2)?;
-    let identity = r.reference()?;
-    let tail = r.bytes.len().checked_sub(11).filter(|at| *at >= r.at).ok_or_else(|| invalid("truncated projection selector"))?;
-    r.at = tail;
-    if r.reference()? != owner {
-        return Err(invalid("projection selector belongs to another feature"));
-    }
-    finish(&r)?;
-    let (source_geometry, source_tag) = source_identity(records, classes, identity)?;
+    let source = if classes.get(selected).is_some_and(|c| c.id == super::body_projections::SELECTOR) {
+        Source::Body(super::body_projections::selector(records, classes, *selected, owner)?)
+    } else {
+        require_class(classes, *selected, "5A1BF548-241F-46FD-9FB5-E4B05126EB9D", 1)?;
+        let mut r = payload(records.primary(*selected)?, *selected)?;
+        empty(&mut r)?;
+        zeros(&mut r, 2)?;
+        let identity = r.reference()?;
+        let tail = r.bytes.len().checked_sub(11).filter(|at| *at >= r.at).ok_or_else(|| invalid("truncated projection selector"))?;
+        r.at = tail;
+        if r.reference()? != owner {
+            return Err(invalid("projection selector belongs to another feature"));
+        }
+        finish(&r)?;
+        let (geometry, tag) = source_identity(records, classes, identity)?;
+        Source::Sketch { geometry, tag }
+    };
+    let (tracking_class, tracking_version) = match &source {
+        Source::Sketch { .. } => ("CB4F4CC2-9D6F-48BA-9B1F-20C1992C9C9C", 2),
+        Source::Body(_) => ("4B31DA1B-FCD6-4527-BC3E-BE1FBAF867FE", 1),
+    };
+    require_class(classes, tracking, tracking_class, tracking_version)?;
     let mut r = payload(records.primary(tracking)?, tracking)?;
     empty(&mut r)?;
     zeros(&mut r, 1)?;
@@ -203,7 +218,7 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id:
                     return Err(invalid("unsupported projection tracking attributes"));
                 }
                 let related = r.reference()?;
-                require_class(classes, related, "CB4F4CC2-9D6F-48BA-9B1F-20C1992C9C9C", 2)?;
+                require_class(classes, related, tracking_class, tracking_version)?;
             }
         }
         _ => return Err(invalid("unsupported projection tracking metadata")),
@@ -211,10 +226,14 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id:
     let tracked_identity = r.reference()?;
     zeros(&mut r, 1)?;
     finish(&r)?;
-    if source_identity(records, classes, tracked_identity)? != (source_geometry, source_tag) {
+    let agrees = match &source {
+        Source::Sketch { geometry, tag } => source_identity(records, classes, tracked_identity)? == (*geometry, *tag),
+        Source::Body(edge) => super::body_projections::identity(records, classes, tracked_identity, true)? == edge.recipe,
+    };
+    if !agrees {
         return Err(invalid("projection mapping disagrees with its source selector"));
     }
-    Ok(Projection { target, source_geometry, source_tag })
+    Ok(Projection { target, source })
 }
 
 fn source_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64) -> Result<(u64, u64)> {

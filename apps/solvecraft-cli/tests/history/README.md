@@ -24,6 +24,7 @@ recipe, independent expectations and optional edits.
 | rectangle-extrude | Width/depth dimensions, dependent expression | 10200 |
 | projected-circle | Source sketch link, diameter edits, extrusion | 5040π |
 | projected-body-edge | Persistent edge of one of two overlapping bodies, large edits | 7920π |
+| projected-body-circle | Both named circular boundary edges retained as one circle | 7920π |
 | centerline-extrude | Axis crossing a rectangle stays out of profiles, dimension edits | 10200 |
 | aligned-dimension | Width and diagonal distance, dependent side and bounds | 12000 |
 | rectangle-negative | Rectangular prism with downward height | 10200 |
@@ -38,6 +39,8 @@ of the first extrusion, selecting both semicircular boundary edges. Their summed
 volume is πr²(35 + 11 + 9). Increasing
 diameter to 120 mm and reducing the first height to 5 mm exercise persistent
 edge selection beyond the original position-based search tolerance.
+The `projected-body-circle` variant uses `sketch.project` with `circle: true`,
+and additionally verifies that the projection remains one curve and one link.
 
 The rectangular prisms are 30 × 20 × 17 mm; expectations use width × depth × height.
 The aligned-dimension prism has width 30 mm, diagonal 50 mm and height 10 mm.

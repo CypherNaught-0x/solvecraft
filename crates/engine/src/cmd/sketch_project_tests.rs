@@ -14,6 +14,42 @@ fn ids(v: &Value) -> Vec<String> {
 }
 
 #[test]
+fn project_circle_groups_exact_edges_and_rejects_incomplete_or_duplicate_boundaries() {
+    let mut s = Session::default();
+    run(&mut s, "solid.cylinder", json!({"radius":12,"height":35,"body_name":"Source"}));
+    let id = run(&mut s, "sketch.create", json!({"plane":"XY"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.project", json!({"circle":true,"refs":[{"body":"Source","edge":[0,12,35]},{"body":"Source","edge":[0,-12,35]}]}));
+    let sketch = s.doc.sketch(id).unwrap();
+    assert_eq!(sketch.curves.len(), 1);
+    assert!(matches!(sketch.curves[0].kind, solvecraft_sketch::CurveKind::Circle {r,..} if (r-12.).abs()<1e-6));
+    assert_eq!(sketch.links[0].edge_circle.len(), 2);
+    let saved = s.doc.clone();
+    for refs in [
+        json!([{"body":"Source","edge":[0,12,35]}]),
+        json!([{"body":"Source","edge":[0,12,35]},{"body":"Source","edge":[0,12,35]}]),
+        json!([{"body":"Source"}]),
+    ] {
+        assert!(s.execute("sketch.project", &json!({"circle":true,"refs":refs})).is_err());
+        assert_eq!(s.doc, saved);
+    }
+    run(&mut s, "sketch.finish", json!({}));
+    let serialized = serde_json::from_str::<Value>(&s.doc.to_json()).unwrap();
+    for names in [json!(["same", "same"]), json!([""]), json!(42), json!((0..129).map(|i| format!("edge{i}")).collect::<Vec<_>>())] {
+        let mut bad = serialized.clone();
+        bad["features"][1]["sketch"]["links"][0]["edge_circle"] = names;
+        assert!(solvecraft_doc::Document::from_json(&bad.to_string()).is_err());
+    }
+    let mut doc = solvecraft_doc::Document::from_json(&s.doc.to_json()).unwrap();
+    let bad = doc.sketch_mut(id).unwrap();
+    bad.links[0].edge_circle.pop();
+    let loaded = Session::new(doc);
+    let state = loaded.model.state();
+    let sketch = &state.sketch(id).unwrap().sketch;
+    assert!(sketch.links[0].lost);
+    assert!(matches!(sketch.curves[0].kind, solvecraft_sketch::CurveKind::Circle {r,..} if (r-12.).abs()<1e-6));
+}
+
+#[test]
 fn named_edge_projection_follows_large_edits_and_never_switches_bodies() {
     let mut s = Session::default();
     for name in ["Control", "Target"] {

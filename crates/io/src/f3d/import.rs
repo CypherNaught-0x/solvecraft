@@ -90,6 +90,9 @@ impl Design {
         let mut planes: BTreeMap<u64, (String, Plane)> = BTreeMap::new();
         let mut active_bodies = Vec::new();
         let mut body_number = 0;
+        let mut feature_ids = BTreeMap::new();
+        let mut operation_owners = None;
+        let mut projection_model = solvecraft_doc::Model::new();
         for f in history {
             let mut new_body = None;
             let mut new_plane = None;
@@ -147,14 +150,36 @@ impl Design {
                     }
                     for id in &placement.projections {
                         let projection = projections::decode(&records, &classes, *id, f.id)?;
-                        let (source_feature, source_plane) =
-                            sketches.get(&projection.source_geometry).copied().ok_or_else(|| invalid("projection precedes its source sketch"))?;
-                        let entities = native.attach(&projection, geometry, source_feature, (source_plane, plane), &mut sketch)?;
+                        let (entities, namespace) = match &projection.source {
+                            projections::Source::Sketch { geometry: source_geometry, .. } => {
+                                let (source_feature, source_plane) =
+                                    sketches.get(source_geometry).copied().ok_or_else(|| invalid("projection precedes its source sketch"))?;
+                                (native.attach(&projection, geometry, source_feature, (source_plane, plane), &mut sketch)?, (0_u8, *source_geometry))
+                            }
+                            projections::Source::Body(edge) => {
+                                if operation_owners.is_none() {
+                                    operation_owners = Some(self.operation_owners()?);
+                                }
+                                projection_model.evaluate(&doc);
+                                if projection_model.results.iter().any(|r| r.error.is_some()) {
+                                    return Err(invalid("cannot regenerate body projection dependencies"));
+                                }
+                                let state = projection_model.state();
+                                let context = super::body_projections::Context {
+                                    native: &native,
+                                    doc: &doc,
+                                    model: &state,
+                                    features: &feature_ids,
+                                    operations: operation_owners.as_ref().ok_or_else(|| invalid("missing topology operation ownership"))?,
+                                };
+                                (context.attach(&projection, geometry, plane, &mut sketch)?, (1_u8, edge.body))
+                            }
+                        };
                         for (id, index, source_point) in entities.points {
                             if !members.contains(&id) {
                                 return Err(invalid("foreign projected point"));
                             }
-                            let source = (projection.source_geometry, source_point);
+                            let source = (namespace, source_point);
                             if let Some(previous) = projected_sources.insert(id, source) {
                                 if previous != source {
                                     return Err(invalid("shared projected point has conflicting sources"));
@@ -421,6 +446,7 @@ impl Design {
                 }
             };
             let id = doc.add_feature(kind, Some(&f.name))?;
+            feature_ids.insert(f.id, id);
             let feature = doc.features.iter_mut().find(|f| f.id == id).ok_or_else(|| invalid("missing imported feature"))?;
             feature.suppressed = f.suppressed;
             if let Some((geometry, plane)) = new_plane

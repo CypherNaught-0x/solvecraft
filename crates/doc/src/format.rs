@@ -39,13 +39,15 @@
 //! - 13: exact planar shell face anchors retain the shell producer, original certified
 //!   source and distinct inner/outer role. Version 12 anchors retain their identities;
 //!   migration never guesses attachments for older designs.
+//! - 14: exact circular-edge associations may span several named boundary edges.
+//!   Older edge links retain their existing single-edge or positional semantics.
 
 use serde_json::Value;
 
 use crate::{DocError, Document, Result};
 
 /// The format this build writes.
-pub const FORMAT: u32 = 13;
+pub const FORMAT: u32 = 14;
 
 pub fn format_string(n: u32) -> String {
     format!("solvecraft/{n}")
@@ -58,8 +60,21 @@ pub fn version_of(s: &str) -> Option<u32> {
 
 /// JSON-level upgrades: entry `i` turns format `i + 1` into `i + 2`.
 type JsonStep = fn(&mut Value) -> Result<()>;
-const JSON_STEPS: [JsonStep; 12] =
-    [|_| Ok(()), v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, |_| Ok(()), |_| Ok(()), |_| Ok(()), |_| Ok(()), |_| Ok(()), |_| Ok(()), |_| Ok(())];
+const JSON_STEPS: [JsonStep; 13] = [
+    |_| Ok(()),
+    v2_to_v3,
+    v3_to_v4,
+    v4_to_v5,
+    v5_to_v6,
+    |_| Ok(()),
+    |_| Ok(()),
+    |_| Ok(()),
+    |_| Ok(()),
+    |_| Ok(()),
+    |_| Ok(()),
+    |_| Ok(()),
+    |_| Ok(()),
+];
 
 /// Old XZ references retain their exact frame, including nested offset and angled planes.
 /// New origin references use +Y; freezing the old frame avoids changing sketch coordinates,
@@ -408,6 +423,25 @@ fn validate_versioned_geometry(value: &Value) -> Result<()> {
             for link in links {
                 if link.get("auto_face").is_some_and(|marker| !marker.is_boolean()) {
                     return Err(invalid());
+                }
+                if let Some(circle) = link.get("edge_circle") {
+                    let names = circle.as_array().filter(|a| a.len() <= 128).ok_or_else(invalid)?;
+                    let mut seen = std::collections::BTreeSet::new();
+                    for name in names {
+                        let name = name.as_str().filter(|s| !s.is_empty() && s.len() <= 4096).ok_or_else(invalid)?;
+                        if !seen.insert(name) {
+                            return Err(invalid());
+                        }
+                    }
+                    if !names.is_empty()
+                        && (link.get("source").and_then(|s| s.get("type")).and_then(Value::as_str) != Some("edge")
+                            || !matches!(link.get("kind").and_then(Value::as_str), None | Some("project"))
+                            || link.get("edge_name").is_some_and(|v| !v.is_null())
+                            || link.get("face_name").is_some_and(|v| !v.is_null())
+                            || link.get("auto_face").and_then(Value::as_bool) == Some(true))
+                    {
+                        return Err(invalid());
+                    }
                 }
             }
         }

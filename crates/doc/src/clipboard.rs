@@ -377,6 +377,9 @@ impl crate::Feature {
                     if let Some(n) = &mut link.edge_name {
                         *n = remap_topology(n, ids, bodies);
                     }
+                    for n in &mut link.edge_circle {
+                        *n = remap_topology(n, ids, bodies);
+                    }
                 }
             }
             K::ConstructionPlane { plane }

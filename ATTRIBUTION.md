@@ -26,6 +26,7 @@ Generated-in-code assets are original and have no file to list:
 | apps/solvecraft-cli/tests/history/rectangle-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/projected-circle.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/projected-body-edge.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/projected-body-circle.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/centerline-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/aligned-dimension.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/rectangle-negative.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
