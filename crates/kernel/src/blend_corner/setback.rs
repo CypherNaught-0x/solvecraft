@@ -470,6 +470,52 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
                 rows.push(tensor(&bu, &dbv, weight, -dv * normal.dot(y) / normal.dot(z)));
             }
         }
+        if smooth_transition {
+            for boundary in boundaries {
+                let Some((_, axis, _)) = cylinder(&boundary.normal) else { continue };
+                let (lo, hi) = boundary.curve.range_tuple();
+                let start = boundary.sample(lo)?.0;
+                let in_section = |p: Vec3| p.is_finite() && (p - start).dot(axis).abs() <= size * 1e-9;
+                // Only the cross-section joining the constant-radius barrel has
+                // zero axial curvature. A boundary winding along a rim cylinder
+                // need not share that curvature across the new transition.
+                // Certify the section plane with the curve's control hull.
+                let section = match &boundary.curve {
+                    mt::Curve::Line(c) => in_section(from_p3(c.0)) && in_section(from_p3(c.1)),
+                    mt::Curve::BSplineCurve(c) => c.control_points().iter().all(|p| in_section(from_p3(*p))),
+                    mt::Curve::NurbsCurve(c) => {
+                        c.control_points().iter().all(|p| p.w > 0.0 && in_section(Vec3::new(p.x / p.w, p.y / p.w, p.z / p.w)))
+                    }
+                    _ => false,
+                };
+                if !section {
+                    continue;
+                }
+                for i in 1..1024 {
+                    let (p, _) = boundary.sample(lo + (hi - lo) * i as f64 / 1024.0)?;
+                    let q = p - origin;
+                    let (bu, dbu, ddbu) = basis(&ku, q.dot(x) / du, nu)?;
+                    let (bv, dbv, ddbv) = basis(&kv, q.dot(y) / dv, nv)?;
+                    // x/y are affine graph coordinates. The directional second
+                    // derivative along the cylinder axis is therefore a linear
+                    // combination of the graph Hessian. Multiplying by du*dv
+                    // gives this soft condition the same length units as the
+                    // boundary position and derivative rows.
+                    let (a, b) = (axis.dot(x) / du, axis.dot(y) / dv);
+                    let weight = 0.05 * du * dv;
+                    let mut entries = Vec::new();
+                    for (i, ((u, ud), udd)) in bu.iter().zip(&dbu).zip(&ddbu).enumerate() {
+                        for (j, ((v, vd), vdd)) in bv.iter().zip(&dbv).zip(&ddbv).enumerate() {
+                            let value = weight * (udd * v * a * a + 2.0 * ud * vd * a * b + u * vdd * b * b);
+                            if value != 0.0 {
+                                entries.push((i * nv + j, value));
+                            }
+                        }
+                    }
+                    rows.push(Row { entries, rhs: 0.0 });
+                }
+            }
+        }
         let greville = |knots: &[f64], i| -> f64 { knots.iter().skip(i + 1).take(3).sum::<f64>() / 3.0 };
         // Integrate actual spline bending energy in physical coordinates;
         // control-polygon differences bias nonuniform knots and repeated knots.
