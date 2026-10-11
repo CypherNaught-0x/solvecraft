@@ -21,14 +21,16 @@ mod points;
 #[cfg(test)]
 mod polygon_tests;
 mod profiles;
-pub use circles::SketchCircle;
+#[cfg(test)]
+mod round_profile_tests;
+pub use circles::{SketchArc, SketchCircle};
 pub use constraints::{SketchConstraint, SketchConstraints};
 pub use history::{HistoryFeature, HistoryKind, SketchPlacement};
 pub use import::import_f3d;
 pub use lines::SketchLine;
 pub use parameters::Parameter;
 pub use points::SketchPoint;
-pub use profiles::{CircleProfile, SketchProfile};
+pub use profiles::{CircleProfile, ProfileLoop, SketchProfile};
 
 pub const MAX_F3D_BYTES: usize = 256 << 20;
 const MAX_STREAM: usize = 128 << 20;

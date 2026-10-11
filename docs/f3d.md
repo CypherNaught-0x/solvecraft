@@ -1,7 +1,7 @@
 # Native F3D investigation
 
 Status: bounded archive inspection and **editable import of verified layout-8
-circle/line-sketch and one-sided-extrusion history**. General F3D history support remains
+circle/line/arc sketches and one-sided-extrusion history**. General F3D history support remains
 incomplete; the three larger supplied designs do not import yet.
 The project owner authorized clean-room investigation on 2026-10-11 as an
 exception to AGENTS.md's public-specification requirement. Only the supplied
@@ -25,7 +25,7 @@ dialog includes F3D, and the CLI supports opening, measuring and benchmarking it
 Supported reconstruction includes native parameter names and expressions,
 driving diameter and horizontal/vertical distance dimensions, coincidence and
 horizontal/vertical constraints, independent point/curve fixation, construction curves, rigid root sketch placement, feature names/order/suppression,
-single-loop circle and polygon profiles, signed extrusion distances and taper. New-body
+complete outer and inner boundaries for circle, polygon and arc profiles, signed extrusion distances and taper. New-body
 operations and booleans against a sole existing body are supported. Multiple-body
 boolean targeting, two-sided/start/to-object extents, other sketch geometry and
 constraint schemas, assembly transforms and other feature types fail explicitly.
@@ -140,7 +140,7 @@ diameter and coincidence constraints. All 25 controls remain local.
 * Selected circular profiles follow container → profile → tracking record →
   `(primary, secondary)` curve tags, scoped to the referenced sketch. A curve's
   object ID is not its profile tag. The verified schema is a single loop containing
-  one full circle or a chain of finite lines; multiple loops fail explicitly. Ownership and back-references
+  full circles or chains of finite lines and arcs, including inner loops. Intersected partial-curve boundaries still fail explicitly. Ownership and back-references
   are checked, rather than selecting the first circle in a sketch.
 * Generic constraint class `60403D47-0C49-49B0-BDE8-1679608164A2`, version 3, uses
   kind 1 for coincidence between two points. The importer checks kind and operands;
@@ -156,7 +156,7 @@ remain retained in the raw streams, not interpreted as defaults.
 ## Remaining history work
 
 Full extent/start/direction schemas, other sketch geometry and constraints,
-multi-loop profiles, assemblies and native B-reps remain unresolved. Parameter
+intersected partial-curve profiles, assemblies and native B-reps remain unresolved. Parameter
 expressions are preserved and checked against the native cached values; unsupported
 units or expressions fail instead of becoming constants. Native mm/degree input
 parameters now bind directly to feature inputs, so timeline edits update dependent
@@ -205,7 +205,7 @@ test compares expressions, units, values, circle centers and radii directly to
 the separately recorded Fusion API measurements. Actual Fusion files remain
 outside the repository; ordinary CI uses original synthetic records.
 
-Eleven [small editable SolveCraft fixtures](../apps/solvecraft-cli/tests/history/README.md)
+Thirteen [small editable SolveCraft fixtures](../apps/solvecraft-cli/tests/history/README.md)
 provide command recipes, saved documents and independent analytic volume/bounds
 checks. They exercise parameter edits, signed heights, placement, all four body
 operations, reordering, suppression, reopening and undo. These native fixtures run
@@ -296,3 +296,41 @@ The input-identity follow-up passes full CI against the same upstream `2f78d3e`:
 33 IO tests, all 25 test binaries and the ten-crate WASM check. The opening guard
 completed in 0.91 seconds. All seven local import tests pass, including timeline
 editing with a dependent native sketch dimension.
+
+## Complete profiles with holes and arcs
+
+The tracking record contains a schema tag, counted loops, counted curve entries
+per loop, one outer/inner flag per loop, then a zero trailer. Curve entries retain
+orientation separately from boundary role. Five controls cover an annulus with
+independent inner/outer diameter changes, two disjoint holes, and a rectangular
+outer loop with a circular hole. Exactly one outer loop and disjoint complete
+curve identities are required. The importer uses SolveCraft's `WholeBoundaries`
+selection, with canonical outer/hole IDs, so missing holes cannot become solid disks.
+
+Circular geometry class `F0130424-8B7E-4092-93C9-1CA807482534` version 0 also
+represents arcs. Arcs retain angle limits and center/end/start point references,
+followed by a 42-byte flag/presentation section (full circles use 44 bytes).
+Independent fixation/construction controls locate the arc flags; their offsets
+must not be borrowed from the full-circle layout. Endpoint positions are checked
+against the native center, radius, normal, local X axis and angle limits before
+constructing a shared-point SolveCraft arc. Quarter, half, major, rotated negative
+sweep and changed-radius controls check volume and actual API endpoints.
+Fusion's documented
+[arc creation behavior](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/fusion_SketchArcs_addByCenterStartSweep.htm)
+makes arcs counterclockwise even for negative requested sweeps; the native local
+axis changes in that control. Discarding that axis would mirror the result.
+
+The annulus controls additionally verify diameter operand axes 4 and 5; both
+remain diameter relationships. Other axis encodings are rejected. Original
+synthetic tests check analytic volumes, native edits/reopening, shared arc/chord
+points, missing-hole failures, malformed loops and every truncated arc prefix.
+Two original native fixtures add annulus and semicircular-segment volume,
+bounds, dimensional edits and undo checks. General history import remains
+incomplete; these changes do not establish support for the larger supplied files.
+
+This milestone passes full `cargo xtask ci`: 37 IO tests, all 25 test binaries,
+thirteen native history fixtures and ten-crate WASM validation. The opening guard
+completed in 0.87 seconds. All thirteen local evidence groups pass (nine import,
+four inspection); the main import group checks 42 supported controlled archives
+against independent API volumes and reopening. Annulus, major-arc and negative-sweep
+imports were rendered and visually checked; generated evidence remains local.

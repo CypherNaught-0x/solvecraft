@@ -36,9 +36,10 @@ impl Design {
         let named_parameters: BTreeMap<_, _> = parameters.iter().map(|p| (p.name.as_str(), p)).collect();
         let points: BTreeMap<_, _> = self.sketch_points()?.into_iter().map(|p| (p.id, p)).collect();
         let circles: BTreeMap<_, _> = self.sketch_circles()?.into_iter().map(|c| (c.id, c)).collect();
+        let arcs: BTreeMap<_, _> = self.sketch_arcs()?.into_iter().map(|a| (a.circle.id, a)).collect();
         let lines: BTreeMap<_, _> = self.sketch_lines()?.into_iter().map(|l| (l.id, l)).collect();
         let constraints: BTreeMap<_, _> = self.sketch_constraints()?.into_iter().map(|c| (c.geometry, c)).collect();
-        let profiles: BTreeMap<_, _> = self.single_loop_profiles()?.into_iter().map(|p| (p.id, p)).collect();
+        let profiles: BTreeMap<_, _> = self.sketch_profiles()?.into_iter().map(|p| (p.id, p)).collect();
         let mut doc = Document::new(name);
         let mut names = BTreeSet::new();
         for p in &parameters {
@@ -117,6 +118,47 @@ impl Design {
                             let curve = sketch.curves.get_mut(i).ok_or_else(|| invalid("missing imported curve"))?;
                             curve.construction = c.construction;
                             curve.fixed = c.fixed;
+                            curve_indices.insert(*id, i);
+                            if !consumed.insert(*id) {
+                                return Err(invalid("duplicate sketch entity"));
+                            }
+                        }
+                    }
+                    for id in &placement.entities {
+                        if let Some(arc) = arcs.get(id) {
+                            let c = &arc.circle;
+                            if c.sketch != geometry || c.normal != [0., 0., 1.] {
+                                return Err(invalid("unsupported arc placement"));
+                            }
+                            let center = Vec3::new(c.center[0], c.center[1], c.center[2]);
+                            let x = Vec3::new(c.x_axis[0], c.x_axis[1], c.x_axis[2]);
+                            let y = Vec3::new(0., 0., 1.).cross(x);
+                            let position = |angle: f64| center + (x * angle.cos() + y * angle.sin()) * c.radius;
+                            let mut indices = [None; 3];
+                            let mut coords = [Vec2::ZERO; 3];
+                            for (slot, (id, expected)) in
+                                [(c.center_point, center), (arc.start_point, position(arc.start_angle)), (arc.end_point, position(arc.end_angle))]
+                                    .into_iter()
+                                    .enumerate()
+                            {
+                                let point = points.get(&id).filter(|p| p.sketch == geometry).ok_or_else(|| invalid("missing arc point"))?;
+                                let [px, py, pz] = point.position;
+                                if (Vec3::new(px, py, pz) - expected).len() > 1e-9 || pz.abs() > 1e-10 {
+                                    return Err(invalid("arc and point geometry disagree"));
+                                }
+                                let index = point_indices.get(&id).copied().ok_or_else(|| invalid("arc point outside sketch"))?;
+                                if let Some(target) = indices.get_mut(slot) {
+                                    *target = Some(index);
+                                }
+                                if let Some(target) = coords.get_mut(slot) {
+                                    *target = Vec2::new(px * 10., py * 10.);
+                                }
+                            }
+                            let [center, start, end] = coords;
+                            let i = sketch.add_arc(center, start, end, indices, Some(&format!("c{id}"))).map_err(|e| invalid(&e.to_string()))?;
+                            let curve = sketch.curves.get_mut(i).ok_or_else(|| invalid("missing imported arc"))?;
+                            curve.fixed = c.fixed;
+                            curve.construction = c.construction;
                             curve_indices.insert(*id, i);
                             if !consumed.insert(*id) {
                                 return Err(invalid("duplicate sketch entity"));
@@ -211,13 +253,7 @@ impl Design {
                         }
                         active_bodies.clone()
                     };
-                    FeatureKind::Extrude {
-                        sketch,
-                        profiles: ProfileSel::Curves { loops: vec![profile.curves.iter().map(|id| format!("c{id}")).collect()] },
-                        extent,
-                        operation,
-                        targets,
-                    }
+                    FeatureKind::Extrude { sketch, profiles: profile_selection(profile)?, extent, operation, targets }
                 }
             };
             let id = doc.add_feature(kind, Some(&f.name))?;
@@ -261,6 +297,18 @@ impl Design {
         }
         Ok(doc)
     }
+}
+
+fn profile_selection(profile: &SketchProfile) -> Result<ProfileSel> {
+    let ids = |boundary: &ProfileLoop| {
+        let mut ids: Vec<_> = boundary.curves.iter().map(|id| format!("c{id}")).collect();
+        ids.sort();
+        ids
+    };
+    let outer = profile.loops.iter().find(|l| l.outer).ok_or_else(|| invalid("missing outer profile boundary"))?;
+    let mut holes: Vec<_> = profile.loops.iter().filter(|l| !l.outer).map(ids).collect();
+    holes.sort();
+    Ok(ProfileSel::WholeBoundaries { profiles: vec![solvecraft_doc::WholeProfileBoundary { outer: ids(outer), holes }] })
 }
 
 fn plane(matrix: &[f64; 16]) -> Result<Plane> {

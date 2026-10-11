@@ -24,6 +24,8 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-history-measurements.json",
         "fusion-extent-measurements.json",
         "fusion-polygon-measurements.json",
+        "fusion-loop-measurements.json",
+        "fusion-arc-measurements.json",
     ] {
         let cases: Value = serde_json::from_slice(&std::fs::read(dir.join(source)).unwrap()).unwrap();
         for (name, api) in cases.as_object().unwrap() {
@@ -164,6 +166,51 @@ fn driven_dimensions_cannot_silently_become_driving_constraints() {
             assert!(std::sync::Arc::ptr_eq(&before, &s.doc));
             assert!(std::sync::Arc::ptr_eq(&model, &s.model.state()));
         }
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
+fn imported_arcs_preserve_api_endpoints_and_independent_flags() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let cases: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-arc-measurements.json")).unwrap()).unwrap();
+    for (name, api) in cases.as_object().unwrap() {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let solvecraft_engine::doc::FeatureKind::Sketch { sketch, .. } = &s.doc.features[0].kind else { panic!("sketch") };
+        let (curve, indices) = sketch
+            .curves
+            .iter()
+            .find_map(
+                |curve| {
+                    if let solvecraft_engine::doc::sketch::CurveKind::Arc { c, a, b } = curve.kind { Some((curve, [c, a, b])) } else { None }
+                },
+            )
+            .unwrap();
+        assert_eq!(curve.fixed, api["arc"]["fixed"].as_bool().unwrap(), "{name}");
+        assert_eq!(curve.construction, api["arc"]["construction"].as_bool().unwrap(), "{name}");
+        for (index, key) in indices.into_iter().zip(["center", "start", "end"]) {
+            let p = sketch.points[index].pos;
+            assert!((p.x - api["arc"][key][0].as_f64().unwrap() * 10.).abs() < 1e-8, "{name}: {key} x");
+            assert!((p.y - api["arc"][key][1].as_f64().unwrap() * 10.).abs() < 1e-8, "{name}: {key} y");
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
+fn imported_hole_dimensions_regenerate_reopen_and_undo() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let mut s = Session::default();
+    s.execute("doc.open", &json!({"path":dir.join("ring-baseline.f3d")})).unwrap();
+    let original = s.doc.clone();
+    for (name, expression, pi) in [("d1", "70 mm", 22.5), ("d2", "30 mm", 13.5), ("d3", "35 mm", 28.)] {
+        s.execute("parameters.change", &json!({"name":name,"expression":expression})).unwrap();
+        volume(&mut s, pi * std::f64::consts::PI, "edited annulus");
+        let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+        volume(&mut Session::new(reopened), pi * std::f64::consts::PI, "reopened annulus");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(*s.doc, *original);
     }
 }
 

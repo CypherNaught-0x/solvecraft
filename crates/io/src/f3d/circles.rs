@@ -1,4 +1,4 @@
-//! Observed full-circle geometry. Coordinates are sketch-local centimetres;
+//! Observed circle and arc geometry. Coordinates are sketch-local centimetres;
 //! placement and constraints are decoded separately from curve geometry.
 use super::*;
 
@@ -16,8 +16,33 @@ pub struct SketchCircle {
     pub profile_id: Option<(u64, u64)>,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct SketchArc {
+    pub circle: SketchCircle,
+    pub start_point: u64,
+    pub end_point: u64,
+    pub start_angle: f64,
+    pub end_angle: f64,
+}
+
+type CircularRecord = (SketchCircle, Option<(u64, u64, f64, f64)>);
+
 impl Design {
     pub fn sketch_circles(&self) -> Result<Vec<SketchCircle>> {
+        Ok(self.circular_records()?.into_iter().filter_map(|(circle, arc)| arc.is_none().then_some(circle)).collect())
+    }
+
+    pub fn sketch_arcs(&self) -> Result<Vec<SketchArc>> {
+        Ok(self
+            .circular_records()?
+            .into_iter()
+            .filter_map(|(circle, arc)| {
+                arc.map(|(start_point, end_point, start_angle, end_angle)| SketchArc { circle, start_point, end_point, start_angle, end_angle })
+            })
+            .collect())
+    }
+
+    fn circular_records(&self) -> Result<Vec<CircularRecord>> {
         if self.layout != 8 {
             return Err(invalid("circle decoding requires metadata layout 8"));
         }
@@ -37,17 +62,22 @@ impl Design {
             .objects
             .iter()
             .map(|id| {
-                let c = decode(records.primary(*id)?)?;
+                let (c, arc) = decode(records.primary(*id)?)?;
                 if c.id != *id || !sketches.contains(&c.sketch) || !points.contains(&c.center_point) {
                     return Err(invalid("inconsistent circle references"));
                 }
-                Ok(c)
+                if let Some((a, b, _, _)) = arc
+                    && (a == b || a == c.center_point || b == c.center_point || !points.contains(&a) || !points.contains(&b))
+                {
+                    return Err(invalid("inconsistent arc endpoint references"));
+                }
+                Ok((c, arc))
             })
             .collect()
     }
 }
 
-fn decode(bytes: &[u8]) -> Result<SketchCircle> {
+fn decode(bytes: &[u8]) -> Result<CircularRecord> {
     let mut r = Reader { bytes, at: 0 };
     r.string()?;
     let id = r.u64()?;
@@ -79,16 +109,24 @@ fn decode(bytes: &[u8]) -> Result<SketchCircle> {
     let end = number()?;
     let dot = |a: &[f64; 3], b: &[f64; 3]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
     if radius <= 0.0
-        || start != 0.0
-        || (end - std::f64::consts::TAU).abs() > 1e-12
+        || !(end - start).is_finite()
+        || end - start <= 1e-12
+        || end - start > std::f64::consts::TAU + 1e-12
         || (dot(&normal, &normal) - 1.0).abs() > 1e-10
         || (dot(&x_axis, &x_axis) - 1.0).abs() > 1e-10
         || dot(&normal, &x_axis).abs() > 1e-10
     {
-        return Err(invalid("unsupported full-circle geometry"));
+        return Err(invalid("unsupported circular geometry"));
     }
     let center_point = r.reference()?;
-    r.take(4)?;
+    let arc = if (end - start - std::f64::consts::TAU).abs() > 1e-12 {
+        let end_point = r.reference()?;
+        let start_point = r.reference()?;
+        Some((start_point, end_point, start, end))
+    } else {
+        None
+    };
+    r.take(if arc.is_some() { 2 } else { 4 })?;
     let fixed = points::fixed(&mut r)?;
     r.take(3)?;
     let construction = match r.take(1)? {
@@ -106,7 +144,7 @@ fn decode(bytes: &[u8]) -> Result<SketchCircle> {
         (None, None) => None,
         _ => return Err(invalid("incomplete circle profile identity")),
     };
-    Ok(SketchCircle { id, sketch, center_point, center, normal, x_axis, radius, construction, fixed, profile_id })
+    Ok((SketchCircle { id, sketch, center_point, center, normal, x_axis, radius, construction, fixed, profile_id }, arc))
 }
 
 #[cfg(test)]
@@ -138,7 +176,8 @@ mod tests {
     #[test]
     fn full_circle_keeps_local_coordinates_and_rejects_bad_payloads() {
         let b = circle(3.0);
-        let c = decode(&b).unwrap();
+        let (c, arc) = decode(&b).unwrap();
+        assert!(arc.is_none());
         assert_eq!(c.center, [1.5, -2.0, 0.0]);
         assert_eq!((c.id, c.center_point, c.sketch), (81, 82, 83));
         assert_eq!(c.radius, 3.0);

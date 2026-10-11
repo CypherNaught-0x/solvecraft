@@ -155,8 +155,8 @@ fn rectangle() -> Fixture {
 #[test]
 fn polygon_history_retains_dimensions_and_selected_curve_references() {
     let d = rectangle().design();
-    let profiles = d.single_loop_profiles().unwrap();
-    assert_eq!(profiles[0].curves, [31, 34, 33, 32]);
+    let profiles = d.sketch_profiles().unwrap();
+    assert_eq!(profiles[0].loops[0].curves, [31, 34, 33, 32]);
     assert!(d.circle_profiles().is_err());
     let mut doc = d.to_document("Original rectangular prism").unwrap();
     volume(&doc, 30. * 20. * 17.);
@@ -183,5 +183,5 @@ fn incomplete_polygon_records_never_become_partial_history() {
     assert!(f.design().to_document("Unknown line").is_err());
     let mut f = rectangle();
     f.0.get_mut(&101).unwrap().2[33..41].copy_from_slice(&999u64.to_le_bytes());
-    assert!(f.design().single_loop_profiles().is_err());
+    assert!(f.design().sketch_profiles().is_err());
 }

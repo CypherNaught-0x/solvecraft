@@ -177,7 +177,7 @@ impl Design {
                     let mut r = payload(records.primary(id)?, id)?;
                     empty(&mut r)?;
                     one(&mut r)?;
-                    if r.u32()? != 2 || r.reference()? != 0 || r.u32()? != 4 {
+                    if r.u32()? != 2 || r.reference()? != 0 || !matches!(r.u32()?, 4 | 5) {
                         return Err(invalid("unsupported diameter operands"));
                     }
                     let circle = r.reference()?;

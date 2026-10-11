@@ -202,6 +202,13 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 Ok(lines) => json!({"coordinate_frame":"sketch_local","length_unit":"cm","records":lines.iter().map(|l|json!({"id":l.id,"sketch":l.sketch,"start_point":l.start_point,"end_point":l.end_point,"start":l.start,"end":l.end,"fixed":l.fixed,"construction":l.construction,"profile_id":l.profile_id})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
+            let arcs = match d.sketch_arcs() {
+                Ok(arcs) => json!({"coordinate_frame":"sketch_local","length_unit":"cm","angle_unit":"rad","records":arcs.iter().map(|a| {
+                    let c=&a.circle;
+                    json!({"id":c.id,"sketch":c.sketch,"center_point":c.center_point,"start_point":a.start_point,"end_point":a.end_point,"center":c.center,"normal":c.normal,"x_axis":c.x_axis,"radius":c.radius,"start_angle":a.start_angle,"end_angle":a.end_angle,"fixed":c.fixed,"construction":c.construction,"profile_id":c.profile_id})
+                }).collect::<Vec<_>>()}),
+                Err(e) => json!({"unsupported":e.to_string()}),
+            };
             let profiles = match d.circle_profiles() {
                 Ok(profiles) => json!({"records":profiles.iter().map(|p|json!({"id":p.id,"feature":p.feature,"geometry":p.geometry,"circle":p.circle})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
@@ -216,13 +223,13 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 }).collect::<Vec<_>>()})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
-            let sketch_profiles=match d.single_loop_profiles() {
-                Ok(profiles)=>json!({"records":profiles.iter().map(|p|json!({"id":p.id,"feature":p.feature,"geometry":p.geometry,"curves":p.curves})).collect::<Vec<_>>()}),
+            let sketch_profiles=match d.sketch_profiles() {
+                Ok(profiles)=>json!({"records":profiles.iter().map(|p|json!({"id":p.id,"feature":p.feature,"geometry":p.geometry,"loops":p.loops.iter().map(|l|json!({"curves":l.curves,"reversed":l.reversed,"outer":l.outer})).collect::<Vec<_>>()})).collect::<Vec<_>>()}),
                 Err(e)=>json!({"unsupported":e.to_string()}),
             };
             json!({"path": d.path, "build": d.build, "layout": d.layout, "classes": d.classes.len(),
             "objects": d.records.len(), "secondary_records": d.records.iter().filter(|r| r.secondary_offset.is_some()).count(),
-            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_circles":circles,"sketch_lines":lines,"history":history,"circle_profiles":profiles,"sketch_profiles":sketch_profiles,"sketch_constraints":constraints})
+            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_circles":circles,"sketch_arcs":arcs,"sketch_lines":lines,"history":history,"circle_profiles":profiles,"sketch_profiles":sketch_profiles,"sketch_constraints":constraints})
         })
         .collect();
     Ok(json!({"path": path, "editable_history_imported": false, "designs": summaries,

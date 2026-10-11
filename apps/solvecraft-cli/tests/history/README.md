@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These eleven designs and their JSON command recipes are original SolveCraft test
+These thirteen designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -15,9 +15,14 @@ recipe, independent expectations and optional edits.
 | join-extrude | Contained cylinder joined into base | 5040π |
 | cut-extrude | Blind circular pocket | 4740π |
 | intersect-extrude | Intersection with smaller cylinder | 300π |
+| annulus-extrude | Exact outer/hole boundaries, both diameter edits | 9600π |
+| arc-extrude | Shared arc/chord endpoints, radius and height edits | 1350π |
 | rectangle-extrude | Width/depth dimensions, dependent expression | 10200 |
 | rectangle-negative | Rectangular prism with downward height | 10200 |
 | reordered-sketch | Feature order differs from object ID order | 5340π |
+
+The annulus uses radii 30 and 10 mm with height 12 mm, giving π(R² − r²)h.
+The semicircular segment uses radius 15 mm and height 12 mm, giving πr²h/2.
 
 The rectangular prisms are 30 × 20 × 17 mm; expectations use width × depth × height.
 

@@ -1,4 +1,4 @@
-//! Observed single-loop sketch profile references. Other profile schemas
+//! Observed complete sketch profile boundaries. Other profile schemas
 //! fail explicitly; selection is never guessed from curve or object order.
 use super::history::{empty, finish, payload, references, require_class, zeros};
 use super::*;
@@ -16,11 +16,18 @@ pub struct SketchProfile {
     pub id: u64,
     pub feature: u64,
     pub geometry: u64,
+    pub loops: Vec<ProfileLoop>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ProfileLoop {
     pub curves: Vec<u64>,
+    pub reversed: Vec<bool>,
+    pub outer: bool,
 }
 
 impl Design {
-    pub fn single_loop_profiles(&self) -> Result<Vec<SketchProfile>> {
+    pub fn sketch_profiles(&self) -> Result<Vec<SketchProfile>> {
         if self.layout != 8 {
             return Err(invalid("profile decoding requires metadata layout 8"));
         }
@@ -46,6 +53,14 @@ impl Design {
                 && circle_ids.insert((line.sketch, identity), line.id).is_some()
             {
                 return Err(invalid("ambiguous selected profile curve"));
+            }
+        }
+        for arc in self.sketch_arcs()? {
+            let c = arc.circle;
+            if let Some(identity) = c.profile_id
+                && circle_ids.insert((c.sketch, identity), c.id).is_some()
+            {
+                return Err(invalid("ambiguous selected profile arc"));
             }
         }
         class
@@ -76,41 +91,57 @@ impl Design {
                 if r.reference()? != *id {
                     return Err(invalid("inconsistent profile tracking owner"));
                 }
-                for value in [1, 1] {
-                    if r.u32()? != value {
-                        return Err(invalid("unsupported profile topology (single-loop schema required)"));
-                    }
-                }
-                let count = r.count(40)?;
-                if count == 0 {
-                    return Err(invalid("empty profile loop"));
-                }
-                let mut curves = Vec::new();
-                let mut seen = BTreeSet::new();
-                for _ in 0..count {
-                    if r.u32()? != 3 {
-                        return Err(invalid("unsupported profile curve tracking"));
-                    }
-                    let identity = (r.u64()?, r.u64()?);
-                    zeros(&mut r, 4)?;
-                    for value in [1, 1] {
-                        if r.u32()? != value {
-                            return Err(invalid("unsupported profile orientation"));
-                        }
-                    }
-                    zeros(&mut r, 8)?;
-                    let curve = circle_ids.get(&(geometry, identity)).copied().ok_or_else(|| invalid("missing selected profile curve"))?;
-                    if !seen.insert(curve) {
-                        return Err(invalid("repeated profile curve"));
-                    }
-                    curves.push(curve);
-                }
                 if r.u32()? != 1 {
-                    return Err(invalid("unsupported profile flags"));
+                    return Err(invalid("unsupported profile topology"));
                 }
-                zeros(&mut r, 1)?;
+                let loop_count = r.count(45)?;
+                if loop_count == 0 || loop_count > 129 {
+                    return Err(invalid("invalid profile loop count"));
+                }
+                let mut loops = Vec::new();
+                let mut seen = BTreeSet::new();
+                for _ in 0..loop_count {
+                    let count = r.count(40)?;
+                    if count == 0 || count > 512 {
+                        return Err(invalid("empty or excessive profile loop"));
+                    }
+                    let mut curves = Vec::new();
+                    let mut reversed = Vec::new();
+                    for _ in 0..count {
+                        if r.u32()? != 3 {
+                            return Err(invalid("unsupported profile curve tracking"));
+                        }
+                        let identity = (r.u64()?, r.u64()?);
+                        reversed.push(match r.u32()? {
+                            0 => false,
+                            1 => true,
+                            _ => return Err(invalid("unsupported profile curve orientation")),
+                        });
+                        for value in [1, 1] {
+                            if r.u32()? != value {
+                                return Err(invalid("unsupported profile orientation"));
+                            }
+                        }
+                        zeros(&mut r, 8)?;
+                        let curve = circle_ids.get(&(geometry, identity)).copied().ok_or_else(|| invalid("missing selected profile curve"))?;
+                        if !seen.insert(curve) {
+                            return Err(invalid("repeated profile curve"));
+                        }
+                        curves.push(curve);
+                    }
+                    let outer = match r.take(1)? {
+                        [0] => false,
+                        [1] => true,
+                        _ => return Err(invalid("invalid profile outer flag")),
+                    };
+                    loops.push(ProfileLoop { curves, reversed, outer });
+                }
+                if loops.iter().filter(|l| l.outer).count() != 1 {
+                    return Err(invalid("profile must have exactly one outer loop"));
+                }
+                zeros(&mut r, 4)?;
                 finish(&r)?;
-                Ok(SketchProfile { id: *id, feature, geometry, curves })
+                Ok(SketchProfile { id: *id, feature, geometry, loops })
             })
             .collect()
     }
@@ -118,10 +149,13 @@ impl Design {
     /// Compatibility view for callers specifically inspecting circular profiles.
     pub fn circle_profiles(&self) -> Result<Vec<CircleProfile>> {
         let circles: BTreeSet<_> = self.sketch_circles()?.into_iter().map(|c| c.id).collect();
-        self.single_loop_profiles()?
+        self.sketch_profiles()?
             .into_iter()
             .map(|p| {
-                let [circle] = p.curves.as_slice() else {
+                let [boundary] = p.loops.as_slice() else {
+                    return Err(invalid("profile contains holes"));
+                };
+                let [circle] = boundary.curves.as_slice() else {
                     return Err(invalid("profile is not a single circle"));
                 };
                 if !circles.contains(circle) {
