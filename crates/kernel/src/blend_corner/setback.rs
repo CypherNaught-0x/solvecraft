@@ -272,6 +272,24 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
     {
         return Err(unsupported("invalid transition patch input"));
     }
+    // Sharp terminal boundaries may require a curvature discontinuity. Fully
+    // tangent rim transitions instead need C2 spans and a curvature-variation
+    // penalty: minimum bending alone can satisfy every boundary yet pucker inside.
+    let cylinder = |normal: &Normal| match normal {
+        Normal::Cylinder { origin, axis } => Some((*origin, *axis, false)),
+        Normal::InwardCylinder { origin, axis } => Some((*origin, *axis, true)),
+        _ => None,
+    };
+    let common_cylinder = boundaries.first().and_then(|b| cylinder(&b.normal)).is_some_and(|(origin, axis, inward)| {
+        boundaries.iter().all(|b| {
+            cylinder(&b.normal)
+                .is_some_and(|(o, a, inside)| inward == inside && axis.cross(a).len() < 1e-9 && (o - origin).cross(axis).len() < size * 1e-9)
+        })
+    });
+    // A single cylinder normal field already supplies its curvature profile.
+    // Extra variation smoothing would flatten that profile; preserve the
+    // existing cylindrical continuation fit instead of treating it as a join.
+    let smooth_transition = radii.is_none() && !common_cylinder && boundaries.iter().all(|b| !matches!(b.normal, Normal::Free));
     let z = out.normalized().ok_or_else(|| unsupported("setback patch direction"))?;
     let x = z.any_perp();
     let y = z.cross(x);
@@ -422,10 +440,13 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
             corners.dedup_by(|a, b| (*a - *b).abs() < 1e-8);
             let mut interior: Vec<_> =
                 (1..density - 3).map(|i| i as f64 / (density - 3) as f64).filter(|u| corners.iter().all(|c| (u - c).abs() > 1e-5)).collect();
-            // C1 lines through the six corners permit the boundary's change of
-            // curvature while retaining a continuous tangent plane everywhere.
+            // Double corner knots permit C1 joins for sharp-ended and setback
+            // patches. Fully tangent transitions retain C2 continuity inside.
             for c in corners {
-                interior.extend([c, c]);
+                interior.push(c);
+                if !smooth_transition {
+                    interior.push(c);
+                }
             }
             interior.sort_by(f64::total_cmp);
             let mut knots = vec![0.0; 4];
@@ -459,6 +480,15 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
                 if b <= a {
                     continue;
                 }
+                // A cubic's second derivative is affine within a span, so this
+                // difference gives its exact constant third derivative.
+                let third: Vec<_> = if smooth_transition {
+                    let low = a + (b - a) * 0.25;
+                    let high = a + (b - a) * 0.75;
+                    basis(knots, high, n)?.2.iter().zip(basis(knots, low, n)?.2).map(|(a, b)| (a - b) / (high - low)).collect()
+                } else {
+                    Vec::new()
+                };
                 for (t, w) in [
                     (-0.8611363115940526, 0.3478548451374538),
                     (-0.3399810435848563, 0.6521451548625461),
@@ -466,7 +496,7 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
                     (0.8611363115940526, 0.3478548451374538),
                 ] {
                     let q = (a + b) * 0.5 + (b - a) * 0.5 * t;
-                    out.push((basis(knots, q, n)?, (b - a) * 0.5 * w, q));
+                    out.push((basis(knots, q, n)?, third.clone(), (b - a) * 0.5 * w, q));
                 }
             }
             Ok(out)
@@ -495,8 +525,8 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
         let mut limits = Vec::new();
         let qu = quadrature(&ku, nu)?;
         let qv = quadrature(&kv, nv)?;
-        for ((bu, dbu, ddbu), wu, u) in &qu {
-            for ((bv, dbv, ddbv), wv, v) in &qv {
+        for ((bu, dbu, ddbu), dddbu, wu, u) in &qu {
+            for ((bv, dbv, ddbv), dddbv, wv, v) in &qv {
                 // Transition fits use only the hull-certificate constraints below.
                 // Do not scan their densely sampled trim polygon or build thousands
                 // of collocation rows that the active-set loop never consumes.
@@ -517,6 +547,17 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
                 rows.push(tensor(ddbu, bv, w / (du * du), 0.0));
                 rows.push(tensor(dbu, dbv, 2.0_f64.sqrt() * w / (du * dv), 0.0));
                 rows.push(tensor(bu, ddbv, w / (dv * dv), 0.0));
+                if smooth_transition {
+                    // Penalize changes in physical curvature on a tenth of the
+                    // patch width. The mixed terms form the rotation-invariant
+                    // squared norm of the third derivative tensor.
+                    let curvature_length = du.min(dv) * 0.1;
+                    let w = w * curvature_length;
+                    rows.push(tensor(dddbu, bv, w / du.powi(3), 0.0));
+                    rows.push(tensor(ddbu, dbv, 3.0_f64.sqrt() * w / (du * du * dv), 0.0));
+                    rows.push(tensor(dbu, ddbv, 3.0_f64.sqrt() * w / (du * dv * dv), 0.0));
+                    rows.push(tensor(bu, dddbv, w / dv.powi(3), 0.0));
+                }
             }
         }
         // Pin otherwise weakly constrained controls to a bounded reference,

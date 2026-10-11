@@ -757,6 +757,35 @@ mod tests {
     }
 
     #[test]
+    fn rim_transition_interior_normals_do_not_ripple() {
+        use mt::{InnerSpace, ParametricSurface};
+        let body = shallow_basin();
+        let rim = [Vec3::new(45.0, 1.8, 16.0), Vec3::new(45.0, 45.0, 16.0), Vec3::new(15.0, 23.4, 16.0), Vec3::new(75.0, 23.4, 16.0)];
+        let body = crate::fillet(&body, &rim, 0.3).unwrap();
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        let body = check_geometry(&body, Vec3::new(15.0 + inset * 0.5, (1.8 + 35.0 - inset) * 0.5, 10.0), 1.5);
+        let patch = body
+            .solid
+            .face_iter()
+            .find_map(|f| match f.surface() {
+                mt::Surface::BSplineSurface(s) if s.degrees() == (3, 3) && s.subs(0.5, 0.5).z > 12.0 => Some(s),
+                _ => None,
+            })
+            .unwrap();
+        let surface = crate::body::evaluation::Surface(mt::Surface::BSplineSurface(patch));
+        // Interior paths through the long, shallow front-rim transition. A
+        // boundary-only G1 check missed its alternating inward/outward puckers.
+        // Permit gradual changes of direction, but no large extra normal travel.
+        for j in (30..=75).step_by(5) {
+            let normals: Vec<_> = (15..=75).map(|i| surface.normal(i as f64 / 100.0, j as f64 / 100.0)).collect();
+            let angle = |a: mt::Vector3, b: mt::Vector3| a.dot(b).clamp(-1.0, 1.0).acos();
+            let travel: f64 = normals.windows(2).map(|n| angle(n[0], n[1])).sum();
+            let net = angle(normals[0], *normals.last().unwrap());
+            assert!(travel < 1.3 * net + 0.03, "rim transition ripples at v={}: normal travel {travel}, net {net}", j as f64 / 100.0);
+        }
+    }
+
+    #[test]
     fn front_corner_transition_patch() {
         let b = shallow_basin();
         let inset = 12.0 * 10.0_f64.to_radians().tan();
@@ -835,8 +864,10 @@ mod tests {
                     continue;
                 }
                 let adjacent: Vec<_> = body.solid.face_iter().filter(|f| f.edge_iter().any(|e| e.id() == edge.id())).collect();
-                if adjacent.len() == 2 && adjacent.iter().all(|f| matches!(f.surface(),mt::Surface::BSplineSurface(s) if s.degrees()==(5,5))) {
-                    assert!(mesh.seams[index], "a smooth internal fan seam is still drawn");
+                let patch = |f: &&mt::Face| matches!(f.surface(), mt::Surface::BSplineSurface(s) if matches!(s.degrees(),(3,3)|(5,5)));
+                let cylinder = |f: &&mt::Face| matches!(f.surface(), mt::Surface::NurbsSurface(s) if matches!(s.degrees(),(2,1)|(1,2)));
+                if adjacent.len() == 2 && adjacent.iter().any(patch) && adjacent.iter().all(|f| patch(f) || cylinder(f)) {
+                    assert!(mesh.seams[index], "a smooth transition join is still drawn");
                     joins += 1;
                 }
                 index += 1;
