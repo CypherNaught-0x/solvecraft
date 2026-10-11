@@ -24,6 +24,7 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-history-measurements.json",
         "fusion-extent-measurements.json",
         "fusion-start-offset-measurements.json",
+        "fusion-offset-dimension-measurements.json",
         "fusion-polygon-measurements.json",
         "fusion-loop-measurements.json",
         "fusion-arc-measurements.json",
@@ -660,4 +661,36 @@ fn symmetry_history_preserves_points_lines_circles_and_solid_edits() {
     volume(&mut reopened, 24. * std::f64::consts::PI, "symmetry after reopening");
     s.execute("edit.undo", &json!({})).unwrap();
     volume(&mut s, 6. * std::f64::consts::PI, "symmetry undo");
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with native offset dimension controls"]
+fn offset_dimensions_follow_api_bounds_through_edits_reopening_and_undo() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-offset-dimension-measurements.json")).unwrap()).unwrap();
+    for (name, base) in api.as_object().unwrap().iter().filter(|(n, _)| n.ends_with("-baseline")) {
+        let changed = &api[name.replace("-baseline", "-changed")];
+        let verify = |s: &mut Session, expected: &Value| {
+            let m = volume(s, expected["volume"].as_f64().unwrap(), name);
+            assert_eq!(m["body_count"], 1);
+            for (end, key) in [(0, "min"), (1, "max")] {
+                for axis in 0..3 {
+                    let got = m["bodies"][0]["bbox"][key][axis].as_f64().unwrap();
+                    let want = expected["bounds"][end][axis].as_f64().unwrap() * 10.;
+                    assert!((got - want).abs() < 1e-5, "{name}: {key}/{axis}: {got} != {want}");
+                }
+            }
+        };
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap();
+        let original = s.doc.clone();
+        verify(&mut s, base);
+        s.execute("parameters.change", &json!({"name":base["parameter"],"expression":changed["expression"]})).unwrap();
+        verify(&mut s, changed);
+        let doc = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+        verify(&mut Session::new(doc), changed);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc, original);
+        verify(&mut s, base);
+    }
 }

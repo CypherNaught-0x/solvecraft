@@ -26,7 +26,7 @@ before allocating their buffers; engine reads enforce the same archive limit.
 
 Supported reconstruction includes native parameter names and expressions,
 numeric user parameters, user/model roles, comments and favorites,
-driving radius/diameter and horizontal/vertical distance dimensions, coincidence,
+driving radius/diameter, horizontal/vertical and line-offset distance dimensions, coincidence,
 horizontal/vertical line and point alignment, parallel/perpendicular/collinear lines,
 equal lengths/radii, point/line/circle symmetry, concentric/tangent round curves, point-on-curve and line-midpoint
 relationships, independent point/curve fixation, construction curves, rigid root sketch placement, feature names/order/suppression,
@@ -212,7 +212,7 @@ test compares expressions, units, values, circle centers and radii directly to
 the separately recorded Fusion API measurements. Actual Fusion files remain
 outside the repository; ordinary CI uses original synthetic records.
 
-Twenty-five [small editable SolveCraft fixtures](../apps/solvecraft-cli/tests/history/README.md)
+Twenty-six [small editable SolveCraft fixtures](../apps/solvecraft-cli/tests/history/README.md)
 provide command recipes, saved documents and independent analytic volume/bounds
 checks. They exercise parameter edits, signed heights, placement, all four body
 operations, reordering, suppression, reopening and undo. These native fixtures run
@@ -824,3 +824,37 @@ ci` passed all 28 test binaries, including 82 I/O tests, 107 document tests,
 ten-crate WASM checking. All 21 local import groups and ten inspection groups
 passed. The HardEdgeBasin opening regression passed in 0.87 seconds. The actual
 two-cylinder import was rendered after a diameter edit and visually checked.
+
+### Editable point-to-line and parallel-line offset dimensions
+
+The linear-dimension class also represents perpendicular distances from a line
+to a point or another parallel line. These records retain the same validated
+owner, binding and complete operand back-references as point-to-point dimensions.
+The verified orientation flag is `0x4000`; operand types distinguish the semantics.
+Reversed point/line operands are normalized without replacing native parameter
+names or expressions. Parallel-line offsets preserve parallelism and distance
+as editable constraints. Unknown type/orientation combinations fail explicitly.
+
+Twenty-one local public-API controls independently vary point side, line direction,
+line operand order and distance. A control without an explicit parallel constraint
+checks that line-offset dimensions preserve parallelism themselves. Imports and
+subsequent edits match measured world bounds as well as volumes, then survive
+serialization, reopening and undo. Bounds are essential for the point-to-line
+cylinder controls, since their volume stays constant when their centers move.
+
+Two original record tests exercise dependent expressions, both operand orders,
+invalid flags/types and every truncated dimension payload. The twenty-sixth native
+fixture, `offset-dimension-prism`, is an original 30 × 20 × 17 mm prism driven by
+the distance between parallel sketch lines. Its 10,200 mm³ analytic volume and
+bounds are checked through width, depth and height edits in ordinary CI.
+No Fusion-produced file is committed. Angular dimensions, offset-curve generators
+and the larger designs' remaining feature histories are still unfinished.
+
+Validation: upstream `8cce89d` is integrated; its generated license-manifest
+conflict was resolved by regeneration from the merged lockfile. Full `cargo xtask
+ci` passed all 28 test binaries, including 84 I/O tests, 107 document tests,
+560 engine tests, 198 kernel tests, 304 UI tests, all 26 original fixtures and
+ten-crate WASM checking. All 22 local import groups and ten inspection groups
+passed against the integrated build. The HardEdgeBasin opening guard passed in
+0.91 seconds. The imported parallel-line-offset prism was rendered after an edit
+and visually checked.

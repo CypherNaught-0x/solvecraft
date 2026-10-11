@@ -28,6 +28,7 @@ Generated-in-code assets are original and have no file to list:
 | apps/solvecraft-cli/tests/history/projected-body-edge.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/extrusion-start-offset.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/symmetric-cylinders.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/offset-dimension-prism.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/projected-body-rectangle.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/projected-body-circle.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/centerline-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |

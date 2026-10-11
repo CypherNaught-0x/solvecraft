@@ -18,6 +18,7 @@ pub enum SketchConstraint {
     Horizontal { id: u64, line: u64 },
     Vertical { id: u64, line: u64 },
     Linear { id: u64, points: [u64; 2], orientation: LinearOrientation, binding: u64 },
+    Offset { id: u64, line: u64, entity: u64, binding: u64 },
     Diameter { id: u64, circle: u64, binding: u64 },
     Radius { id: u64, circle: u64, binding: u64 },
     AlignedPoints { id: u64, points: [u64; 2], vertical: bool },
@@ -185,9 +186,6 @@ impl Design {
                         if a == b {
                             return Err(invalid("duplicate dimension points"));
                         }
-                        for p in [a, b] {
-                            require_class(&classes, p, "C2CEDAE7-1716-47C1-B7B1-07B70081D0FB", 11)?;
-                        }
                         attributes::read(&mut r)?;
                         r.take(220)?;
                         r.wide_string()?; // display prefix, including expression marker
@@ -208,7 +206,15 @@ impl Design {
                         zeros(&mut r, 1)?;
                         finish(&r)?;
                         dimension_owner(&records, id, *geometry)?;
-                        constraints.push(SketchConstraint::Linear { id, points: [a, b], orientation, binding });
+                        constraints.push(if point(&a) && point(&b) {
+                            SketchConstraint::Linear { id, points: [a, b], orientation, binding }
+                        } else if orientation == LinearOrientation::Aligned && line(&a) && (point(&b) || line(&b)) {
+                            SketchConstraint::Offset { id, line: a, entity: b, binding }
+                        } else if orientation == LinearOrientation::Aligned && point(&a) && line(&b) {
+                            SketchConstraint::Offset { id, line: b, entity: a, binding }
+                        } else {
+                            return Err(invalid("unsupported dimension operand types"));
+                        });
                         continue;
                     }
                     let radial = classes.get(&id).is_some_and(|c| c.id == "8EDAC24D-35D4-4591-B8E7-B3EA081C9DF0");

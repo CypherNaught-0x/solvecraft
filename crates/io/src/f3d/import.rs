@@ -430,6 +430,23 @@ impl Design {
                                     Some(parameter.name.clone()),
                                 )
                             }
+                            SketchConstraint::Offset { id, line, entity, binding } => {
+                                let l = curve_indices.get(line).copied().ok_or_else(|| invalid("missing offset dimension line"))?;
+                                let p = if let Some(p) = point_indices.get(entity) {
+                                    *p
+                                } else {
+                                    let c = curve_indices.get(entity).copied().ok_or_else(|| invalid("missing offset dimension entity"))?;
+                                    let Some(solvecraft_doc::sketch::CurveKind::Line { a, .. }) = sketch.curves.get(c).map(|c| &c.kind) else {
+                                        return Err(invalid("offset dimension requires a line or point"));
+                                    };
+                                    let p = *a;
+                                    sketch.add_constraint(ConstraintKind::Parallel { a: l, b: c }, None).map_err(|e| invalid(&e.to_string()))?;
+                                    p
+                                };
+                                let parameter = length_parameter(&bindings, *binding)?;
+                                consumed.insert(*id);
+                                (ConstraintKind::PointLineDistance { p, l, value: parameter.value * 10. }, Some(parameter.name.clone()))
+                            }
                         };
                         sketch.add_constraint(kind, param).map_err(|e| invalid(&e.to_string()))?;
                     }

@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These twenty-five designs and their JSON command recipes are original SolveCraft test
+These twenty-six designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -32,6 +32,7 @@ recipe, independent expectations and optional edits.
 | projected-body-rectangle | Persistent shared corners, width/depth/source-height edits | 33000 |
 | extrusion-start-offset | Signed start offset and dependent height expression | 10200 |
 | symmetric-cylinders | Center symmetry, equal radii, diameter/height edits | 6000π |
+| offset-dimension-prism | Parallel-line distance, width/depth/height edits | 10200 |
 
 The annulus uses radii 30 and 10 mm with height 12 mm, giving π(R² − r²)h.
 The semicircular segment uses radius 15 mm and height 12 mm, giving πr²h/2.
