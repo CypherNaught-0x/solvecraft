@@ -40,16 +40,6 @@ pub enum CurveRelation {
     Equal,
 }
 
-fn attributes(r: &mut Reader<'_>) -> Result<()> {
-    for _ in 0..r.count(16)? {
-        r.string()?;
-        if r.string()? != "IntrinsicMetaTypeuint64" {
-            return Err(invalid("unsupported constraint attribute type"));
-        }
-        r.u64()?;
-    }
-    Ok(())
-}
 fn one(r: &mut Reader<'_>) -> Result<()> {
     if r.take(1)? != [1] {
         return Err(invalid("unsupported constraint flags"));
@@ -89,10 +79,8 @@ impl Design {
             .map(|geometry| {
                 let mut r = payload(records.primary(*geometry)?, *geometry)?;
                 empty(&mut r)?;
-                if r.take(2)? != [0, 1] {
-                    return Err(invalid("unsupported sketch attributes"));
-                }
-                attributes(&mut r)?;
+                zeros(&mut r, 1)?;
+                attributes::read(&mut r)?;
                 r.wide_string()?;
                 r.u64()?;
                 one(&mut r)?;
@@ -125,8 +113,7 @@ impl Design {
                     for _ in 0..count {
                         operands.push(operand(&mut r)?);
                     }
-                    one(&mut r)?;
-                    attributes(&mut r)?;
+                    attributes::read(&mut r)?;
                     if r.reference()? != *geometry {
                         return Err(invalid("inconsistent coincidence owner"));
                     }
@@ -197,8 +184,7 @@ impl Design {
                         for p in [a, b] {
                             require_class(&classes, p, "C2CEDAE7-1716-47C1-B7B1-07B70081D0FB", 11)?;
                         }
-                        one(&mut r)?;
-                        attributes(&mut r)?;
+                        attributes::read(&mut r)?;
                         r.take(220)?;
                         r.wide_string()?; // display prefix, including expression marker
                         r.wide_string()?;
@@ -239,8 +225,7 @@ impl Design {
                     if circles.get(&circle) != Some(geometry) {
                         return Err(invalid("dimensioned curve belongs to another sketch"));
                     }
-                    one(&mut r)?;
-                    attributes(&mut r)?;
+                    attributes::read(&mut r)?;
                     r.take(244)?; // presentation geometry and layout
                     r.wide_string()?; // prefix may include the expression marker (fx:)
                     r.wide_string()?; // displayed value; the binding carries the expression

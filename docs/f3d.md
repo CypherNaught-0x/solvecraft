@@ -522,3 +522,36 @@ concurrent machine load. The first default-parallel run failed only the unrelate
 IGES fan-out wall-clock guard (13.76 seconds); the unchanged test passed alone in
 2.39 seconds and passed in the complete retry. The edited concentric ring was
 rendered and its retained hole visually checked.
+
+
+### Optional metadata, centerlines and projection state
+
+Modern exports of legacy sketches may omit the metadata dictionary entirely.
+The shared reader accepts absent or present dictionaries, bounds entry counts and
+strings, and rejects duplicate keys and unknown types. Original complete-circle
+and rectangle records verify identical imported histories, dimensional edits,
+analytic volumes and reopening with and without empty dictionaries.
+
+Five local public-API controls project a line and circle into a second sketch,
+break their links, then toggle the source line between centerline, construction
+and normal. The point flag immediately after origin identifies linked points;
+the first curve flag after fixation identifies reference curves. These flags
+are exposed by the native reader. Import still rejects unresolved linked source
+dependencies; cached positions are not a substitute for the dependency graph.
+The construction byte distinguishes normal (0), construction (1) and centerline
+(2). Imported centerlines retain SolveCraft's centerline property and stay out of
+profiles. The original centerline-extrude fixture checks the unchanged prism,
+width/depth/height edits, analytic volume, bounds, reopening and undo.
+
+The larger-archive investigation additionally identified point/line subclasses
+that split geometry between primary and secondary records, and variable curve
+tails containing references. A local acceptance comparison remains pending for
+these layouts. This milestone does not establish complete legacy sketch or
+feature-history import. All Fusion controls remain outside Git.
+
+Validation: all five projection/line-type controls and all fifteen local native
+import groups pass. Full CI passes 25 binaries, 62 IO tests, nineteen original
+fixtures, 553 engine tests and the WASM checks. The opening regression takes
+0.89 seconds in this run. Upstream main through 9d7be3c is integrated, including
+deterministic STEP/IGES work-budget tests. The centerline prism was rendered and
+visually checked as one unsplit solid.

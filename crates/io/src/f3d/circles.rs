@@ -13,6 +13,7 @@ pub struct SketchCircle {
     pub radius: f64,
     pub construction: bool,
     pub fixed: bool,
+    pub reference: bool,
     pub profile_id: Option<(u64, u64)>,
 }
 
@@ -81,19 +82,10 @@ fn decode(bytes: &[u8]) -> Result<CircularRecord> {
     let mut r = Reader { bytes, at: 0 };
     r.string()?;
     let id = r.u64()?;
-    if !r.string()?.is_empty() || r.take(2)? != [0, 1] {
+    if !r.string()?.is_empty() || r.take(1)? != [0] {
         return Err(invalid("unsupported circle attributes"));
     }
-    let mut attributes = BTreeMap::new();
-    for _ in 0..r.count(16)? {
-        let key = r.string()?;
-        if r.string()? != "IntrinsicMetaTypeuint64" {
-            return Err(invalid("unsupported circle attribute type"));
-        }
-        if attributes.insert(key, r.u64()?).is_some() {
-            return Err(invalid("duplicate circle attribute"));
-        }
-    }
+    let attributes = attributes::read(&mut r)?;
     let mut number = || -> Result<f64> {
         let x = f64::from_bits(r.u64()?);
         if !x.is_finite() {
@@ -128,7 +120,8 @@ fn decode(bytes: &[u8]) -> Result<CircularRecord> {
     };
     r.take(if arc.is_some() { 2 } else { 4 })?;
     let fixed = points::fixed(&mut r)?;
-    r.take(3)?;
+    let reference = points::boolean(&mut r)?;
+    r.take(2)?;
     let construction = match r.take(1)? {
         [0] => false,
         [1] => true,
@@ -144,7 +137,7 @@ fn decode(bytes: &[u8]) -> Result<CircularRecord> {
         (None, None) => None,
         _ => return Err(invalid("incomplete circle profile identity")),
     };
-    Ok((SketchCircle { id, sketch, center_point, center, normal, x_axis, radius, construction, fixed, profile_id }, arc))
+    Ok((SketchCircle { id, sketch, center_point, center, normal, x_axis, radius, construction, fixed, reference, profile_id }, arc))
 }
 
 #[cfg(test)]
@@ -196,5 +189,14 @@ mod tests {
         let mut bad = b;
         bad.push(0);
         assert!(decode(&bad).is_err());
+    }
+
+    #[test]
+    fn absent_circle_attributes_preserve_geometry() {
+        let mut b = circle(3.);
+        let expected = decode(&b).unwrap();
+        b[18] = 0;
+        b.drain(19..23);
+        assert_eq!(decode(&b).unwrap(), expected);
     }
 }

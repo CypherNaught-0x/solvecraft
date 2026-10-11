@@ -1,5 +1,5 @@
 //! Finite sketch lines, verified with rectangle edits and isolated flag controls.
-use super::history::{empty, finish, payload, require_class};
+use super::history::{empty, finish, payload, require_class, zeros};
 use super::*;
 use solvecraft_geom::Vec3;
 
@@ -13,6 +13,8 @@ pub struct SketchLine {
     pub end: [f64; 3],
     pub fixed: bool,
     pub construction: bool,
+    pub centerline: bool,
+    pub reference: bool,
     pub profile_id: Option<(u64, u64)>,
 }
 
@@ -33,19 +35,8 @@ impl Design {
             .map(|id| {
                 let mut r = payload(records.primary(*id)?, *id)?;
                 empty(&mut r)?;
-                if r.take(2)? != [0, 1] {
-                    return Err(invalid("unsupported line attributes"));
-                }
-                let mut attributes = BTreeMap::new();
-                for _ in 0..r.count(16)? {
-                    let key = r.string()?;
-                    if r.string()? != "IntrinsicMetaTypeuint64" {
-                        return Err(invalid("unsupported line attribute type"));
-                    }
-                    if attributes.insert(key, r.u64()?).is_some() {
-                        return Err(invalid("duplicate line attribute"));
-                    }
-                }
+                zeros(&mut r, 1)?;
+                let attributes = attributes::read(&mut r)?;
                 let mut number = || -> Result<f64> {
                     let n = f64::from_bits(r.u64()?);
                     if !n.is_finite() {
@@ -78,10 +69,12 @@ impl Design {
                 }
                 r.take(2)?;
                 let fixed = points::fixed(&mut r)?;
-                r.take(3)?;
-                let construction = match r.take(1)? {
-                    [0] => false,
-                    [1] => true,
+                let reference = points::boolean(&mut r)?;
+                r.take(2)?;
+                let (construction, centerline) = match r.take(1)? {
+                    [0] => (false, false),
+                    [1] => (true, false),
+                    [2] => (false, true),
                     _ => return Err(invalid("unsupported line construction flag")),
                 };
                 r.take(34)?;
@@ -102,6 +95,8 @@ impl Design {
                     end: [end.x, end.y, end.z],
                     fixed,
                     construction,
+                    centerline,
+                    reference,
                     profile_id,
                 })
             })

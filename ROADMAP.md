@@ -146,14 +146,17 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   construction, selected circular profiles and coincidence/diameter relationships.
   Twenty-five local Fusion controls cover dimension edits, reversal, renaming,
   placement, reordering, body operations, suppression and constraint removal.
-  Eighteen original native SolveCraft fixtures check analytic volumes/bounds and edits.
+  Nineteen original native SolveCraft fixtures check analytic volumes/bounds and edits.
   `doc.open` now reconstructs verified layout-8 circle/line/arc sketches and one-sided
   extrusions as editable history, with driving parameters, fixation, taper and
   atomic failure. Thirty local native imports check volumes/placement; original
   synthetic records exercise reconstruction and edits in ordinary CI. Rectangular
   profiles preserve endpoint references, horizontal/vertical constraints and driving
   dimensions, including aligned point distances, reordered graph connections,
-  shared-curve relationships and reversed references;
+  shared-curve relationships and reversed references. Centerlines retain their line
+  type and stay out of profiles; absent optional metadata decodes without losing
+  geometry. Inspection distinguishes projected geometry and import refuses to
+  discard unresolved source dependencies;
   driven dimensions fail atomically. Native mm/degree feature-input
   names now survive timeline edits with their expression dependencies. Arc endpoints,
   major/rotated sweeps and profiles with holes retain exact curve references, with

@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These eighteen designs and their JSON command recipes are original SolveCraft test
+These nineteen designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -22,6 +22,7 @@ recipe, independent expectations and optional edits.
 | annulus-extrude | Exact outer/hole boundaries, both diameter edits | 9600π |
 | arc-extrude | Shared arc/chord endpoints, radius and height edits | 1350π |
 | rectangle-extrude | Width/depth dimensions, dependent expression | 10200 |
+| centerline-extrude | Axis crossing a rectangle stays out of profiles, dimension edits | 10200 |
 | aligned-dimension | Width and diagonal distance, dependent side and bounds | 12000 |
 | rectangle-negative | Rectangular prism with downward height | 10200 |
 | reordered-sketch | Feature order differs from object ID order | 5340π |

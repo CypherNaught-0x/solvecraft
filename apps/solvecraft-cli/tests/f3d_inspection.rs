@@ -229,3 +229,34 @@ fn controlled_construction_and_constraint_removal() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with public-API projection and centerline controls"]
+fn projection_flags_and_line_types_match_public_api() {
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-projection-measurements.json")).unwrap()).unwrap();
+    for (name, sketches) in api.as_object().unwrap() {
+        let designs = solvecraft_engine::io::f3d::read_f3d(&std::fs::read(probes.join(format!("{name}.f3d"))).unwrap()).unwrap();
+        let d = &designs[0];
+        let points = d.sketch_points().unwrap();
+        let lines = d.sketch_lines().unwrap();
+        let circles = d.sketch_circles().unwrap();
+        let expected_points: Vec<_> = sketches.as_array().unwrap().iter().flat_map(|s| s["points"].as_array().unwrap()).collect();
+        let expected_curves: Vec<_> = sketches.as_array().unwrap().iter().flat_map(|s| s["curves"].as_array().unwrap()).collect();
+        assert_eq!(points.len(), expected_points.len(), "{name}");
+        assert_eq!(lines.len() + circles.len(), expected_curves.len(), "{name}");
+        assert_eq!(points.iter().filter(|p| p.linked).count(), expected_points.iter().filter(|p| p["linked"] == true).count(), "{name}");
+        assert_eq!(
+            lines.iter().filter(|p| p.reference).count() + circles.iter().filter(|p| p.reference).count(),
+            expected_curves.iter().filter(|p| p["reference"] == true).count(),
+            "{name}"
+        );
+        assert_eq!(lines.iter().filter(|p| p.centerline).count(), expected_curves.iter().filter(|p| p["centerline"] == true).count(), "{name}");
+        assert_eq!(lines.iter().filter(|p| p.construction).count(), expected_curves.iter().filter(|p| p["construction"] == true).count(), "{name}");
+        if name == "projection-linked" {
+            // Its projected-feature schema is also unsupported, so history may
+            // reject before the entity-level dependency guard is reached.
+            assert!(d.to_document(name).is_err(), "projected history must not be flattened");
+        }
+    }
+}

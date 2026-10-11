@@ -165,7 +165,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
             let circles = match d.sketch_circles() {
-                Ok(circles) => json!({"coordinate_frame":"sketch_local","length_unit":"cm","records":circles.iter().map(|c| json!({"id":c.id,"sketch":c.sketch,"center_point":c.center_point,"center":c.center,"normal":c.normal,"x_axis":c.x_axis,"radius":c.radius,"construction":c.construction,"profile_id":c.profile_id})).collect::<Vec<_>>()}),
+                Ok(circles) => json!({"coordinate_frame":"sketch_local","length_unit":"cm","records":circles.iter().map(|c| json!({"id":c.id,"sketch":c.sketch,"center_point":c.center_point,"center":c.center,"normal":c.normal,"x_axis":c.x_axis,"radius":c.radius,"construction":c.construction,"reference":c.reference,"profile_id":c.profile_id})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
             let history = match d.history() {
@@ -180,13 +180,13 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
             let lines = match d.sketch_lines() {
-                Ok(lines) => json!({"coordinate_frame":"sketch_local","length_unit":"cm","records":lines.iter().map(|l|json!({"id":l.id,"sketch":l.sketch,"start_point":l.start_point,"end_point":l.end_point,"start":l.start,"end":l.end,"fixed":l.fixed,"construction":l.construction,"profile_id":l.profile_id})).collect::<Vec<_>>()}),
+                Ok(lines) => json!({"coordinate_frame":"sketch_local","length_unit":"cm","records":lines.iter().map(|l|json!({"id":l.id,"sketch":l.sketch,"start_point":l.start_point,"end_point":l.end_point,"start":l.start,"end":l.end,"fixed":l.fixed,"construction":l.construction,"centerline":l.centerline,"reference":l.reference,"profile_id":l.profile_id})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
             let arcs = match d.sketch_arcs() {
                 Ok(arcs) => json!({"coordinate_frame":"sketch_local","length_unit":"cm","angle_unit":"rad","records":arcs.iter().map(|a| {
                     let c=&a.circle;
-                    json!({"id":c.id,"sketch":c.sketch,"center_point":c.center_point,"start_point":a.start_point,"end_point":a.end_point,"center":c.center,"normal":c.normal,"x_axis":c.x_axis,"radius":c.radius,"start_angle":a.start_angle,"end_angle":a.end_angle,"fixed":c.fixed,"construction":c.construction,"profile_id":c.profile_id})
+                    json!({"id":c.id,"sketch":c.sketch,"center_point":c.center_point,"start_point":a.start_point,"end_point":a.end_point,"center":c.center,"normal":c.normal,"x_axis":c.x_axis,"radius":c.radius,"start_angle":a.start_angle,"end_angle":a.end_angle,"fixed":c.fixed,"construction":c.construction,"reference":c.reference,"profile_id":c.profile_id})
                 }).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };

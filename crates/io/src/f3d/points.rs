@@ -9,6 +9,7 @@ pub struct SketchPoint {
     pub position: [f64; 3],
     pub fixed: bool,
     pub origin: bool,
+    pub linked: bool,
 }
 
 pub(super) fn fixed(r: &mut Reader<'_>) -> Result<bool> {
@@ -18,6 +19,14 @@ pub(super) fn fixed(r: &mut Reader<'_>) -> Result<bool> {
         [0, 0 | 1] => Ok(false),
         [1, 0 | 1] => Ok(true),
         _ => Err(invalid("unsupported fixation flags")),
+    }
+}
+
+pub(super) fn boolean(r: &mut Reader<'_>) -> Result<bool> {
+    match r.take(1)? {
+        [0] => Ok(false),
+        [1] => Ok(true),
+        _ => Err(invalid("unsupported sketch boolean flag")),
     }
 }
 
@@ -38,16 +47,8 @@ impl Design {
             .map(|id| {
                 let mut r = payload(records.primary(*id)?, *id)?;
                 empty(&mut r)?;
-                if r.take(2)? != [0, 1] {
-                    return Err(invalid("unsupported point attributes"));
-                }
-                for _ in 0..r.count(16)? {
-                    r.string()?;
-                    if r.string()? != "IntrinsicMetaTypeuint64" {
-                        return Err(invalid("unsupported point attribute type"));
-                    }
-                    r.u64()?;
-                }
+                zeros(&mut r, 1)?;
+                attributes::read(&mut r)?;
                 let connections = r.reference()?;
                 require_class(&classes, connections, "362B7EC3-0F09-47C8-A3BE-DC066715CDAE", 0)?;
                 zeros(&mut r, 3)?;
@@ -57,7 +58,8 @@ impl Design {
                     [1] => true,
                     _ => return Err(invalid("unsupported point origin flag")),
                 };
-                zeros(&mut r, 2)?;
+                let linked = boolean(&mut r)?;
+                zeros(&mut r, 1)?;
                 let mut number = || -> Result<f64> {
                     let n = f64::from_bits(r.u64()?);
                     if !n.is_finite() {
@@ -76,7 +78,7 @@ impl Design {
                 let sketch = r.reference()?;
                 require_class(&classes, sketch, "44A64366-4BD3-4B24-881A-F94C206E8F2D", 18)?;
                 finish(&r)?;
-                Ok(SketchPoint { id: *id, sketch, position, fixed, origin })
+                Ok(SketchPoint { id: *id, sketch, position, fixed, origin, linked })
             })
             .collect()
     }

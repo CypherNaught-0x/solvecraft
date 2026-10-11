@@ -9,6 +9,9 @@ use std::io::{Cursor, Read};
 use crate::{IoError, Result};
 
 mod archive;
+#[cfg(test)]
+mod attribute_tests;
+mod attributes;
 mod circles;
 mod constraints;
 #[cfg(test)]

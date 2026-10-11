@@ -61,6 +61,13 @@ impl Design {
         let circles: BTreeMap<_, _> = self.sketch_circles()?.into_iter().map(|c| (c.id, c)).collect();
         let arcs: BTreeMap<_, _> = self.sketch_arcs()?.into_iter().map(|a| (a.circle.id, a)).collect();
         let lines: BTreeMap<_, _> = self.sketch_lines()?.into_iter().map(|l| (l.id, l)).collect();
+        if points.values().any(|p| p.linked)
+            || lines.values().any(|l| l.reference)
+            || circles.values().any(|c| c.reference)
+            || arcs.values().any(|a| a.circle.reference)
+        {
+            return Err(invalid("linked sketch source dependencies are not supported yet"));
+        }
         let constraints: BTreeMap<_, _> = self.sketch_constraints()?.into_iter().map(|c| (c.geometry, c)).collect();
         let profiles: BTreeMap<_, _> = self.sketch_profiles()?.into_iter().map(|p| (p.id, p)).collect();
         let mut doc = Document::new(name);
@@ -247,6 +254,7 @@ impl Design {
                             let c = sketch.curves.get_mut(i).ok_or_else(|| invalid("missing imported line"))?;
                             c.fixed = line.fixed;
                             c.construction = line.construction;
+                            c.centerline = line.centerline;
                             curve_indices.insert(*id, i);
                             if !consumed.insert(*id) {
                                 return Err(invalid("duplicate sketch entity"));
