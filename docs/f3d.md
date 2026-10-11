@@ -470,15 +470,16 @@ parameter was rendered and visually checked.
 Twelve local rectangular controls use the documented
 [point-distance API](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/fusion_SketchDimensions_addDistanceDimension.htm)
 with aligned orientation. They vary diagonal length, rectangle aspect ratio and
-selected-point order. The observed version-3 linear dimension has qualifier `5`,
-axis `1` and flag `0x4000`, versus `0x800000` for vertical distance. It reconstructs
-as a Euclidean point-distance constraint. Other unverified tuples still fail.
+selected-point order. The observed version-3 linear dimension uses flag `0x4000`,
+versus `0x800000` for vertical distance. It reconstructs as a Euclidean
+point-distance constraint. Unknown kind flags still fail. The connection fields
+originally interpreted as qualifier/axis were corrected by the experiments below.
 
 Fusion normalizes the primary operand order but retains the selected order in
-the final reference list. Aligned dimensions permit either ordering of the same
+the final reference list. Linear dimensions permit either ordering of the same
 two distinct points; mismatched membership, ownership and bindings fail.
 Original field-authored tests check this interpretation, dependency edits,
-reopening, invalid qualifiers/references and every truncated record prefix.
+reopening, invalid kind flags/references and every truncated record prefix.
 
 An eighteenth native fixture defines a rectangle by width and diagonal, then
 extrudes it. Its side length follows √(diagonal² − width²), with analytic volume
@@ -492,3 +493,32 @@ in 2.42 seconds. All fourteen local import groups pass, including the twelve
 aligned controls. Both the authored fixture and a reversed-selection import
 after a diagonal edit were rendered and visually checked. Upstream `a7512e5`
 (browser-storage documentation) was merged without conflicts.
+
+## Constraint connection metadata
+
+Eight further controls vary constraint/dimension creation order, horizontal and
+vertical selection order, and diameter dimensions on concentric circles. They
+show that the u32 after each operand reference is graph connection metadata,
+not an orientation or geometric subtype. Inserting the aligned dimension first
+swaps its connection fields with the width dimension while retaining its kind
+flag. A vertical dimension can have the same fields as a horizontal dimension.
+Concentric circles have nonzero curve connection slots in their diameter records.
+
+The reader consumes these opaque slots without using them as indexes or geometry.
+Constraint semantics remain checked through the kind flag, explicit entities,
+backreference membership, owning sketch and parameter binding. Both orderings
+of a linear dimension's selected points are accepted because all three supported
+distance kinds are unsigned. Unknown kinds, duplicate entities, foreign owners,
+missing bindings and mismatched backreferences still fail explicitly.
+
+Original tests vary connection slots through the full u32 range and verify
+unchanged relationships and geometry. Local controls check API volumes/bounds,
+dimension edits, serialization/reopening and undo. No Fusion export is committed.
+
+Validation: all fifteen local import groups and thirty-six focused F3D tests pass.
+Full CI passes all 25 binaries, 57 IO tests, eighteen fixtures and the WASM checks
+with `RUST_TEST_THREADS=2`; the opening guard completes in 6.76 seconds under
+concurrent machine load. The first default-parallel run failed only the unrelated
+IGES fan-out wall-clock guard (13.76 seconds); the unchanged test passed alone in
+2.39 seconds and passed in the complete retry. The edited concentric ring was
+rendered and its retained hole visually checked.

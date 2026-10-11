@@ -57,6 +57,16 @@ fn one(r: &mut Reader<'_>) -> Result<()> {
     Ok(())
 }
 
+fn operand(r: &mut Reader<'_>) -> Result<u64> {
+    let id = r.reference()?;
+    // Native graph connection slot, not geometry or dimension orientation.
+    // Reordering dimensions changes these slots without changing the constraint.
+    // They are not used as indexes: semantics come from explicit entity references,
+    // the kind flag, owner and parameter binding, all checked below.
+    r.u32()?;
+    Ok(id)
+}
+
 impl Design {
     pub fn sketch_constraints(&self) -> Result<Vec<SketchConstraints>> {
         if self.layout != 8 {
@@ -113,8 +123,7 @@ impl Design {
                     }
                     let mut operands = Vec::new();
                     for _ in 0..count {
-                        operands.push(r.reference()?);
-                        zeros(&mut r, 4)?;
+                        operands.push(operand(&mut r)?);
                     }
                     one(&mut r)?;
                     attributes(&mut r)?;
@@ -177,14 +186,11 @@ impl Design {
                         let mut r = payload(records.primary(id)?, id)?;
                         empty(&mut r)?;
                         one(&mut r)?;
-                        if r.u32()? != 3 || r.reference()? != 0 {
+                        if r.u32()? != 3 || operand(&mut r)? != 0 {
                             return Err(invalid("unsupported linear dimension operands"));
                         }
-                        let qualifier = r.u32()?;
-                        let a = r.reference()?;
-                        let axis = r.u32()?;
-                        let b = r.reference()?;
-                        zeros(&mut r, 4)?;
+                        let a = operand(&mut r)?;
+                        let b = operand(&mut r)?;
                         if a == b {
                             return Err(invalid("duplicate dimension points"));
                         }
@@ -197,15 +203,15 @@ impl Design {
                         r.wide_string()?; // display prefix, including expression marker
                         r.wide_string()?;
                         r.take(44)?;
-                        let orientation = match (qualifier, axis, r.u64()?) {
-                            (4, 0, 0x400000) => LinearOrientation::Horizontal,
-                            (5, 1, 0x800000) => LinearOrientation::Vertical,
-                            (5, 1, 0x4000) => LinearOrientation::Aligned,
+                        let orientation = match r.u64()? {
+                            0x400000 => LinearOrientation::Horizontal,
+                            0x800000 => LinearOrientation::Vertical,
+                            0x4000 => LinearOrientation::Aligned,
                             _ => return Err(invalid("unsupported linear dimension orientation or flags")),
                         };
                         let binding = r.reference()?;
                         let back = references(&mut r)?;
-                        let matches_points = back == [a, b] || (orientation == LinearOrientation::Aligned && back == [b, a]);
+                        let matches_points = back == [a, b] || back == [b, a];
                         if bindings.get(&binding) != Some(&feature) || !matches_points {
                             return Err(invalid("inconsistent linear dimension binding or points"));
                         }
@@ -225,11 +231,10 @@ impl Design {
                     let mut r = payload(records.primary(id)?, id)?;
                     empty(&mut r)?;
                     one(&mut r)?;
-                    if r.u32()? != 2 || r.reference()? != 0 || !matches!(r.u32()?, 4 | 5) {
+                    if r.u32()? != 2 || operand(&mut r)? != 0 {
                         return Err(invalid("unsupported circular dimension operands"));
                     }
-                    let circle = r.reference()?;
-                    zeros(&mut r, 4)?;
+                    let circle = operand(&mut r)?;
                     require_class(&classes, circle, "F0130424-8B7E-4092-93C9-1CA807482534", 0)?;
                     if circles.get(&circle) != Some(geometry) {
                         return Err(invalid("dimensioned curve belongs to another sketch"));

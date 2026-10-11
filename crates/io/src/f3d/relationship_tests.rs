@@ -230,3 +230,17 @@ fn unsupported_constraints_and_damaged_relationships_fail() {
         }
     }
 }
+
+#[test]
+fn shared_entity_connection_slots_preserve_explicit_relationships() {
+    let mut d = fixture(false, 17);
+    let expected = d.sketch_constraints().unwrap();
+    for id in [55, 56] {
+        let record = d.records.iter().find(|r| r.id == id).unwrap();
+        let at = record.offset + super::history::payload(Records::new(&d).primary(id).unwrap(), id).unwrap().at;
+        for (offset, slot) in [(20, 17_u32), (35, u32::MAX)] {
+            d.bulk[at + offset..at + offset + 4].copy_from_slice(&slot.to_le_bytes());
+        }
+    }
+    assert_eq!(d.sketch_constraints().unwrap(), expected);
+}

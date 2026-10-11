@@ -190,17 +190,14 @@ fn malformed_arc_and_hole_records_are_rejected() {
 }
 
 #[test]
-fn verified_diameter_axes_remain_diameters() {
-    for axis in [4_u32, 5, 6] {
+fn diameter_graph_slots_do_not_change_dimension_semantics() {
+    for slot in [0_u32, 4, 5, 6, u32::MAX] {
         let mut f = fixture(false);
-        f.0.get_mut(&56).unwrap().2[20..24].copy_from_slice(&axis.to_le_bytes());
-        let result = f.design().to_document("Diameter axis");
-        if axis == 6 {
-            assert!(result.is_err());
-        } else {
-            let mut doc = result.unwrap();
-            doc.change_param("d7", "40 mm", None, None).unwrap();
-            volume(&doc, 400. * PI * 17.);
+        for at in [20, 35] {
+            f.0.get_mut(&56).unwrap().2[at..at + 4].copy_from_slice(&slot.to_le_bytes());
         }
+        let mut doc = f.design().to_document("Diameter connection slots").unwrap();
+        doc.change_param("d7", "40 mm", None, None).unwrap();
+        volume(&doc, 400. * PI * 17.);
     }
 }

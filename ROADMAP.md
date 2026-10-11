@@ -152,7 +152,8 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   atomic failure. Thirty local native imports check volumes/placement; original
   synthetic records exercise reconstruction and edits in ordinary CI. Rectangular
   profiles preserve endpoint references, horizontal/vertical constraints and driving
-  dimensions, including aligned point distances and reversed references;
+  dimensions, including aligned point distances, reordered graph connections,
+  shared-curve relationships and reversed references;
   driven dimensions fail atomically. Native mm/degree feature-input
   names now survive timeline edits with their expression dependencies. Arc endpoints,
   major/rotated sweeps and profiles with holes retain exact curve references, with

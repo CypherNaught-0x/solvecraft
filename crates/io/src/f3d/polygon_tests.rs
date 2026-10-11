@@ -230,13 +230,34 @@ fn aligned_dimension_records_validate_flags_references_and_truncation() {
         f.0.get_mut(&57).unwrap().2.truncate(keep);
         assert!(f.design().to_document("Truncated diagonal").is_err(), "prefix {keep}");
     }
-    // Field-authored layout: qualifier at 20, axis at 35, final point backref
-    // at len-11. Unknown orientation and mismatched membership must fail.
-    for (offset, bytes) in
-        [(20, 4u32.to_le_bytes().to_vec()), (35, 0u32.to_le_bytes().to_vec()), (original.len() - 11, 999u64.to_le_bytes().to_vec())]
-    {
+    // Unknown kind flags and mismatched point membership must fail, regardless
+    // of the connection slot metadata that precedes the semantic fields.
+    for (offset, bytes) in [(original.len() - 46, 0xdead_u64.to_le_bytes().to_vec()), (original.len() - 11, 999u64.to_le_bytes().to_vec())] {
         let mut f = rectangle_with_dimensions(true, true);
         f.0.get_mut(&57).unwrap().2[offset..offset + bytes.len()].copy_from_slice(&bytes);
         assert!(f.design().to_document("Invalid diagonal").is_err(), "offset {offset}");
+    }
+}
+
+#[test]
+fn linear_connection_slots_and_reference_order_do_not_define_orientation() {
+    for aligned in [false, true] {
+        let base = rectangle_with_dimensions(aligned, false);
+        let expected = base.design().sketch_constraints().unwrap();
+        let mut f = rectangle_with_dimensions(aligned, false);
+        for id in [56, 57] {
+            let data = &mut f.0.get_mut(&id).unwrap().2;
+            for (offset, slot) in [(20, 0_u32), (35, u32::MAX), (50, 17)] {
+                data[offset..offset + 4].copy_from_slice(&slot.to_le_bytes());
+            }
+            let len = data.len();
+            let first = data[len - 23..len - 12].to_vec();
+            let second = data[len - 12..len - 1].to_vec();
+            data[len - 23..len - 12].copy_from_slice(&second);
+            data[len - 12..len - 1].copy_from_slice(&first);
+        }
+        let design = f.design();
+        assert_eq!(design.sketch_constraints().unwrap(), expected);
+        volume(&design.to_document("Reordered graph").unwrap(), 30. * if aligned { 40. } else { 20. } * 17.);
     }
 }

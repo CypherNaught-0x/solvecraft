@@ -30,6 +30,7 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-user-parameter-measurements.json",
         "fusion-user-rectangle-measurements.json",
         "fusion-aligned-measurements.json",
+        "fusion-connections-measurements.json",
     ] {
         let cases: Value = serde_json::from_slice(&std::fs::read(dir.join(source)).unwrap()).unwrap();
         for (name, api) in cases.as_object().unwrap() {
@@ -221,6 +222,34 @@ fn aligned_dimensions_remain_editable_with_reversed_native_references() {
         assert!((measure["bodies"][0]["bbox"]["max"][1].as_f64().unwrap() - depth * 10.).abs() < 1e-5, "{name}");
         let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
         volume(&mut Session::new(reopened), width * depth, name);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc, original);
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
+fn reordered_connections_and_shared_curves_preserve_editable_dimensions() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let cases: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-connections-measurements.json")).unwrap()).unwrap();
+    for (name, api) in cases.as_object().unwrap() {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        volume(&mut s, api["volume"].as_f64().unwrap(), name);
+        let original = s.doc.clone();
+        let (parameter, expression, want) = if name.contains("ring") {
+            let parameter = api["parameters"].as_array().unwrap().iter().find(|p| p["expression"] == "60 mm").unwrap()["name"].as_str().unwrap();
+            (parameter, "80 mm", 12. * std::f64::consts::PI)
+        } else if name.ends_with("vertical-first") {
+            let parameter = api["parameters"].as_array().unwrap().iter().find(|p| p["expression"] == "40 mm").unwrap()["name"].as_str().unwrap();
+            (parameter, "55 mm", 16.5)
+        } else {
+            ("diagonal", "65 mm", 3. * (6.5_f64.powi(2) - 9.).sqrt())
+        };
+        s.execute("parameters.change", &json!({"name":parameter,"expression":expression})).unwrap();
+        volume(&mut s, want, name);
+        let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+        volume(&mut Session::new(reopened), want, name);
         s.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(s.doc, original);
     }
