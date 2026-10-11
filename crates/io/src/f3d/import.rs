@@ -61,13 +61,6 @@ impl Design {
         let circles: BTreeMap<_, _> = self.sketch_circles()?.into_iter().map(|c| (c.id, c)).collect();
         let arcs: BTreeMap<_, _> = self.sketch_arcs()?.into_iter().map(|a| (a.circle.id, a)).collect();
         let lines: BTreeMap<_, _> = self.sketch_lines()?.into_iter().map(|l| (l.id, l)).collect();
-        if points.values().any(|p| p.linked)
-            || lines.values().any(|l| l.reference)
-            || circles.values().any(|c| c.reference)
-            || arcs.values().any(|a| a.circle.reference)
-        {
-            return Err(invalid("linked sketch source dependencies are not supported yet"));
-        }
         let constraints: BTreeMap<_, _> = self.sketch_constraints()?.into_iter().map(|c| (c.geometry, c)).collect();
         let profiles: BTreeMap<_, _> = self.sketch_profiles()?.into_iter().map(|p| (p.id, p)).collect();
         let mut doc = Document::new(name);
@@ -146,9 +139,52 @@ impl Design {
                     let mut point_indices = BTreeMap::new();
                     let mut curve_indices = BTreeMap::new();
                     let mut consumed = BTreeSet::new();
+                    let native = projections::Geometry { points: &points, lines: &lines, circles: &circles, arcs: &arcs };
+                    let mut projected_sources = BTreeMap::new();
+                    let members: BTreeSet<_> = placement.entities.iter().copied().collect();
+                    if members.len() != placement.entities.len() {
+                        return Err(invalid("duplicate sketch entity"));
+                    }
+                    for id in &placement.projections {
+                        let projection = projections::decode(&records, &classes, *id, f.id)?;
+                        let (source_feature, source_plane) =
+                            sketches.get(&projection.source_geometry).copied().ok_or_else(|| invalid("projection precedes its source sketch"))?;
+                        let entities = native.attach(&projection, geometry, source_feature, (source_plane, plane), &mut sketch)?;
+                        for (id, index, source_point) in entities.points {
+                            if !members.contains(&id) {
+                                return Err(invalid("foreign projected point"));
+                            }
+                            let source = (projection.source_geometry, source_point);
+                            if let Some(previous) = projected_sources.insert(id, source) {
+                                if previous != source {
+                                    return Err(invalid("shared projected point has conflicting sources"));
+                                }
+                                // A link owns its points. Adjacent one-curve links use
+                                // aliases of the same source vertex; constraints bind
+                                // the canonical point and every alias follows that source.
+                                sketch.points.get_mut(index).ok_or_else(|| invalid("missing projected alias"))?.id =
+                                    format!("p{id}:projection{}", projection.target);
+                            } else {
+                                consumed.insert(id);
+                                point_indices.insert(id, index);
+                            }
+                        }
+                        let (id, index) = entities.curve;
+                        if !members.contains(&id) || !consumed.insert(id) {
+                            return Err(invalid("duplicate or foreign projected curve"));
+                        }
+                        curve_indices.insert(id, index);
+                    }
+                    let projected = consumed.clone();
                     let mut has_origin = false;
                     for id in &placement.entities {
+                        if projected.contains(id) {
+                            continue;
+                        }
                         if let Some(p) = points.get(id) {
+                            if p.linked {
+                                return Err(invalid("linked sketch source dependencies are not supported yet"));
+                            }
                             if p.sketch != geometry {
                                 return Err(invalid("point belongs to another sketch"));
                             }
@@ -174,7 +210,13 @@ impl Design {
                         }
                     }
                     for id in &placement.entities {
+                        if projected.contains(id) {
+                            continue;
+                        }
                         if let Some(c) = circles.get(id) {
+                            if c.reference {
+                                return Err(invalid("linked sketch source dependencies are not supported yet"));
+                            }
                             if c.sketch != geometry || c.center.get(2).is_none_or(|z| z.abs() > 1e-10) || c.normal != [0., 0., 1.] {
                                 return Err(invalid("unsupported circle placement"));
                             }
@@ -197,8 +239,14 @@ impl Design {
                         }
                     }
                     for id in &placement.entities {
+                        if projected.contains(id) {
+                            continue;
+                        }
                         if let Some(arc) = arcs.get(id) {
                             let c = &arc.circle;
+                            if c.reference {
+                                return Err(invalid("linked sketch source dependencies are not supported yet"));
+                            }
                             if c.sketch != geometry || c.normal != [0., 0., 1.] {
                                 return Err(invalid("unsupported arc placement"));
                             }
@@ -238,7 +286,13 @@ impl Design {
                         }
                     }
                     for id in &placement.entities {
+                        if projected.contains(id) {
+                            continue;
+                        }
                         if let Some(line) = lines.get(id) {
+                            if line.reference {
+                                return Err(invalid("linked sketch source dependencies are not supported yet"));
+                            }
                             if line.sketch != geometry {
                                 return Err(invalid("line belongs to another sketch"));
                             }

@@ -254,9 +254,10 @@ fn projection_flags_and_line_types_match_public_api() {
         assert_eq!(lines.iter().filter(|p| p.centerline).count(), expected_curves.iter().filter(|p| p["centerline"] == true).count(), "{name}");
         assert_eq!(lines.iter().filter(|p| p.construction).count(), expected_curves.iter().filter(|p| p["construction"] == true).count(), "{name}");
         if name == "projection-linked" {
-            // Its projected-feature schema is also unsupported, so history may
-            // reject before the entity-level dependency guard is reached.
-            assert!(d.to_document(name).is_err(), "projected history must not be flattened");
+            let doc = d.to_document(name).unwrap();
+            let solvecraft_engine::doc::FeatureKind::Sketch { sketch, .. } = &doc.features[1].kind else { panic!("projected sketch") };
+            assert_eq!(sketch.links.len(), 2);
+            assert!(sketch.curves.iter().all(|c| c.link.is_some()));
         }
     }
 }

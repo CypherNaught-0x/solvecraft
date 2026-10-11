@@ -33,6 +33,7 @@ pub struct SketchPlacement {
     /// The placement's owning object. Assembly placement is not yet reconstructed.
     pub owner: u64,
     pub entities: Vec<u64>,
+    pub projections: Vec<u64>,
 }
 
 impl Design {
@@ -76,9 +77,15 @@ impl Design {
                         require_class(&classes, geometry, GEOMETRY, 18)?;
                         let plane = r.reference()?;
                         validate_refs(&classes, &[plane])?;
-                        r.take(12)?;
+                        zeros(&mut r, 4)?;
+                        let projections = references(&mut r)?;
+                        for projection in &projections {
+                            require_class(&classes, *projection, super::projections::CLASS, 4)?;
+                        }
+                        zeros(&mut r, 4)?;
                         let (mut placement, name) = placement(&records, &classes, geometry)?;
                         placement.support = plane;
+                        placement.projections = projections;
                         (HistoryKind::Sketch { geometry, placement }, name)
                     }
                     ("D869265F-F339-4751-A066-91D30F81FF08", 4) => {
@@ -199,7 +206,7 @@ fn placement(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, geometry: u
     let owner = r.reference()?;
     validate_refs(classes, &[owner])?;
     finish(&r)?;
-    Ok((SketchPlacement { support: 0, matrix, owner, entities }, name))
+    Ok((SketchPlacement { support: 0, matrix, owner, entities, projections: vec![] }, name))
 }
 
 pub(super) fn payload(bytes: &[u8], id: u64) -> Result<Reader<'_>> {

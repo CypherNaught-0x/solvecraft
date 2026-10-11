@@ -31,6 +31,8 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-user-rectangle-measurements.json",
         "fusion-aligned-measurements.json",
         "fusion-connections-measurements.json",
+        "fusion-projection-history-measurements.json",
+        "fusion-projected-rectangle-measurements.json",
     ] {
         let cases: Value = serde_json::from_slice(&std::fs::read(dir.join(source)).unwrap()).unwrap();
         for (name, api) in cases.as_object().unwrap() {
@@ -431,5 +433,55 @@ fn geometric_controls_preserve_relationships_and_remain_solvable_after_edits() {
         }
         let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
         assert_eq!(*s.doc, reopened, "{name}");
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with projected-circle history controls"]
+fn projected_history_follows_source_edits_after_reopening() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let cases: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-projection-history-measurements.json")).unwrap()).unwrap();
+    let base = &cases["projection-history-base"];
+    let mut s = Session::default();
+    s.execute("doc.open", &json!({"path":dir.join("projection-history-base.f3d")})).unwrap();
+    let original = s.doc.clone();
+    let solvecraft_engine::doc::FeatureKind::Sketch { sketch, .. } = &s.doc.features[1].kind else { panic!("projected sketch") };
+    assert_eq!(sketch.links.len(), 1);
+    assert!(sketch.curves[0].link.is_some());
+    for (parameter, expression, expected) in
+        [("diameter_parameter", "60 mm", "projection-history-diameter60"), ("height_parameter", "45 mm", "projection-history-height45")]
+    {
+        s.execute("parameters.change", &json!({"name":base[parameter],"expression":expression})).unwrap();
+        volume(&mut s, cases[expected]["volume"].as_f64().unwrap(), expected);
+        let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+        let mut reopened = Session::new(reopened);
+        volume(&mut reopened, cases[expected]["volume"].as_f64().unwrap(), expected);
+        reopened.execute("parameters.change", &json!({"name":base["diameter_parameter"],"expression":"80 mm"})).unwrap();
+        volume(&mut reopened, 16. * std::f64::consts::PI * if parameter == "height_parameter" { 4.5 } else { 3. }, "edit after reopen");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc, original);
+        volume(&mut s, base["volume"].as_f64().unwrap(), "undo projection edit");
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with projected-rectangle history controls"]
+fn projected_rectangle_keeps_shared_source_vertices_through_edits() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let cases: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-projected-rectangle-measurements.json")).unwrap()).unwrap();
+    let base = &cases["projected-rectangle-baseline"];
+    let mut s = Session::default();
+    s.execute("doc.open", &json!({"path":dir.join("projected-rectangle-baseline.f3d")})).unwrap();
+    let original = s.doc.clone();
+    let solvecraft_engine::doc::FeatureKind::Sketch { sketch, .. } = &s.doc.features[1].kind else { panic!("projected sketch") };
+    assert_eq!(sketch.links.len(), 4);
+    for (parameter, expression, expected) in [("width_parameter", "45 mm", 36.), ("depth_parameter", "35 mm", 42.)] {
+        s.execute("parameters.change", &json!({"name":base[parameter],"expression":expression})).unwrap();
+        volume(&mut s, expected, "projected rectangle edit");
+        let doc = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+        volume(&mut Session::new(doc), expected, "projected rectangle reopened");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc, original);
+        volume(&mut s, 24., "projected rectangle undo");
     }
 }

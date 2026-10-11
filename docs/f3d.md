@@ -555,3 +555,33 @@ fixtures, 553 engine tests and the WASM checks. The opening regression takes
 0.89 seconds in this run. Upstream main through 9d7be3c is integrated, including
 deterministic STEP/IGES work-budget tests. The centerline prism was rendered and
 visually checked as one unsplit solid.
+
+
+### Associative sketch-curve projections
+
+The sketch feature's former twelve-byte neutral block contains a variable
+projection-reference list. Supported projection records bind a target curve to
+a source selector and a tracking identity. Both identities must agree on the
+source sketch geometry and curve tag; the importer validates versions, owners,
+member entities, unique tags, coordinate transforms and cached geometry.
+
+Line and circle projections now become SolveCraft sketch links to an earlier
+source feature. Points and curves retain native identities. Adjacent projected
+lines can share a native corner: each SolveCraft link owns an internal point
+alias, all aliases must resolve to the same native source vertex, and dimensions
+and constraints use the canonical point. Independent cached points are never
+substituted for a missing relationship. Body-edge/face projections, multi-entity
+mappings and projected arcs still require additional native schemas.
+
+Local controls cover a projected circle extrusion, diameter and height edits,
+reopening, a second source edit after reopening and undo; a projected rectangle
+covers four linked edges and shared source vertices. The original projected-circle
+SolveCraft recipe and fixture add source-diameter edits with analytic volume and
+bounds. Original synthetic records exercise reconstruction and reject damaged
+ownership, target membership, missing/forward sources and truncated records.
+
+Validation: all seventeen local F3D import groups pass, including four projected
+circle exports and three projected rectangle exports. Source edits, reopening,
+undo and edited-cylinder rendering were verified. Integrated upstream main
+through 6f872c7 passes full CI: 26 binaries, 64 IO tests, twenty native fixtures,
+553 engine tests and WASM. The opening guard completes in 0.91 seconds.

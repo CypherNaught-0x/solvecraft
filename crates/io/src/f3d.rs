@@ -30,6 +30,9 @@ mod points;
 mod polygon_tests;
 mod profiles;
 #[cfg(test)]
+mod projection_tests;
+mod projections;
+#[cfg(test)]
 mod radial_tests;
 #[cfg(test)]
 mod round_profile_tests;
