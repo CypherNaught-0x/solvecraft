@@ -764,6 +764,54 @@ mod tests {
         let body = crate::fillet(&body, &rim, 0.3).unwrap();
         let inset = 12.0 * 10.0_f64.to_radians().tan();
         let body = check_geometry(&body, Vec3::new(15.0 + inset * 0.5, (1.8 + 35.0 - inset) * 0.5, 10.0), 1.5);
+        // The old surface passed the normal-travel check below but had an
+        // axial curvature jump exceeding 5/r at the constant-radius section.
+        // Tangency alone left a narrow highlight resembling a pinched crease.
+        let mut checked = 0;
+        for face in body.solid.face_iter() {
+            let mt::Surface::BSplineSurface(s) = face.surface() else { continue };
+            if s.degrees() != (3, 3) || s.subs(0.5, 0.5).z <= 12.0 {
+                continue;
+            }
+            let surface = crate::body::evaluation::Surface(face.oriented_surface());
+            for edge in face.edge_iter() {
+                let neighbor = body.solid.face_iter().find(|f| f.id() != face.id() && f.edge_iter().any(|e| e.id() == edge.id())).unwrap();
+                let Some(crate::offset::Surf::Cylinder { a: axis, r, .. }) = crate::offset::surf_of(neighbor, 1e-6) else { continue };
+                if (r - 1.5).abs() > 1e-6 {
+                    continue;
+                }
+                let curve = edge.oriented_curve();
+                let (lo, hi) = curve.range_tuple();
+                for fraction in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9] {
+                    let p = curve.subs(lo + (hi - lo) * fraction);
+                    let (u, v) = surface.search_nearest_parameter(p, None, 100).unwrap();
+                    let su = surface.uder(u, v);
+                    let sv = surface.vder(u, v);
+                    let a = mt::Vector3::new(axis.x, axis.y, axis.z);
+                    let det = su.dot(su) * sv.dot(sv) - su.dot(sv).powi(2);
+                    let ud = (a.dot(su) * sv.dot(sv) - a.dot(sv) * su.dot(sv)) / det;
+                    let vd = (a.dot(sv) * su.dot(su) - a.dot(su) * su.dot(sv)) / det;
+                    let curvature = (surface.uuder(u, v) * ud * ud + surface.uvder(u, v) * (2.0 * ud * vd) + surface.vvder(u, v) * vd * vd)
+                        .dot(surface.normal(u, v));
+                    // Keep the axial jump below one tenth of the cylinder's
+                    // transverse curvature (the former spike was over 5/r).
+                    assert!((curvature * r).abs() < 0.1, "rim join axial curvature {} / radius at {fraction}", curvature * r);
+                    // Also enter the patch in the cylinder's axial direction:
+                    // matching only the curvature exactly on the edge could
+                    // move the pinch a short distance into the transition.
+                    let inward = ((0.5 - u) * ud + (0.5 - v) * vd).signum();
+                    let normal = surface.normal(u, v);
+                    for step in [0.01, 0.02, 0.04] {
+                        let distance = inward * r * step;
+                        let next = surface.normal(u + ud * distance, v + vd * distance);
+                        let angle = normal.dot(next).clamp(-1.0, 1.0).acos();
+                        assert!(angle < 0.5 * step, "pinch inside rim join at {fraction}, distance {step} r, normal turn {angle}");
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 9, "must check the transition/corner-cylinder section");
         let patch = body
             .solid
             .face_iter()
