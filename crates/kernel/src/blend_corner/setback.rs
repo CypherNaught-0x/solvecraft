@@ -433,9 +433,9 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
             let (u, v) = (p.dot(x) / du, p.dot(y) / dv);
             let (bu, dbu, _) = basis(&ku, u, nu)?;
             let (bv, dbv, _) = basis(&kv, v, nv)?;
-            rows.push(tensor(&bu, &bv, 1.0, p.dot(z)));
+            rows.push(tensor(&bu, &bv, if radii.is_some() { 1.0 } else { 10.0 }, p.dot(z)));
             if *normal != Vec3::ZERO {
-                let weight = if radii.is_some() { 0.1 } else { 1.0 };
+                let weight = if radii.is_some() { 0.1 } else { 10.0 };
                 rows.push(tensor(&dbu, &bv, weight, -du * normal.dot(x) / normal.dot(z)));
                 rows.push(tensor(&bu, &dbv, weight, -dv * normal.dot(y) / normal.dot(z)));
             }
@@ -487,13 +487,19 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
         for ((bu, dbu, ddbu), wu, u) in &quadrature(&ku, nu)? {
             for ((bv, dbv, ddbv), wv, v) in &quadrature(&kv, nv)? {
                 if inside(*u, *v) {
-                    if radii.is_none() || boundaries.len() == 6 {
+                    if radii.is_some() && boundaries.len() == 6 {
                         rows.push(tensor(bu, bv, 0.1 * (wu * wv).sqrt(), guide(*u, *v)));
                     }
                     let base = origin + x * (du * u) + y * (dv * v);
                     limits.extend(constraints(base, bu, bv));
                 }
-                let w = 1e-6 * size * (wu * wv * du * dv).sqrt();
+                // Transitions have no analytic interior guide. Its triangulated
+                // hull is only a weak regularizer, not a shape target:
+                // fitting it imports facets and leaves oscillations between the
+                // strongly constrained boundary samples. Minimize bending over
+                // the whole spline domain, scaled by the local patch dimensions.
+                let fairness = if radii.is_some() { 1e-6 * size } else { 1e-3 * (du * dv).sqrt() };
+                let w = fairness * (wu * wv * du * dv).sqrt();
                 rows.push(tensor(ddbu, bv, w / (du * du), 0.0));
                 rows.push(tensor(dbu, dbv, 2.0_f64.sqrt() * w / (du * dv), 0.0));
                 rows.push(tensor(bu, ddbv, w / (dv * dv), 0.0));
@@ -601,6 +607,53 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transition_interior_does_not_follow_facets_of_its_guide() {
+        // Four boundaries from the same cylinder should produce a smooth barrel,
+        // not the faceted convex-hull guide with dents between fitted boundaries.
+        let z = 3.0_f64.sqrt();
+        let a = Vec3::new(-1.0, -2.0, z);
+        let b = Vec3::new(1.0, -2.0, z);
+        let c = Vec3::new(1.0, 2.0, z);
+        let d = Vec3::new(-1.0, 2.0, z);
+        let curves = [
+            mt::Curve::NurbsCurve(conic(a, Vec3::new(0.0, -2.0, 4.0 / z), b, z / 2.0)),
+            mt::Curve::Line(mt::Line(p3(b), p3(c))),
+            mt::Curve::NurbsCurve(conic(c, Vec3::new(0.0, 2.0, 4.0 / z), d, z / 2.0)),
+            mt::Curve::Line(mt::Line(p3(d), p3(a))),
+        ];
+        let boundaries: Vec<_> =
+            curves.into_iter().map(|curve| Boundary { curve, normal: Normal::Cylinder { origin: Vec3::ZERO, axis: Vec3::Y } }).collect();
+        let surface = transition(&boundaries, Vec3::Z, 10.0, &[]).unwrap();
+        let origin = from_p3(surface.subs(0.0, 0.0));
+        let u_axis = from_p3(surface.subs(1.0, 0.0)) - origin;
+        let v_axis = from_p3(surface.subs(0.0, 1.0)) - origin;
+        let determinant = u_axis.x * v_axis.y - u_axis.y * v_axis.x;
+        let mut worst: f64 = 0.0;
+        let mut kink: f64 = 0.0;
+        for i in 1..40 {
+            for j in 1..40 {
+                let x = -1.0 + i as f64 / 20.0;
+                let y = -2.0 + j as f64 / 10.0;
+                let p = Vec3::new(x, y, (4.0 - x * x).sqrt());
+                let q = p - origin;
+                let u = (q.x * v_axis.y - q.y * v_axis.x) / determinant;
+                let v = (u_axis.x * q.y - u_axis.y * q.x) / determinant;
+                worst = worst.max(from_p3(surface.subs(u, v)).dist(p));
+                let n = surface.normal(u, v);
+                kink = kink.max(Vec3::new(n.x, n.y, n.z).dot(Vec3::new(p.x, 0.0, p.z) / 2.0).clamp(-1.0, 1.0).acos().to_degrees());
+                let ux = v_axis.y / determinant;
+                let vx = -u_axis.y / determinant;
+                let curvature = surface.uuder(u, v).z * ux * ux + 2.0 * surface.uvder(u, v).z * ux * vx + surface.vvder(u, v).z * vx * vx;
+                assert!(curvature < 0.0, "barrel acquired an inward dimple: {curvature}");
+            }
+        }
+        // A minimum-bending fill need not be the exact cylinder (unlike the
+        // main fillet), but must retain its concavity and stay within 1.25% of
+        // its radius and two degrees throughout the interior.
+        assert!(worst < 0.025 && kink < 2.0, "interior deviation {worst}, normal error {kink} degrees");
+    }
 
     #[test]
     fn cubic_basis_reproduces_affine_coordinates() {
