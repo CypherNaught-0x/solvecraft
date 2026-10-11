@@ -220,7 +220,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   remain unsupported because they have independent extents. Legacy offset groups
   now decode all six Gridfinity generators and its full constraint list. Multiple
   selected regions preserve separate bodies and each region's holes through edits;
-  nine complete legacy profile records match current resaves. Thirty-two original
+  sixteen analytic legacy profile records match current resaves. Directed line/circle
+  pieces preserve overlapping and divided regions through source edits; unverified
+  circle seams and partial arcs remain unsupported. Thirty-seven original
   editable-history fixtures check analytic volumes and bounds.
   Signed extrusion start offsets preserve expressions
   and parameter bindings through edits, reopening and undo; zero-angle taper inputs

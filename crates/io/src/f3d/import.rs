@@ -513,7 +513,7 @@ impl Design {
                         }
                         active_bodies.clone()
                     };
-                    FeatureKind::Extrude { sketch, profiles: profile_selection(profile)?, extent, operation, targets }
+                    FeatureKind::Extrude { sketch, profiles: profile_selection(profile, &circles, &arcs)?, extent, operation, targets }
                 }
             };
             let id = doc.add_feature(kind, Some(&f.name))?;
@@ -641,7 +641,35 @@ pub(super) fn line_midpoints(sketch: &mut Sketch, lines: [usize; 2], id: u64) ->
     Ok(())
 }
 
-fn profile_selection(profile: &SketchProfile) -> Result<ProfileSel> {
+fn profile_selection(profile: &SketchProfile, circles: &BTreeMap<u64, SketchCircle>, arcs: &BTreeMap<u64, SketchArc>) -> Result<ProfileSel> {
+    if profile.regions.iter().flatten().flat_map(|boundary| &boundary.pieces).any(|(_, count)| *count != 1) {
+        let boundary = |boundary: &ProfileLoop| -> Result<Vec<solvecraft_doc::sketch::ProfilePiece>> {
+            let mut pieces = Vec::new();
+            for ((id, (piece, count)), reversed) in boundary.curves.iter().zip(&boundary.pieces).zip(&boundary.reversed) {
+                // Circle partition numbers are relative to the source parameter seam.
+                // Only the independently observed positive-X seam is certified here.
+                if let Some(circle) = circles.get(id)
+                    && (circle.x_axis != [1., 0., 0.] || circle.normal != [0., 0., 1.])
+                {
+                    return Err(invalid("partial profile circle seam reconstruction is not supported yet"));
+                }
+                if arcs.contains_key(id) {
+                    return Err(invalid("arc piece profile reconstruction is not supported yet"));
+                }
+                pieces.push(solvecraft_doc::sketch::ProfilePiece { curve: format!("c{id}"), piece: *piece, count: *count, reversed: *reversed });
+            }
+            pieces.sort();
+            Ok(pieces)
+        };
+        let mut profiles = Vec::new();
+        for loops in &profile.regions {
+            let outer = loops.iter().find(|l| l.outer).ok_or_else(|| invalid("missing outer profile boundary"))?;
+            let mut holes = loops.iter().filter(|l| !l.outer).map(boundary).collect::<Result<Vec<_>>>()?;
+            holes.sort();
+            profiles.push(solvecraft_doc::PieceProfileBoundary { outer: boundary(outer)?, holes });
+        }
+        return Ok(ProfileSel::PieceBoundaries { profiles });
+    }
     let ids = |boundary: &ProfileLoop| {
         let mut ids: Vec<_> = boundary.curves.iter().map(|id| format!("c{id}")).collect();
         ids.sort();

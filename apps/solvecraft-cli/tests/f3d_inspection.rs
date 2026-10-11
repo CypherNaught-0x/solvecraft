@@ -504,7 +504,7 @@ fn legacy_offset_sources_outputs_and_parameters_match_public_api() {
 
 #[test]
 #[ignore = "requires local original and resaved legacy archives"]
-fn complete_legacy_profile_boundaries_match_resaved_records() {
+fn analytic_legacy_profile_boundaries_match_resaved_records() {
     let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
     let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
     let mut successes = 0;
@@ -522,7 +522,7 @@ fn complete_legacy_profile_boundaries_match_resaved_records() {
                     decoded.insert(id, profiles);
                 }
             }
-            eprintln!("{name}, layout {}: {} complete profiles", d.layout, decoded.len());
+            eprintln!("{name}, layout {}: {} analytic profiles", d.layout, decoded.len());
             if let Some(original) = &original {
                 assert_eq!(&decoded, original);
                 successes += decoded.len();
@@ -531,5 +531,5 @@ fn complete_legacy_profile_boundaries_match_resaved_records() {
             }
         }
     }
-    assert_eq!(successes, 9, "complete legacy profile coverage changed");
+    assert_eq!(successes, 16, "analytic legacy profile coverage changed");
 }

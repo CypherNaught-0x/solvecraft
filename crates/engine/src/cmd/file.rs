@@ -243,7 +243,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
             let sketch_profiles=match d.sketch_profiles() {
-                Ok(profiles)=>json!({"records":profiles.iter().map(|p|json!({"id":p.id,"feature":p.feature,"geometry":p.geometry,"regions":p.regions.iter().map(|loops|loops.iter().map(|l|json!({"curves":l.curves,"reversed":l.reversed,"outer":l.outer})).collect::<Vec<_>>()).collect::<Vec<_>>()})).collect::<Vec<_>>()}),
+                Ok(profiles)=>json!({"records":profiles.iter().map(|p|json!({"id":p.id,"feature":p.feature,"geometry":p.geometry,"regions":p.regions.iter().map(|loops|loops.iter().map(|l|json!({"curves":l.curves,"reversed":l.reversed,"pieces":l.pieces,"outer":l.outer})).collect::<Vec<_>>()).collect::<Vec<_>>()})).collect::<Vec<_>>()}),
                 Err(e)=>json!({"unsupported":e.to_string()}),
             };
             json!({"path": d.path, "build": d.build, "layout": d.layout, "classes": d.classes.len(),

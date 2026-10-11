@@ -1083,3 +1083,49 @@ all 32 original fixtures and ten-crate WASM checking. The HardEdgeBasin opening
 guard passed in 0.87 seconds. All 30 local import groups and 12 inspection groups
 passed. The imported two-ring model was rendered and visually checked after
 diameter and height edits. Upstream `e171ff0` remains current and integrated.
+
+
+## Split analytic profile boundaries
+
+Fifteen local public-API controls isolate a lens and both crescents from overlapping
+circles, and both halves of a rectangle crossed by a line with dangling ends. Each
+control has a source-dimension edit and a subsequent extrusion-height edit. The two
+tracking integers previously required to be `1, 1` are a one-based source piece
+number and the total source piece count. The independent reversal flag controls
+traversal. The divider's middle segment is piece 2 of 3, even though its two outer
+pieces cannot bound a closed profile. A circle's first piece wraps across its
+positive-X parameter seam; the other pieces follow positive angular order.
+
+The reader retains these fields, validates their bounds, and distinguishes pieces
+of the same source curve. Split boundaries import as format-16 `PieceBoundaries`
+references, with exact outer and hole identities. The sketch graph certifies those
+identities before pruning dangling edges; certificates are recomputed rather than
+loaded from serialized profile caches. Recompute requires the same source IDs,
+piece numbers, counts and traversal directions. Missing or ambiguous boundaries
+produce a model error rather than choosing a nearby region by list index.
+
+This import step certifies native lines and positive-Z circles with the observed
+positive-X seam. Partial arcs, rotated native circle seams, and intersections on
+the seam remain explicitly unsupported. Free-form tessellation cannot acquire an
+analytic-piece certificate. These limits avoid assigning unverified native piece
+numbers to superficially similar geometry.
+
+Five original command recipes and `.solvecraft` fixtures cover the lens, both
+crescents and both divided-rectangle regions. Expected circle areas use the
+analytic two-circle intersection formula; rectangle volumes use width × depth ×
+height. They exercise source edits, height edits, save/reopen and undo. Original
+field-authored native records additionally check all three overlapping-circle
+regions, malformed counts, every truncated tracking prefix, and topology changes
+that remove the selected intersection. No exported Fusion file is committed.
+
+The same bounded metadata decoder now matches sixteen profile records between the
+original legacy archives and their current Fusion resaves: ten in the adapter and
+six in Gridfinity. This is a metadata correspondence check, not a claim that those
+entire documents import successfully. Larger feature histories remain incomplete.
+
+Validation for this step: full `cargo xtask ci` passed all 29 test binaries,
+102 IO tests, 109 document tests, 561 engine tests, 198 kernel tests, the
+37-fixture history suite, and the ten-crate WebAssembly check. The HardEdgeBasin
+opening guard completed in 0.86 seconds. All 31 local native import groups and
+12 native inspection groups passed separately. Upstream `8fa52c8` is integrated;
+the edited crescent was rendered and visually checked using original fixture data.

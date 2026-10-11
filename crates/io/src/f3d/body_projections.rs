@@ -39,7 +39,7 @@ impl Context<'_> {
             return Err(invalid("projected rectangle has multiple regions"));
         };
         let [boundary] = loops.as_slice() else { return Err(invalid("projected rectangle cannot contain holes")) };
-        if !boundary.outer || boundary.curves.len() != 4 {
+        if !boundary.outer || boundary.curves.len() != 4 || boundary.pieces.iter().any(|piece| *piece != (1, 1)) {
             return Err(invalid("unsupported projected rectangle boundary"));
         }
         let cached = edge.line.ok_or_else(|| invalid("missing native finite edge geometry"))?;

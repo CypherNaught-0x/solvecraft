@@ -302,3 +302,84 @@ fn multiple_profile_regions_reject_duplicates_and_truncation() {
         assert!(f.design().sketch_profiles().is_err(), "prefix {keep}");
     }
 }
+
+fn partial_circles(first: (u32, bool), second: (u32, bool)) -> Fixture {
+    let mut f = multiple_regions(false);
+    let mut b = vec![];
+    attributes(&mut b, 18);
+    for x in [4_f64, 0., 0., 0., 0., 1., 1., 0., 0., 3., 0., TAU] {
+        b.extend(x.to_le_bytes());
+    }
+    reference(&mut b, 75);
+    b.extend([0; 44]);
+    reference(&mut b, 70);
+    f.put(35, "F0130424-8B7E-4092-93C9-1CA807482534", 0, b, None);
+    f.0.get_mut(&75).unwrap().2[25..33].copy_from_slice(&4_f64.to_le_bytes());
+    let mut b = vec![0; 6];
+    reference(&mut b, 100);
+    for n in [1, 1, 2] {
+        u32(&mut b, n);
+    }
+    for (tag, (piece, reversed)) in [(17, first), (18, second)] {
+        u32(&mut b, 3);
+        u64(&mut b, tag);
+        u64(&mut b, 2);
+        u32(&mut b, u32::from(reversed));
+        u32(&mut b, piece);
+        u32(&mut b, 2);
+        u64(&mut b, 0);
+    }
+    b.push(1);
+    u32(&mut b, 0);
+    f.0.get_mut(&101).unwrap().2 = b;
+    f
+}
+
+fn overlap(r: f64, s: f64, d: f64) -> f64 {
+    r * r * ((d * d + r * r - s * s) / (2. * d * r)).acos() + s * s * ((d * d + s * s - r * r) / (2. * d * s)).acos()
+        - ((-d + r + s) * (d + r - s) * (d - r + s) * (d + r + s)).sqrt() / 2.
+}
+
+#[test]
+fn partial_circles_distinguish_lens_and_crescents_through_edits() {
+    for (first, second, side) in [((1, false), (2, false), 0), ((2, false), (2, true), 1), ((1, true), (1, false), 2)] {
+        let mut doc = partial_circles(first, second).design().to_document("Original split circles").unwrap();
+        let area = |r: f64| {
+            let lens = overlap(r, 30., 40.);
+            match side {
+                0 => lens,
+                1 => PI * r * r - lens,
+                _ => PI * 900. - lens,
+            }
+        };
+        volume(&doc, area(30.) * 17.);
+        doc.change_param("d7", "70 mm", None, None).unwrap();
+        volume(&doc, area(35.) * 17.);
+        volume(&crate::read_design(&crate::write_design(&doc)).unwrap(), area(35.) * 17.);
+        doc.change_param("d7", "10 mm", None, None).unwrap();
+        let mut model = solvecraft_doc::Model::new();
+        model.evaluate(&doc);
+        assert!(model.results.last().unwrap().error.is_some());
+        assert!(model.state().bodies.is_empty());
+    }
+}
+
+#[test]
+fn profile_piece_records_reject_invalid_counts_seams_and_truncation() {
+    for (piece, count) in [(0, 2), (3, 2), (1, 0), (1, 50_001)] {
+        let mut f = partial_circles((1, false), (2, false));
+        f.0.get_mut(&101).unwrap().2[53..57].copy_from_slice(&u32::to_le_bytes(piece));
+        f.0.get_mut(&101).unwrap().2[57..61].copy_from_slice(&u32::to_le_bytes(count));
+        assert!(f.design().sketch_profiles().is_err());
+    }
+    let length = partial_circles((1, false), (2, false)).0[&101].2.len();
+    for keep in 0..length {
+        let mut f = partial_circles((1, false), (2, false));
+        f.0.get_mut(&101).unwrap().2.truncate(keep);
+        assert!(f.design().sketch_profiles().is_err(), "prefix {keep}");
+    }
+    let mut f = partial_circles((1, false), (2, false));
+    round(&mut f, 31, 17, 3., TAU, PI / 2.);
+    assert!(f.design().to_document("Unknown seam").unwrap_err().to_string().contains("seam"));
+    assert!(partial_circles((1, false), (2, false)).design().circle_profiles().is_err());
+}

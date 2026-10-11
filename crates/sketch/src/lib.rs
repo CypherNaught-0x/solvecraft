@@ -34,7 +34,9 @@ pub use model::{Constraint, ConstraintKind, Curve, CurveKind, MAX_CONSTRAINTS, M
 pub use offset::OffsetChain;
 pub use offset_topology::{OffsetCreated, OffsetRole, OffsetRoleFlags, OffsetRoleKind, OffsetTopology};
 pub use periodic::periodic_beziers;
-pub use profiles::{CurvePick, Profile, distinct_curves, find_drawn_profiles, find_profiles, merge_regions, profile_at_point, profile_by_curves};
+pub use profiles::{
+    CurvePick, Profile, ProfilePiece, distinct_curves, find_drawn_profiles, find_profiles, merge_regions, profile_at_point, profile_by_curves,
+};
 pub use shape::{Shape, intersections};
 pub use solver::{Hold, SolveReport, SolveStatus, measure_dimension, solve, solve_holding};
 pub use text::{MAX_TEXT_CHARS, text_geometry};

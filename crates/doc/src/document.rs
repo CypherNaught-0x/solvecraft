@@ -80,6 +80,14 @@ pub struct WholeProfileBoundary {
     pub holes: Vec<Vec<String>>,
 }
 
+/// Directed analytic source pieces of an outer boundary and each hole.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PieceProfileBoundary {
+    pub outer: Vec<solvecraft_sketch::ProfilePiece>,
+    pub holes: Vec<Vec<solvecraft_sketch::ProfilePiece>>,
+}
+
 /// Which closed profiles of a sketch a feature uses.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -98,6 +106,8 @@ pub enum ProfileSel {
     OffsetBoundaries { associations: Vec<String> },
     /// Exact whole source coverage, including holes; partial source curves do not match.
     WholeBoundaries { profiles: Vec<WholeProfileBoundary> },
+    /// Exact directed analytic pieces, including all holes and source split counts.
+    PieceBoundaries { profiles: Vec<PieceProfileBoundary> },
     /// The profile containing each sketch point.
     Points { points: Vec<Vec2> },
 }

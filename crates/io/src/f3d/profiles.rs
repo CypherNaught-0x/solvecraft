@@ -1,4 +1,4 @@
-//! Observed complete sketch profile boundaries. Other profile schemas
+//! Observed analytic sketch profile boundaries. Other profile schemas
 //! fail explicitly; selection is never guessed from curve or object order.
 use super::history::{empty, finish, payload, references, require_class, zeros};
 use super::*;
@@ -23,6 +23,7 @@ pub struct SketchProfile {
 pub struct ProfileLoop {
     pub curves: Vec<u64>,
     pub reversed: Vec<bool>,
+    pub pieces: Vec<(u32, u32)>,
     pub outer: bool,
 }
 
@@ -116,6 +117,7 @@ impl Design {
                         }
                         let mut curves = Vec::new();
                         let mut reversed = Vec::new();
+                        let mut pieces = Vec::new();
                         for _ in 0..count {
                             if r.u32()? != 3 {
                                 return Err(invalid("unsupported profile curve tracking"));
@@ -126,14 +128,15 @@ impl Design {
                                 1 => true,
                                 _ => return Err(invalid("unsupported profile curve orientation")),
                             });
-                            for value in [1, 1] {
-                                if r.u32()? != value {
-                                    return Err(invalid("unsupported profile orientation"));
-                                }
+                            let piece = r.u32()?;
+                            let total = r.u32()?;
+                            if piece == 0 || piece > total || total > 50_000 {
+                                return Err(invalid("invalid profile piece index or count"));
                             }
+                            pieces.push((piece, total));
                             zeros(&mut r, 8)?;
                             let curve = circle_ids.get(&(geometry, identity)).copied().ok_or_else(|| invalid("missing selected profile curve"))?;
-                            if !seen.insert(curve) {
+                            if !seen.insert((curve, piece)) {
                                 return Err(invalid("repeated profile curve"));
                             }
                             curves.push(curve);
@@ -143,7 +146,7 @@ impl Design {
                             [1] => true,
                             _ => return Err(invalid("invalid profile outer flag")),
                         };
-                        loops.push(ProfileLoop { curves, reversed, outer });
+                        loops.push(ProfileLoop { curves, reversed, pieces, outer });
                     }
                     if loops.iter().filter(|l| l.outer).count() != 1 {
                         return Err(invalid("profile must have exactly one outer loop"));
@@ -152,7 +155,7 @@ impl Design {
                     let mut key: Vec<_> = loops
                         .iter()
                         .map(|l| {
-                            let mut curves = l.curves.clone();
+                            let mut curves: Vec<_> = l.curves.iter().copied().zip(l.pieces.iter().copied()).collect();
                             curves.sort();
                             (l.outer, curves)
                         })
@@ -184,7 +187,7 @@ impl Design {
                 let [circle] = boundary.curves.as_slice() else {
                     return Err(invalid("profile is not a single circle"));
                 };
-                if !circles.contains(circle) {
+                if !circles.contains(circle) || boundary.pieces.as_slice() != [(1, 1)] {
                     return Err(invalid("profile is not a circle"));
                 }
                 Ok(CircleProfile { id: p.id, feature: p.feature, geometry: p.geometry, circle: *circle })

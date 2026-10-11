@@ -8,7 +8,7 @@ fn recipes() -> Vec<PathBuf> {
     let mut paths: Vec<_> =
         std::fs::read_dir(dir).unwrap().map(|p| p.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
     paths.sort();
-    assert_eq!(paths.len(), 32);
+    assert_eq!(paths.len(), 37);
     paths
 }
 
@@ -99,6 +99,9 @@ fn simple_history_files_replay_reopen_edit_and_undo() {
 #[ignore = "explicitly author original SolveCraft fixtures from the checked-in recipes"]
 fn write_original_history_fixtures() {
     for path in recipes() {
+        if std::env::var("SOLVECRAFT_AUTHOR_PREFIX").is_ok_and(|prefix| !path.file_stem().unwrap().to_string_lossy().starts_with(&prefix)) {
+            continue;
+        }
         let s = replay(&recipe(&path));
         std::fs::write(path.with_extension("solvecraft"), solvecraft_engine::io::write_design(&s.doc)).unwrap();
     }

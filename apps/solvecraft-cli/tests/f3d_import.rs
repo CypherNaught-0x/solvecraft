@@ -1110,3 +1110,53 @@ fn multiple_profile_regions_preserve_holes_bodies_edits_and_undo() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires local split-profile public API controls"]
+fn partial_profile_pieces_preserve_selected_regions_after_edits() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-partial-profile-measurements.json")).unwrap()).unwrap();
+    let verify = |s: &mut Session, row: &Value| {
+        let measured = volume(s, row["volume"].as_f64().unwrap(), "partial profiles");
+        assert_eq!(measured["body_count"], row["body_count"]);
+        for (end, key) in [(0, "min"), (1, "max")] {
+            for axis in 0..3 {
+                let got = measured["bodies"][0]["bbox"][key][axis].as_f64().unwrap();
+                let expected = row["bounds"][0][end][axis].as_f64().unwrap() * 10.;
+                // BodyMeasure bounds come from tessellation, whose fine chord
+                // tolerance is at most 5e-5 of the body diagonal (minimum 1e-4 mm).
+                let diagonal = (0..3)
+                    .map(|i| {
+                        let lo = row["bounds"][0][0][i].as_f64().unwrap() * 10.;
+                        let hi = row["bounds"][0][1][i].as_f64().unwrap() * 10.;
+                        (hi - lo).powi(2)
+                    })
+                    .sum::<f64>()
+                    .sqrt();
+                let tolerance = (diagonal * 5e-5).max(1e-4) + 1e-5;
+                assert!((got - expected).abs() < tolerance, "bound {key}/{axis}: {got} != {expected}");
+            }
+        }
+    };
+    for (name, row) in api.as_object().unwrap() {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        verify(&mut s, row);
+        if name.ends_with("-baseline") {
+            let original = s.doc.clone();
+            for (suffix, parameter, expression) in
+                [("source-changed", "source_parameter", row["changed"].as_str().unwrap()), ("height-changed", "height_parameter", "20 mm")]
+            {
+                s.execute("parameters.change", &json!({"name":row[parameter],"expression":expression})).unwrap();
+                let expected = &api[name.replace("baseline", suffix)];
+                verify(&mut s, expected);
+                verify(&mut Session::new(solvecraft_engine::doc::Document::from_json(&s.doc.to_json()).unwrap()), expected);
+            }
+            for _ in 0..2 {
+                s.execute("edit.undo", &json!({})).unwrap();
+            }
+            assert_eq!(s.doc, original);
+            verify(&mut s, row);
+        }
+    }
+}

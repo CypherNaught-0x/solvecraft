@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These thirty-two designs and their JSON command recipes are original SolveCraft test
+These thirty-seven designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -21,6 +21,11 @@ recipe, independent expectations and optional edits.
 | intersect-extrude | Intersection with smaller cylinder | 300π |
 | multiple-circles | Two selected regions, separate bodies, diameter/height edits | 6000π |
 | multiple-rings | Two regions with separate holes, diameter/height edits | 4500π |
+| partial-lens | Overlapping circles, exact arc pieces, diameter/height edits | 12 × lens area |
+| partial-left-crescent | Left circle minus lens, opposite arc traversal | 12 × (900π − lens area) |
+| partial-right-crescent | Right circle minus lens, diameter/height edits | 12 × (900π − lens area) |
+| partial-left-rectangle | Divider middle piece, source width and height edits | 9600 |
+| partial-right-rectangle | Opposite divider traversal, width and height edits | 19200 |
 | offset-circle-ring | Associative offset distance, source diameter and height edits | 3300π |
 | annulus-extrude | Exact outer/hole boundaries, both diameter edits | 9600π |
 | arc-extrude | Shared arc/chord endpoints, radius and height edits | 1350π |
@@ -104,3 +109,8 @@ The multiple-region fixtures extrude circles of radii 10 and 20 mm by 12 mm.
 The ring variant has holes of radii 5 and 10 mm, giving
 π((10² − 5²) + (20² − 10²))12 = 4500π mm³. Diameter and height edits
 check both bodies and their bounds through reopening and undo.
+
+The partial-circle fixtures use radii 30 mm and center separation 40 mm. Their
+baseline lens area is `1800 × acos(2/3) − 400 × sqrt(5)` mm². The diameter edit
+uses the general two-circle intersection formula with radii 35 and 30 mm;
+expectations are analytic values, not captured kernel measurements.
