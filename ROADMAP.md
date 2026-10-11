@@ -148,7 +148,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   while keeping the main fillet cylindrical. Exact end curves preserve neighboring
   faces, and crease fans retain their existing sharp meeting. Shared projections check
   that transition domains do not overlap; boundary position, tangency and control-hull
-  bounds are checked before accepting a patch. Non-cylindrical ends, folded domains and
+  bounds are checked before accepting a patch. Transition interiors minimize bending
+  instead of fitting a faceted guide, with an interior concavity/normal regression.
+  Non-cylindrical ends, folded domains and
   transitions outside these conservative bounds still return an error;
   whole smooth loops of a planar face, picked whole or by one edge (tangent
   chain), including circles and walls at any angle (boss bases and tops, bores, pocket floors,
