@@ -5,7 +5,7 @@ use truck_modeling as mt;
 
 use crate::{KernelError, Result, guard};
 
-mod evaluation;
+pub(crate) mod evaluation;
 #[path = "planar_regularize.rs"]
 mod planar_regularize;
 #[path = "planar_sources.rs"]

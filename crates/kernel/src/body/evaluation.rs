@@ -4,7 +4,7 @@
 use truck_modeling::{self as mt, *};
 
 #[derive(Clone)]
-pub(super) struct Surface(pub mt::Surface);
+pub(crate) struct Surface(pub mt::Surface);
 
 fn derivative(s: &mt::BSplineSurface<mt::Point3>, u: f64, v: f64, along_u: bool) -> mt::Vector3 {
     let (ku, kv) = s.knot_vecs();

@@ -152,6 +152,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   instead of fitting a faceted guide, with an interior concavity/normal regression.
   Non-cylindrical ends, folded domains and
   transitions outside these conservative bounds still return an error;
+  transition fitting reuses sparse boundary evaluation and quadrature grids, and
+  skips unused collocation work. A cold-opening regression requires the complete
+  58-feature basin with zero errors and verifies display-cache reuse;
   whole smooth loops of a planar face, picked whole or by one edge (tangent
   chain), including circles and walls at any angle (boss bases and tops, bores, pocket floors,
   plate outlines), loops with sharp corners between straight edges (the blends meet in mitres), runs of
