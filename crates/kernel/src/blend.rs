@@ -54,12 +54,17 @@ pub(crate) fn rebuild_face(f: &mt::Face, subst: &HashMap<mt::EdgeID, mt::Edge>, 
     rebuild_face_dropping(f, subst, &[], connectors)
 }
 
+pub(crate) fn rebuild_face_without(f: &mt::Face, subst: &HashMap<mt::EdgeID, mt::Edge>, connectors: &[mt::Edge], removed: &[mt::EdgeID]) -> Result<mt::Face> {
+    rebuild_face_dropping(f, subst, removed, connectors)
+}
+
 /// [`rebuild_face`], also leaving out the `dropped` edges (consumed by a blend).
 fn rebuild_face_dropping(f: &mt::Face, subst: &HashMap<mt::EdgeID, mt::Edge>, dropped: &[mt::EdgeID], connectors: &[mt::Edge]) -> Result<mt::Face> {
     let mut wires = Vec::new();
     for w in f.absolute_boundaries() {
         let mut edges: Vec<mt::Edge> = Vec::new();
         for e in w.edge_iter().filter(|e| !dropped.contains(&e.id())) {
+
             let ne = match subst.get(&e.id()) {
                 Some(n) => {
                     // `n` was built in the orientation of the stored edge; match this use.
@@ -1394,6 +1399,7 @@ fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, c
                 if shape == Shape::Round && crate::blend_end::can_trim(&solid, &edge) {
                     guard(what, || crate::blend_end::fillet_one(&solid, &edge, size, r))
                         .or_else(|_| guard(what, || crate::blend_trim::fillet_one(&solid, &edge, size, r)))
+                        .or_else(|_| guard(what, || crate::blend_end::with_transitions(&solid, &edge, size, r)))
                 } else {
                     Err(e)
                 }

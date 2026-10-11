@@ -5,6 +5,7 @@ use truck_modeling as mt;
 
 use crate::{KernelError, Result, guard};
 
+mod evaluation;
 #[path = "planar_regularize.rs"]
 mod planar_regularize;
 #[path = "planar_sources.rs"]
@@ -230,7 +231,19 @@ fn mesh_shells_within(solid: &Solid, deflection: Deflection) -> Vec<MeshedShell>
         // The robust search tries the exact one first, so exact geometry costs nothing extra; a
         // face can also come back as an empty mesh rather than none (boolean results with
         // approximate intersection curves), so always use it.
-        .map(|sh| sh.robust_triangulation_within(deflection))
+        .map(|sh| {
+            let evaluated: truck_topology::Shell<mt::Point3, mt::Curve, evaluation::Surface> = sh
+                .face_iter()
+                .map(|face| {
+                    let mut f = truck_topology::Face::new_unchecked(face.absolute_boundaries().clone(), evaluation::Surface(face.surface()));
+                    if !face.orientation() {
+                        f.invert();
+                    }
+                    f
+                })
+                .collect();
+            evaluated.robust_triangulation_within(deflection)
+        })
         .collect()
 }
 
@@ -246,6 +259,7 @@ fn refined(pm: &PolygonMesh, surf: &mt::Surface, tol: f64) -> Option<Vec<[(Vec3,
 #[allow(clippy::type_complexity)]
 fn refined_with_cache(pm: &PolygonMesh, surf: &mt::Surface, tol: f64, memoize: bool) -> Option<Vec<[(Vec3, Vec3); 3]>> {
     use mt::{ParametricSurface, ParametricSurface3D};
+    let surf = evaluation::Surface(surf.clone());
     let (pos, uvs, nor) = (pm.positions(), pm.uv_coords(), pm.normals());
     if uvs.is_empty() {
         return None;

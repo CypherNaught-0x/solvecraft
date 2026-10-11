@@ -4,24 +4,46 @@
 
 use super::*;
 mod bounds;
+pub(crate) mod partition;
+mod reference;
 use crate::body::from_p3;
 use mt::{BoundedCurve, ParametricCurve, ParametricSurface, ParametricSurface3D};
 
-pub(super) enum Normal {
+#[derive(Clone)]
+pub(crate) enum Normal {
+    Hermite { start: Vec3, end: Vec3, start_der: Vec3, end_der: Vec3 },
+    Free,
+    InwardCylinder { origin: Vec3, axis: Vec3 },
     Plane(Vec3),
     Cylinder { origin: Vec3, axis: Vec3 },
 }
 
-pub(super) struct Boundary {
+pub(crate) struct Boundary {
     pub curve: mt::Curve,
     pub normal: Normal,
 }
 
 impl Boundary {
-    fn sample(&self, t: f64) -> Result<(Vec3, Vec3)> {
+    pub(crate) fn sample(&self, t: f64) -> Result<(Vec3, Vec3)> {
         let p = from_p3(self.curve.subs(t));
         let n = match self.normal {
+            Normal::Free => Vec3::ZERO,
+            Normal::Hermite { start, end, start_der, end_der } => {
+                let (lo, hi) = self.curve.range_tuple();
+                let u = (t - lo) / (hi - lo);
+                let n = start * (2.0 * u * u * u - 3.0 * u * u + 1.0)
+                    + end * (-2.0 * u * u * u + 3.0 * u * u)
+                    + start_der * (u * u * u - 2.0 * u * u + u)
+                    + end_der * (u * u * u - u * u);
+                let d = self.curve.der(t);
+                let tangent = Vec3::new(d.x, d.y, d.z).normalized().ok_or_else(|| unsupported("singular transition seam tangent"))?;
+                (n - tangent * n.dot(tangent)).normalized().ok_or_else(|| unsupported("singular transition seam normal"))?
+            }
             Normal::Plane(n) => n,
+            Normal::InwardCylinder { origin, axis } => {
+                let d = origin - p;
+                (d - axis * d.dot(axis)).normalized().ok_or_else(|| unsupported("singular transition normal"))?
+            }
             Normal::Cylinder { origin, axis } => {
                 let d = p - origin;
                 (d - axis * d.dot(axis)).normalized().ok_or_else(|| unsupported("singular setback normal"))?
@@ -150,6 +172,28 @@ fn solve(rows: &[Row], count: usize) -> Result<Vec<f64>> {
             }
         }
     }
+    // Equilibrate the columns before factorization. Boundary derivatives can
+    // outweigh weak controls outside the trim by many orders of magnitude;
+    // factoring that unscaled matrix loses the small tangent constraints.
+    let mut scale = Vec::with_capacity(count);
+    for i in 0..count {
+        let diagonal = matrix.get(i * stride).copied().ok_or_else(|| unsupported("patch fit diagonal"))?;
+        if !diagonal.is_finite() || diagonal <= 0.0 {
+            return Err(unsupported("invalid patch fit diagonal"));
+        }
+        scale.push(diagonal.sqrt());
+    }
+    for (i, row) in matrix.chunks_mut(stride).enumerate() {
+        let si = scale.get(i).copied().ok_or_else(|| unsupported("patch fit scale"))?;
+        for (offset, value) in row.iter_mut().enumerate() {
+            let Some(j) = i.checked_sub(offset) else { continue };
+            let sj = scale.get(j).copied().ok_or_else(|| unsupported("patch fit scale"))?;
+            *value /= si * sj;
+        }
+        if let Some(value) = rhs.get_mut(i) {
+            *value /= si;
+        }
+    }
     let at = |matrix: &[f64], i: usize, j: usize| {
         if i < j || i - j > width { 0.0 } else { matrix.get(i * stride + i - j).copied().unwrap_or(0.0) }
     };
@@ -190,6 +234,9 @@ fn solve(rows: &[Row], count: usize) -> Result<Vec<f64>> {
             *x = value / at(&matrix, i, i);
         }
     }
+    for (value, scale) in solution.iter_mut().zip(scale) {
+        *value /= scale;
+    }
     if solution.iter().any(|x| !x.is_finite()) {
         return Err(unsupported("invalid setback fit"));
     }
@@ -197,15 +244,35 @@ fn solve(rows: &[Row], count: usize) -> Result<Vec<f64>> {
 }
 
 pub(super) fn fit(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3)], radii: [f64; 3]) -> Result<mt::Surface> {
+    fit_impl(boundaries, out, size, planes, Some(radii))
+}
+
+/// A bounded transition keeps its prescribed cylinder/face tangent planes while
+/// unconstrained boundaries may retain an existing sharp meeting with an end face.
+pub(crate) fn transition(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3)]) -> Result<mt::Surface> {
+    fit_impl(boundaries, out, size, planes, None)
+}
+
+fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3)], radii: Option<[f64; 3]>) -> Result<mt::Surface> {
+    if boundaries.len() < 3
+        || boundaries.len() > 16
+        || planes.len() > 32
+        || !size.is_finite()
+        || size <= 0.0
+        || planes.iter().any(|(n, p)| !n.is_finite() || !p.is_finite() || (n.len() - 1.0).abs() > 1e-6)
+    {
+        return Err(unsupported("invalid transition patch input"));
+    }
     let z = out.normalized().ok_or_else(|| unsupported("setback patch direction"))?;
     let x = z.any_perp();
     let y = z.cross(x);
     let mut samples = Vec::new();
     for boundary in boundaries {
         let (a, b) = boundary.curve.range_tuple();
-        for i in 0..=256 {
-            let (p, n) = boundary.sample(a + (b - a) * i as f64 / 256.0)?;
-            if n.dot(z) < 1e-3 {
+        let count = if radii.is_some() { 256 } else { 1024 };
+        for i in 0..=count {
+            let (p, n) = boundary.sample(a + (b - a) * i as f64 / count as f64)?;
+            if n != Vec3::ZERO && n.dot(z) < 1e-3 {
                 return Err(unsupported("setback boundary folds behind its patch"));
             }
             samples.push((p, n));
@@ -249,12 +316,26 @@ pub(super) fn fit(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3
     // and the inward octant. Its support function gives the specified circle
     // on every edge, the original planes outside their setbacks, and a rounded
     // interior. Unlike an unconstrained thin plate it cannot leave the part.
+    let reference = if radii.is_none() { Some(reference::Reference::new(&samples, x, y)?) } else { None };
     let guide = |u: f64, v: f64| -> f64 {
         let base = origin + x * (du * u) + y * (dv * v);
+        if let Some(reference) = &reference {
+            let h = reference.height(base, z).unwrap_or(0.0);
+            let (mut lower, mut upper) = (f64::NEG_INFINITY, f64::INFINITY);
+            for (n, p) in planes {
+                let den = n.dot(z);
+                if den > 1e-8 {
+                    upper = upper.min((*p - base).dot(*n) / den);
+                } else if den < -1e-8 {
+                    lower = lower.max((*p - base).dot(*n) / den);
+                }
+            }
+            return if lower <= upper { h.clamp(lower, upper) } else { h };
+        }
         let [pa, pb, pc] = planes else { return f64::NAN };
         let offsets = [(base - pa.1).dot(pa.0), (base - pb.1).dot(pb.0), (base - pc.1).dot(pc.0)];
         let direction = [z.dot(pa.0), z.dot(pb.0), z.dot(pc.0)];
-        let [ra, rb, rc] = radii;
+        let Some([ra, rb, rc]) = radii else { return 0.0 };
         let height = |w: [f64; 3]| {
             let [a, b, c] = w;
             let mut h = ra * (a.hypot(c) - a - c) + rb * (a.hypot(b) - a - b) + rc * (b.hypot(c) - b - c);
@@ -320,7 +401,8 @@ pub(super) fn fit(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3
     // bound. Validate between the fitting samples as well as at the corners.
     let tolerance = (size * 1e-6).max(1e-6);
     let trim = bounds::Trim::new(boundaries, origin, x, y, du, dv, tolerance)?;
-    for density in [20, 32, 48, 64] {
+    let densities: &[usize] = if radii.is_some() { &[20, 32, 48, 64] } else { &[20, 32, 48, 64, 80] };
+    for &density in densities {
         let knot_vec = |axis: Vec3, length: f64| -> Result<Vec<f64>> {
             let mut corners = Vec::new();
             for b in boundaries {
@@ -352,8 +434,11 @@ pub(super) fn fit(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3
             let (bu, dbu, _) = basis(&ku, u, nu)?;
             let (bv, dbv, _) = basis(&kv, v, nv)?;
             rows.push(tensor(&bu, &bv, 1.0, p.dot(z)));
-            rows.push(tensor(&dbu, &bv, 0.1, -du * normal.dot(x) / normal.dot(z)));
-            rows.push(tensor(&bu, &dbv, 0.1, -dv * normal.dot(y) / normal.dot(z)));
+            if *normal != Vec3::ZERO {
+                let weight = if radii.is_some() { 0.1 } else { 1.0 };
+                rows.push(tensor(&dbu, &bv, weight, -du * normal.dot(x) / normal.dot(z)));
+                rows.push(tensor(&bu, &dbv, weight, -dv * normal.dot(y) / normal.dot(z)));
+            }
         }
         let greville = |knots: &[f64], i| -> f64 { knots.iter().skip(i + 1).take(3).sum::<f64>() / 3.0 };
         // Integrate actual spline bending energy in physical coordinates;
@@ -377,16 +462,36 @@ pub(super) fn fit(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3
             }
             Ok(out)
         };
+        let constraints = |base: Vec3, bu: &[f64], bv: &[f64]| {
+            if radii.is_some() {
+                let upper = planes.iter().map(|(n, p)| (*p - base).dot(*n) / n.dot(z)).fold(f64::INFINITY, f64::min);
+                return vec![tensor(bu, bv, 10.0, upper)];
+            }
+            planes
+                .iter()
+                .filter_map(|(n, p)| {
+                    let den = n.dot(z);
+                    // A graph cannot alter its projection. Such a plane is checked
+                    // by the final hull certificate instead of dividing by zero.
+                    (den.abs() > 1e-8).then(|| {
+                        let mut row = tensor(bu, bv, 100.0 * den.signum(), (*p - base).dot(*n) / den);
+                        row.rhs += 100.0 * tolerance * 0.25 / den.abs();
+                        // tensor scales rhs by the signed weight as well: the
+                        // inequality is still n·(surface - p) <= 0 on either side.
+                        row
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
         let mut limits = Vec::new();
         for ((bu, dbu, ddbu), wu, u) in &quadrature(&ku, nu)? {
             for ((bv, dbv, ddbv), wv, v) in &quadrature(&kv, nv)? {
                 if inside(*u, *v) {
-                    if boundaries.len() == 6 {
+                    if radii.is_none() || boundaries.len() == 6 {
                         rows.push(tensor(bu, bv, 0.1 * (wu * wv).sqrt(), guide(*u, *v)));
                     }
                     let base = origin + x * (du * u) + y * (dv * v);
-                    let upper = planes.iter().map(|(n, p)| (*p - base).dot(*n) / n.dot(z)).fold(f64::INFINITY, f64::min);
-                    limits.push(tensor(bu, bv, 10.0, upper));
+                    limits.extend(constraints(base, bu, bv));
                 }
                 let w = 1e-6 * size * (wu * wv * du * dv).sqrt();
                 rows.push(tensor(ddbu, bv, w / (du * du), 0.0));
@@ -407,6 +512,11 @@ pub(super) fn fit(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3
         // can accept a surface, including regions between the collocation points.
         let mut active = vec![false; limits.len()];
         for _ in 0..8 {
+            // Transition boundaries are fitted first; their control-hull
+            // certificate adds only the constraints actually needed below.
+            if radii.is_none() {
+                break;
+            }
             let mut added = 0;
             for (limit, active) in limits.iter().zip(&mut active) {
                 let value = limit.entries.iter().map(|(i, w)| heights.get(*i).copied().unwrap_or(0.0) * w).sum::<f64>();
@@ -440,8 +550,9 @@ pub(super) fn fit(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3
             let mut kink: f64 = 0.0;
             for boundary in boundaries {
                 let (a, b) = boundary.curve.range_tuple();
-                for i in 0..=513 {
-                    let (p, normal) = boundary.sample(a + (b - a) * i as f64 / 513.0)?;
+                let count = if radii.is_some() { 513 } else { 1537 };
+                for i in 0..=count {
+                    let (p, normal) = boundary.sample(a + (b - a) * i as f64 / count as f64)?;
                     let q = p - origin;
                     let (u, v) = (q.dot(x) / du, q.dot(y) / dv);
                     let point = from_p3(surface.subs(u, v));
@@ -451,7 +562,10 @@ pub(super) fn fit(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3
                         return Err(unsupported("non-finite setback surface"));
                     }
                     worst = worst.max(point.dist(p));
-                    kink = kink.max(1.0 - nn.dot(normal));
+                    if normal != Vec3::ZERO {
+                        let error = 1.0 - nn.dot(normal);
+                        kink = kink.max(error);
+                    }
                 }
             }
             if worst >= tolerance || kink >= 1.0 - 0.01_f64.to_radians().cos() {
@@ -460,11 +574,9 @@ pub(super) fn fit(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3
             let mt::Surface::BSplineSurface(s) = &surface else {
                 break;
             };
-            let violations = match trim.violations(s, planes, tolerance) {
+            let violations = match trim.violations(s, planes, tolerance, if radii.is_some() { 0.5 } else { 0.95 }) {
                 Ok(points) => points,
-                Err(_e) => {
-                    break;
-                }
+                Err(_) => break,
             };
             if violations.is_empty() {
                 return Ok(surface);
@@ -473,8 +585,12 @@ pub(super) fn fit(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3
                 let (bu, _, _) = basis(&ku, u, nu)?;
                 let (bv, _, _) = basis(&kv, v, nv)?;
                 let base = origin + x * (du * u) + y * (dv * v);
-                let upper = planes.iter().map(|(n, p)| (*p - base).dot(*n) / n.dot(z)).fold(f64::INFINITY, f64::min);
-                rows.push(tensor(&bu, &bv, 10.0, upper));
+                for row in constraints(base, &bu, &bv) {
+                    let value = row.entries.iter().map(|(i, w)| heights.get(*i).copied().unwrap_or(0.0) * w).sum::<f64>();
+                    if value > row.rhs {
+                        rows.push(row);
+                    }
+                }
             }
             heights = solve(&rows, nu * nv)?;
         }
