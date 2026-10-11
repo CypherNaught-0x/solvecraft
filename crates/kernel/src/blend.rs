@@ -1393,6 +1393,7 @@ fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, c
             let local = || guard(what, || blend_one(&solid, &edge, size, r, shape)).or_else(|e| {
                 if shape == Shape::Round && crate::blend_end::can_trim(&solid, &edge) {
                     guard(what, || crate::blend_end::fillet_one(&solid, &edge, size, r))
+                        .or_else(|_| guard(what, || crate::blend_trim::fillet_one(&solid, &edge, size, r)))
                 } else {
                     Err(e)
                 }

@@ -16,6 +16,7 @@ mod blend;
 mod blend_corner;
 mod blend_fit;
 mod blend_end;
+mod blend_trim;
 mod blend_variable;
 mod blend_vertex;
 mod body;
