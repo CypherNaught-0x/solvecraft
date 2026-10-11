@@ -158,8 +158,10 @@ remain retained in the raw streams, not interpreted as defaults.
 Full extent/start/direction schemas, other sketch geometry and constraints,
 multi-loop profiles, assemblies and native B-reps remain unresolved. Parameter
 expressions are preserved and checked against the native cached values; unsupported
-units or expressions fail instead of becoming constants. Native parameter names
-currently coexist with SolveCraft's generated feature-input aliases.
+units or expressions fail instead of becoming constants. Native mm/degree input
+parameters now bind directly to feature inputs, so timeline edits update dependent
+native expressions. Other display units retain their unit-bearing stored parameter
+and generated feature-input alias until per-input unit contexts are supported.
 
 Point class `C2CEDAE7-1716-47C1-B7B1-07B70081D0FB` version 11 stores local coordinates,
 fixation and origin identity. Five independent point/circle fixation controls
@@ -275,3 +277,22 @@ All eleven local evidence tests passed (seven import, four inspection), includin
 38 supported original/rectangle/line imports plus four driving-dimension controls
 and atomic rejection of the two driven-dimension controls. The imported rectangle
 was also rendered and visually checked; local generated evidence stays outside Git.
+
+## Native feature input identities
+
+For mm/degree inputs, an extrusion's distance and taper use their native names
+directly in SolveCraft's feature parameter table. The original expressions live
+on the feature, and the duplicate stored parameters are removed. Parameter edits
+and timeline edits therefore affect the same definition. The local rectangle
+test makes width depend on the native extrusion height, edits the extrusion via
+`timeline.edit`, and checks volume, parameter rows, reopening and undo. An original
+synthetic test checks the same dependency and absence of duplicate definitions.
+
+Non-default units keep the earlier unit-bearing indirection so that bare numbers
+retain their meaning (for example, `1.7` cm remains 17 mm). A synthetic regression
+checks that behavior and rejects dimensionally incorrect extrusion bindings.
+
+The input-identity follow-up passes full CI against the same upstream `2f78d3e`:
+33 IO tests, all 25 test binaries and the ten-crate WASM check. The opening guard
+completed in 0.91 seconds. All seven local import tests pass, including timeline
+editing with a dependent native sketch dimension.

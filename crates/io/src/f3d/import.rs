@@ -33,6 +33,7 @@ impl Design {
             return Err(invalid("too many imported parameters"));
         }
         let bindings: BTreeMap<_, _> = parameters.iter().map(|p| (p.binding, p)).collect();
+        let named_parameters: BTreeMap<_, _> = parameters.iter().map(|p| (p.name.as_str(), p)).collect();
         let points: BTreeMap<_, _> = self.sketch_points()?.into_iter().map(|p| (p.id, p)).collect();
         let circles: BTreeMap<_, _> = self.sketch_circles()?.into_iter().map(|c| (c.id, c)).collect();
         let lines: BTreeMap<_, _> = self.sketch_lines()?.into_iter().map(|l| (l.id, l)).collect();
@@ -222,9 +223,27 @@ impl Design {
             let id = doc.add_feature(kind, Some(&f.name))?;
             let feature = doc.features.iter_mut().find(|f| f.id == id).ok_or_else(|| invalid("missing imported feature"))?;
             feature.suppressed = f.suppressed;
+            // Feature inputs own their native parameter identity. Keeping a second
+            // stored parameter would leave downstream expressions stale after a
+            // timeline edit. Reserve all names above, then transfer these inputs.
+            let mut transferred = BTreeSet::new();
+            for (name, (_, expression, kind)) in feature.param_names.iter_mut().zip(feature.kind.inputs_mut()) {
+                let Some(p) = named_parameters.get(expression.as_str()).filter(|p| p.owner == f.id) else { continue };
+                // SolveCraft feature inputs use mm/degrees. Preserve the existing
+                // unit-bearing parameter indirection for other display units until
+                // feature inputs support their own unit contexts.
+                if solvecraft_doc::expr::unit_info(&p.display_unit) != solvecraft_doc::expr::unit_info(kind.default_unit()) {
+                    continue;
+                }
+                *name = p.name.clone();
+                *expression = p.expression.clone();
+                transferred.insert(p.name.clone());
+                doc.param_comments.insert(p.name.clone(), p.label.clone());
+            }
             if let Some(body) = new_body {
                 feature.body_names = vec![body];
             }
+            doc.params.retain(|p| !transferred.contains(&p.name));
         }
         // Preserve expressions and reject a translation that changes their value.
         // A cached native value is a check, never a substitute for an expression.
@@ -324,6 +343,11 @@ fn extent(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, parameters: &B
         .ok_or_else(|| invalid("missing extrusion distance binding"))?;
     let taper =
         parameters.get(&taper).filter(|p| p.owner == id && p.label == "TaperAngle").ok_or_else(|| invalid("missing extrusion taper binding"))?;
+    if solvecraft_doc::expr::Kind::from_unit(&distance.display_unit) != solvecraft_doc::expr::Kind::Length
+        || solvecraft_doc::expr::Kind::from_unit(&taper.display_unit) != solvecraft_doc::expr::Kind::Angle
+    {
+        return Err(invalid("extrusion parameter units do not match their input roles"));
+    }
     // Controlled volume measurements establish the same positive taper sign.
     Ok(Extent {
         distance: distance.name.clone(),

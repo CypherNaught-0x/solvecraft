@@ -148,7 +148,8 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   atomic failure. Thirty local native imports check volumes/placement; original
   synthetic records exercise reconstruction and edits in ordinary CI. Rectangular
   profiles preserve endpoint references, horizontal/vertical constraints and driving
-  dimensions; driven dimensions fail atomically. Other
+  dimensions; driven dimensions fail atomically. Native mm/degree feature-input
+  names now survive timeline edits with their expression dependencies. Other
   feature types, legacy history schemas and native B-reps remain unsupported; see
   [the observed format and remaining work](docs/f3d.md). HardEdgeBasin opening now
   has a child-process performance guard ([measurements](docs/project-open-regression.md)).

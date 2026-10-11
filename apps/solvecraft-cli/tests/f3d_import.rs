@@ -57,9 +57,10 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
                 }
             }
             // Expressions are retained as dependencies, not replaced by cached values.
+            let definitions = s.doc.all_param_exprs();
             for p in api["parameters"].as_array().unwrap() {
-                let imported = s.doc.params.iter().find(|i| i.name == p["name"].as_str().unwrap()).unwrap();
-                assert_eq!(imported.expr, p["expression"].as_str().unwrap(), "{name}");
+                let imported = definitions.iter().find(|i| i.0 == p["name"].as_str().unwrap()).unwrap();
+                assert_eq!(imported.1, p["expression"].as_str().unwrap(), "{name}");
             }
             let doc = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
             assert_eq!(doc, *s.doc, "{name}: round trip");
@@ -108,6 +109,21 @@ fn imported_rectangle_dimensions_regenerate_and_undo() {
         s.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(*s.doc, *original);
     }
+    assert_eq!(s.doc.features[1].param_names, ["d3", "d4"]);
+    s.execute("parameters.change", &json!({"name":"d1","expression":"d3 / 2"})).unwrap();
+    let before = s.doc.clone();
+    let extrude = s.doc.features[1].id;
+    s.execute("timeline.edit", &json!({"feature":extrude,"set":{"extent":{"distance":"60 mm"}}})).unwrap();
+    volume(&mut s, 36., "native feature input drives width");
+    let rows = s.doc.param_rows();
+    assert_eq!(rows.len(), 4);
+    let height = rows.iter().find(|p| p.name == "d3").unwrap();
+    assert_eq!(height.source, "feature");
+    assert_eq!(height.expression, "60 mm");
+    let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+    volume(&mut Session::new(reopened), 36., "reopened native feature input");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(*s.doc, *before);
 }
 
 #[test]

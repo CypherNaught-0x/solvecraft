@@ -189,12 +189,57 @@ fn original_native_history_regenerates_and_driving_parameters_stay_editable() {
     assert!(!sketch.curves[0].fixed);
     volume(&doc, std::f64::consts::PI * 30. * 30. * 17.);
     doc.params.iter_mut().find(|p| p.name == "d7").unwrap().expr = "40 mm".into();
-    doc.params.iter_mut().find(|p| p.name == "height").unwrap().expr = "d7 / 2".into();
+    assert_eq!(doc.features[1].param_names, ["height", "draft"]);
+    assert!(doc.params.iter().all(|p| p.name != "height" && p.name != "draft"));
+    doc.change_param("height", "d7 / 2", None, None).unwrap();
     volume(&doc, std::f64::consts::PI * 20. * 20. * 20.);
     let reopened = crate::read_design(&crate::write_design(&doc)).unwrap();
     assert_eq!(doc, reopened);
     volume(&reopened, std::f64::consts::PI * 20. * 20. * 20.);
     volume(&fixture(true).design().to_document("Suppressed").unwrap(), 0.);
+}
+
+#[test]
+fn feature_edits_update_native_parameter_dependents_without_duplicate_aliases() {
+    let mut doc = fixture(false).design().to_document("Bound inputs").unwrap();
+    doc.change_param("d7", "height * 2", None, None).unwrap();
+    let FeatureKind::Extrude { extent, .. } = &mut doc.features[1].kind else { panic!("extrude") };
+    extent.distance = "23 mm".into();
+    let definitions = doc.all_param_exprs();
+    assert_eq!(definitions.len(), 3);
+    assert_eq!(definitions.iter().filter(|(name, _, _)| name == "height").count(), 1);
+    volume(&doc, std::f64::consts::PI * 23. * 23. * 23.);
+    let reopened = crate::read_design(&crate::write_design(&doc)).unwrap();
+    assert_eq!(doc, reopened);
+    volume(&reopened, std::f64::consts::PI * 23. * 23. * 23.);
+}
+
+#[test]
+fn non_default_input_units_keep_their_expression_context() {
+    for unit in ["cm", ""] {
+        let mut f = fixture(false);
+        let mut b = vec![0; 20];
+        u32(&mut b, 0);
+        reference(&mut b, 64);
+        wide(&mut b, "1.7");
+        b.extend([0; 10]);
+        for s in ["AlongDistance", "", unit, "height"] {
+            wide(&mut b, s);
+        }
+        b.extend(1.7_f64.to_le_bytes());
+        b.extend([0; 12]);
+        f.0.get_mut(&63).unwrap().2 = b;
+        let result = f.design().to_document("Input units");
+        if unit.is_empty() {
+            assert!(result.is_err(), "unitless distance cannot stand in for native centimetres");
+            continue;
+        }
+        let mut doc = result.unwrap();
+        assert!(doc.params.iter().any(|p| p.name == "height" && p.unit == "cm"));
+        volume(&doc, std::f64::consts::PI * 30. * 30. * 17.);
+        doc.change_param("height", "2.3", None, None).unwrap();
+        volume(&doc, std::f64::consts::PI * 30. * 30. * 23.);
+    }
 }
 #[test]
 fn fixation_is_distinct_from_constraint_state_and_truncated_points_fail() {
