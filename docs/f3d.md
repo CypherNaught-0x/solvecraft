@@ -230,3 +230,10 @@ plus the ten-crate WASM check. The HardEdgeBasin performance test completed in
 0.87 seconds on this run. Local import and inspection evidence tests also passed
 using the workspace build. Rectangular-profile controls have been generated for
 the next stage but are not supported by this milestone.
+
+Upstream subsequently advanced to `5affff3` (0.2.0, PR #150). The integration
+preserves the published branch history with a merge; the generated license
+manifest was regenerated to resolve its version conflict. Full CI passed again:
+25 binaries, 187 kernel tests, 549 engine tests, 292 UI tests, the ten-crate WASM
+check and the opening guard (2.65 seconds for the performance test). All eight
+local import/inspection tests passed against this integrated build as well.
