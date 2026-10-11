@@ -23,6 +23,7 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-circle-measurements.json",
         "fusion-history-measurements.json",
         "fusion-extent-measurements.json",
+        "fusion-start-offset-measurements.json",
         "fusion-polygon-measurements.json",
         "fusion-loop-measurements.json",
         "fusion-arc-measurements.json",
@@ -594,4 +595,30 @@ fn projected_body_rectangle_keeps_corners_and_body_identity_through_edits() {
         verify(&s);
         volume(&mut s, base["volume"].as_f64().unwrap(), &name);
     }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with native extrusion start-offset controls"]
+fn extrusion_start_offset_expressions_follow_edits_reopening_and_undo() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let mut s = Session::default();
+    s.execute("doc.open", &json!({"path":dir.join("start-offset-expression.f3d")})).unwrap();
+    let original = s.doc.clone();
+    let verify = |s: &mut Session, volume_cm3: f64, lo: f64, hi: f64| {
+        let measure = volume(s, volume_cm3, "start offset");
+        assert!((measure["bodies"][0]["bbox"]["min"][2].as_f64().unwrap() - lo).abs() < 1e-6);
+        assert!((measure["bodies"][0]["bbox"]["max"][2].as_f64().unwrap() - hi).abs() < 1e-6);
+    };
+    s.execute("parameters.change", &json!({"name":"d1","expression":"60 mm"})).unwrap();
+    verify(&mut s, 90. * std::f64::consts::PI, 6., 106.);
+    s.execute("parameters.change", &json!({"name":"d4","expression":"-d2 / 4"})).unwrap();
+    s.execute("parameters.change", &json!({"name":"d2","expression":"80 mm"})).unwrap();
+    verify(&mut s, 72. * std::f64::consts::PI, -20., 60.);
+    let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+    verify(&mut Session::new(reopened), 72. * std::f64::consts::PI, -20., 60.);
+    for _ in 0..3 {
+        s.execute("edit.undo", &json!({})).unwrap();
+    }
+    assert_eq!(s.doc, original);
+    verify(&mut s, 250. * std::f64::consts::PI, 10., 110.);
 }

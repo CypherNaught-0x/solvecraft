@@ -1,6 +1,6 @@
-# SolveCraft roadmap
+# SolidCraft roadmap
 
-Status as of **2026-10-11**. SolveCraft targets Fusion-style parametric modelling (sketch →
+Status as of **2026-10-11**. SolidCraft targets Fusion-style parametric modelling (sketch →
 features → parametric timeline) as an open, pure-Rust, agent-drivable application.
 
 ## At a glance
@@ -72,6 +72,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   useful reproduction context. The draft is editable, with optional capture of the actual
   viewport and copy/save controls. Opening GitHub does not submit the issue. Help also exposes
   reporting for unexpected results that did not produce an error.
+- The header exposes **Report a bug**, including an accessible compact control on
+  narrow windows. It opens the same editable report and screenshot review without
+  changing the active model or a pending dimension.
 
 ## 0.2.0 release batch
 
@@ -166,7 +169,7 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   construction, selected circular profiles and coincidence/diameter relationships.
   Twenty-five local Fusion controls cover dimension edits, reversal, renaming,
   placement, reordering, body operations, suppression and constraint removal.
-  Twenty-two original native SolveCraft fixtures check analytic volumes/bounds and edits.
+  Twenty-four original native SolidCraft fixtures check analytic volumes/bounds and edits.
   `doc.open` now reconstructs verified layout-8 circle/line/arc sketches and one-sided
   extrusions as editable history, with driving parameters, fixation, taper and
   atomic failure. Thirty local native imports check volumes/placement; original
@@ -195,7 +198,10 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   chained and negative offsets. Numeric user parameters preserve expressions,
   comments, favorites and user/model roles. Legacy parameter schemas decode all
   411 records in the three larger supplied files; their legacy feature histories
-  still need reconstruction. Other feature types and native B-reps remain unsupported; see
+  now expose every ordered timeline entry and all seventeen timeline sketches, but
+  still need full reconstruction. Signed extrusion start offsets preserve expressions
+  and parameter bindings through edits, reopening and undo; zero-angle taper inputs
+  remain editable. Other feature types and native B-reps remain unsupported; see
   [the observed format and remaining work](docs/f3d.md). HardEdgeBasin opening now
   has a child-process performance guard ([measurements](docs/project-open-regression.md)).
 - Persistent naming (plan/adr/0002) names faces from their history and edges by their faces;

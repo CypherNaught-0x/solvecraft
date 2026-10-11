@@ -1691,8 +1691,10 @@ fn feature_tools_with_constructor(
                 None if extent.through_all => through_all_distance(st, &ss.plane, targets)?,
                 None => val(vals, &extent.distance, Kind::Length)?,
             };
-            if let Some(tp) = &extent.taper {
-                let taper = val(vals, tp, Kind::Angle)?;
+            // A stored zero-angle parameter is an ordinary straight extrusion.
+            // Keep its editable input while allowing offsets and exact topology.
+            let taper = extent.taper.as_deref().map(|tp| val(vals, tp, Kind::Angle)).transpose()?.filter(|angle| *angle != 0.);
+            if let Some(taper) = taper {
                 if extent.distance2.is_some() || extent.start_offset.is_some() || extent.direction == crate::Direction::Symmetric {
                     return Err(DocError::Invalid("not supported yet: taper with two-sided, symmetric or offset extents".into()));
                 }
@@ -1765,7 +1767,7 @@ fn feature_tools_with_constructor(
             if untrimmed {
                 *constructor = Some(ExtrudeConstructor { plane: ss.plane, interval: (lo + off, hi + off) });
             }
-            if *operation == Operation::NewBody && extent.taper.is_none() {
+            if *operation == Operation::NewBody && taper.is_none() {
                 let cap_bindings = crate::config::extrude_cap_bindings(&ss, &tools, 10_000_000);
                 tools = tools
                     .into_iter()

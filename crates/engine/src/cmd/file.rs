@@ -172,6 +172,18 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 Ok(owners) => json!({"records":owners.into_iter().map(|(tag,feature)|json!({"tag":tag,"feature":feature})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
+            let timeline = match d.timeline() {
+                Ok(entries) => json!({"records":entries.into_iter().map(|entry| {
+                    let decoded=match entry.feature {
+                        Ok(f) => json!({"name":f.name,"suppressed":f.suppressed,"dependencies":f.dependencies,
+                            "sketch":match f.kind { solvecraft_io::f3d::HistoryKind::Sketch {geometry,placement} =>
+                                json!({"geometry":geometry,"matrix":placement.matrix,"owner":placement.owner,"entities":placement.entities,"projections":placement.projections,"legacy_entity_metadata":placement.legacy_entity_metadata}), _=>Value::Null}}),
+                        Err(e) => json!({"unsupported":e.to_string()}),
+                    };
+                    json!({"id":entry.id,"class":entry.class,"version":entry.version,"decoded":decoded})
+                }).collect::<Vec<_>>()}),
+                Err(e) => json!({"unsupported":e.to_string()}),
+            };
             let history = match d.history() {
                 Ok(features) => json!({"records":features.iter().map(|f| {
                     let kind = match &f.kind {
@@ -222,7 +234,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
             };
             json!({"path": d.path, "build": d.build, "layout": d.layout, "classes": d.classes.len(),
             "objects": d.records.len(), "secondary_records": d.records.iter().filter(|r| r.secondary_offset.is_some()).count(),
-            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_circles":circles,"sketch_arcs":arcs,"sketch_lines":lines,"history":history,"operation_owners":operation_owners,"circle_profiles":profiles,"sketch_profiles":sketch_profiles,"sketch_constraints":constraints})
+            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_circles":circles,"sketch_arcs":arcs,"sketch_lines":lines,"history":history,"timeline":timeline,"operation_owners":operation_owners,"circle_profiles":profiles,"sketch_profiles":sketch_profiles,"sketch_constraints":constraints})
         })
         .collect();
     Ok(json!({"path": path, "editable_history_imported": false, "designs": summaries,

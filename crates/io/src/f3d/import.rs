@@ -1,6 +1,6 @@
 //! Reconstruct verified native feature schemas as editable SolveCraft history.
 //! Unsupported schemas fail before a caller replaces its current document.
-use super::history::{empty, finish, payload, references, require_class, zeros};
+use super::history::{empty, finish, payload, references, zeros};
 use super::*;
 use solvecraft_doc::sketch::{ConstraintKind, Sketch};
 use solvecraft_doc::{Direction, Document, Extent, FeatureKind, Operation, Param, PlaneRef, ProfileSel};
@@ -116,6 +116,9 @@ impl Design {
                     FeatureKind::ConstructionPlane { plane: PlaneRef::Offset { base: Box::new(base), distance: p.name.clone() } }
                 }
                 HistoryKind::Sketch { geometry, placement } => {
+                    if !placement.legacy_entity_metadata.is_empty() {
+                        return Err(invalid("legacy sketch entity metadata reconstruction is not supported yet"));
+                    }
                     if placement.owner != root {
                         return Err(invalid("non-root sketch placement is not supported yet"));
                     }
@@ -584,41 +587,29 @@ fn selected<'a>(
 
 fn extent(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, parameters: &BTreeMap<u64, &Parameter>, id: u64, plane: &Plane) -> Result<Extent> {
     let mut r = payload(records.primary(id)?, id)?;
-    empty(&mut r)?;
-    if r.take(2)? != [0, 1] {
-        return Err(invalid("unsupported extrusion attributes"));
-    }
-    r.take(7)?;
-    r.u32()?;
-    if r.u32()? != 1 || r.u32()? != 2 {
-        return Err(invalid("unsupported extrusion extent type"));
-    }
-    zeros(&mut r, 1)?;
-    if r.u32()? != 1 {
-        return Err(invalid("unsupported extrusion start type"));
-    }
-    zeros(&mut r, 1)?;
-    let axis = Vec3::new(f64::from_bits(r.u64()?), f64::from_bits(r.u64()?), f64::from_bits(r.u64()?));
-    if !axis.is_finite() || (axis - plane.normal()).len() > 1e-9 {
+    let input = super::history::extrude_inputs(&mut r, classes)?;
+    if (input.axis - plane.normal()).len() > 1e-9 {
         return Err(invalid("extrusion axis differs from its sketch normal"));
     }
-    zeros(&mut r, 2)?;
-    let distance = r.reference()?;
-    let extent_helper = r.reference()?;
-    require_class(classes, extent_helper, "0897AF07-EF1B-42E5-BDD9-1C746A085CBC", 0)?;
-    zeros(&mut r, 1)?;
-    let taper = r.reference()?;
-    zeros(&mut r, 1)?;
-    if r.u32()? != 1 {
-        return Err(invalid("unsupported extrusion extent flags"));
-    }
-    zeros(&mut r, 36)?;
+    let start_offset = input
+        .start_offset
+        .map(|binding| {
+            let p = parameters
+                .get(&binding)
+                .filter(|p| p.owner == Some(id) && p.label == "ProfileOffset")
+                .ok_or_else(|| invalid("missing extrusion start-offset binding"))?;
+            if solvecraft_doc::expr::Kind::from_unit(&p.display_unit) != solvecraft_doc::expr::Kind::Length {
+                return Err(invalid("extrusion start offset requires a length parameter"));
+            }
+            Ok(p.name.clone())
+        })
+        .transpose()?;
     let distance = parameters
-        .get(&distance)
+        .get(&input.distance)
         .filter(|p| p.owner == Some(id) && p.label == "AlongDistance")
         .ok_or_else(|| invalid("missing extrusion distance binding"))?;
     let taper = parameters
-        .get(&taper)
+        .get(&input.taper)
         .filter(|p| p.owner == Some(id) && p.label == "TaperAngle")
         .ok_or_else(|| invalid("missing extrusion taper binding"))?;
     if solvecraft_doc::expr::Kind::from_unit(&distance.display_unit) != solvecraft_doc::expr::Kind::Length
@@ -631,7 +622,7 @@ fn extent(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, parameters: &B
         distance: distance.name.clone(),
         direction: Direction::Positive,
         distance2: None,
-        start_offset: None,
+        start_offset,
         through_all: false,
         taper: Some(taper.name.clone()),
         to: None,

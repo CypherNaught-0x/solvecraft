@@ -34,17 +34,34 @@ pub struct SketchPlacement {
     pub owner: u64,
     pub entities: Vec<u64>,
     pub projections: Vec<u64>,
+    /// Version-17 secondary entity metadata, retained for investigation rather
+    /// than discarded. Reconstruction rejects it until its semantics are known.
+    pub legacy_entity_metadata: Vec<(u64, u32)>,
+}
+
+#[derive(Debug)]
+pub struct TimelineEntry {
+    pub id: u64,
+    pub class: String,
+    pub version: u32,
+    /// A failure remains attached to its actual timeline position. Inspection
+    /// can expose later supported records without treating the history as complete.
+    pub feature: Result<HistoryFeature>,
 }
 
 impl Design {
     /// The actual timeline, including suppressed features. Neither registration
     /// order nor the evaluation dependency graph is a substitute for this list.
     pub fn history(&self) -> Result<Vec<HistoryFeature>> {
-        if self.layout != 8 {
-            return Err(invalid("history decoding requires metadata layout 8"));
+        self.timeline()?.into_iter().map(|entry| entry.feature).collect()
+    }
+
+    pub fn timeline(&self) -> Result<Vec<TimelineEntry>> {
+        if !matches!(self.layout, 4 | 5 | 8) {
+            return Err(invalid("unsupported history metadata layout"));
         }
         let class = self.classes.iter().find(|c| c.id == TIMELINE).ok_or_else(|| invalid("missing timeline"))?;
-        if class.version != 3 || class.objects.len() != 1 {
+        if !matches!(class.version, 2 | 3) || class.objects.len() != 1 {
             return Err(invalid("unsupported timeline class version or count"));
         }
         let records = Records::new(self);
@@ -57,6 +74,21 @@ impl Design {
         require_class(&classes, owner, "C3423E04-7E85-4B44-8E31-A5FA9C100052", 2)?;
         let ids = references(&mut r)?;
         finish(&r)?;
+        if ids.len() > solvecraft_doc::MAX_FEATURES {
+            return Err(invalid("too many native timeline features"));
+        }
+        let inherited_version = self
+            .classes
+            .iter()
+            .find(|c| c.id == "A0A15D26-1F3B-4120-A3F1-9CDDA189AB74")
+            .map(|c| c.version)
+            .unwrap_or(if self.layout == 8 { 2 } else { 0 });
+        let body_feature_version = self
+            .classes
+            .iter()
+            .find(|c| c.id == "2EDC2536-D95B-4469-8ACA-DC07124D9C43")
+            .map(|c| c.version)
+            .unwrap_or(if self.layout == 8 { 2 } else { 0 });
         let mut seen = BTreeSet::new();
         ids.into_iter()
             .map(|id| {
@@ -64,103 +96,184 @@ impl Design {
                     return Err(invalid("duplicate timeline feature"));
                 }
                 let class = classes.get(&id).ok_or_else(|| invalid("missing timeline feature"))?;
-                let mut r = payload(records.primary(id)?, id)?;
-                let (kind, custom) = match (class.id.as_str(), class.version) {
-                    (SKETCH, 5) => {
-                        empty(&mut r)?;
-                        zeros(&mut r, 3)?;
-                        let bindings = references(&mut r)?;
-                        validate_refs(&classes, &bindings)?;
-                        r.u32()?; // evaluation state, not timeline position
-                        zeros(&mut r, 1)?;
-                        let geometry = r.reference()?;
-                        require_class(&classes, geometry, GEOMETRY, 18)?;
-                        let plane = r.reference()?;
-                        validate_refs(&classes, &[plane])?;
-                        zeros(&mut r, 4)?;
-                        let projections = references(&mut r)?;
-                        for projection in &projections {
-                            require_class(&classes, *projection, super::projections::CLASS, 4)?;
+                let feature = (|| {
+                    let mut r = payload(records.primary(id)?, id)?;
+                    let (kind, custom) = match (class.id.as_str(), class.version) {
+                        (SKETCH, version @ 3..=5) => {
+                            empty(&mut r)?;
+                            zeros(&mut r, 1)?;
+                            if !super::attributes::read(&mut r)?.is_empty() {
+                                return Err(invalid("unsupported sketch feature attributes"));
+                            }
+                            zeros(&mut r, 1)?;
+                            let bindings = references(&mut r)?;
+                            validate_refs(&classes, &bindings)?;
+                            r.u32()?; // evaluation state, not timeline position
+                            zeros(&mut r, 1)?;
+                            let geometry = r.reference()?;
+                            require_class(&classes, geometry, GEOMETRY, version + 13)?;
+                            let plane = r.reference()?;
+                            validate_refs(&classes, &[plane])?;
+                            if version >= 5 {
+                                zeros(&mut r, 4)?;
+                            }
+                            let projections = references(&mut r)?;
+                            for projection in &projections {
+                                require_class(
+                                    &classes,
+                                    *projection,
+                                    super::projections::CLASS,
+                                    match version {
+                                        3 => 1,
+                                        4 => 3,
+                                        _ => 4,
+                                    },
+                                )?;
+                            }
+                            if version >= 4 {
+                                zeros(&mut r, 4)?;
+                            }
+                            let (mut placement, name) = placement(&records, &classes, geometry, version + 13)?;
+                            placement.support = plane;
+                            placement.projections = projections;
+                            (HistoryKind::Sketch { geometry, placement }, name)
                         }
-                        zeros(&mut r, 4)?;
-                        let (mut placement, name) = placement(&records, &classes, geometry)?;
-                        placement.support = plane;
-                        placement.projections = projections;
-                        (HistoryKind::Sketch { geometry, placement }, name)
-                    }
-                    ("D869265F-F339-4751-A066-91D30F81FF08", 4) => {
-                        empty(&mut r)?;
-                        zeros(&mut r, 2)?;
-                        if r.take(5)? != [1, 0, 0, 0, 0] {
-                            return Err(invalid("unsupported plane binding flags"));
+                        ("D869265F-F339-4751-A066-91D30F81FF08", 4) => {
+                            empty(&mut r)?;
+                            zeros(&mut r, 2)?;
+                            if r.take(5)? != [1, 0, 0, 0, 0] {
+                                return Err(invalid("unsupported plane binding flags"));
+                            }
+                            let extra_offset = r.reference()?;
+                            require_class(&classes, extra_offset, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
+                            if r.take(1)? != [1] {
+                                return Err(invalid("unsupported plane flags"));
+                            }
+                            let geometry = r.reference()?;
+                            require_class(&classes, geometry, super::planes::GEOMETRY, 1)?;
+                            let definition = r.reference()?;
+                            require_class(&classes, definition, super::planes::DEFINITION, 15)?;
+                            if r.take(1)? != [1] {
+                                return Err(invalid("unsupported plane definition flags"));
+                            }
+                            (HistoryKind::OffsetPlane { geometry, definition, extra_offset }, String::new())
                         }
-                        let extra_offset = r.reference()?;
-                        require_class(&classes, extra_offset, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
-                        if r.take(1)? != [1] {
-                            return Err(invalid("unsupported plane flags"));
+                        (EXTRUDE, 8) => {
+                            let input = extrude_inputs(&mut r, &classes)?;
+                            let operation = input.operation;
+                            let profile_containers = references(&mut r)?;
+                            for p in &profile_containers {
+                                require_class(&classes, *p, "2CA5A1CD-C99B-4C9B-91AF-57989148E841", 1)?;
+                            }
+                            // Versioned role-specific object lists: the populated list
+                            // changes for booleans. Their roles remain uninterpreted.
+                            let role_count = match body_feature_version {
+                                1 => 3,
+                                2 => 4,
+                                _ => return Err(invalid("unsupported inherited extrusion schema")),
+                            };
+                            for _ in 0..role_count {
+                                validate_refs(&classes, &references(&mut r)?)?;
+                            }
+                            (HistoryKind::Extrude { operation, profile_containers }, String::new())
                         }
-                        let geometry = r.reference()?;
-                        require_class(&classes, geometry, super::planes::GEOMETRY, 1)?;
-                        let definition = r.reference()?;
-                        require_class(&classes, definition, super::planes::DEFINITION, 15)?;
-                        if r.take(1)? != [1] {
-                            return Err(invalid("unsupported plane definition flags"));
-                        }
-                        (HistoryKind::OffsetPlane { geometry, definition, extra_offset }, String::new())
-                    }
-                    (EXTRUDE, 8) => {
-                        empty(&mut r)?;
-                        if r.take(2)? != [0, 1] {
-                            return Err(invalid("unsupported extrusion attributes"));
-                        }
-                        r.take(7)?;
-                        let operation = operation(r.u32()?)?;
-                        if r.u32()? != 1 {
-                            return Err(invalid("unsupported extrusion extent layout (observed one-sided schema required)"));
-                        }
-                        // Extent/start/direction fields remain opaque. Do not use
-                        // this inspector to synthesize a guessed distance extrusion.
-                        r.take(111)?;
-                        let profile_containers = references(&mut r)?;
-                        for p in &profile_containers {
-                            require_class(&classes, *p, "2CA5A1CD-C99B-4C9B-91AF-57989148E841", 1)?;
-                        }
-                        // Four role-specific object lists: the populated list
-                        // changes for booleans. Their roles remain uninterpreted.
-                        for _ in 0..4 {
-                            validate_refs(&classes, &references(&mut r)?)?;
-                        }
-                        (HistoryKind::Extrude { operation, profile_containers }, String::new())
-                    }
-                    _ => return Err(invalid(&format!("unsupported timeline feature {id}: class {} version {}", class.id, class.version))),
-                };
-                r.wide_string()?; // inherited external identity
-                r.take(3)?;
-                let dependencies = references(&mut r)?;
-                validate_refs(&classes, &dependencies)?;
-                r.u32()?; // evaluation cache status
-                let base = r.wide_string()?;
-                let sequence = r.u32()?;
-                r.u32()?;
-                let feature_name = r.wide_string()?;
-                let tail = r.take(66)?;
-                let suppressed = match (tail.get(5), tail.get(51)) {
-                    (Some(0), Some(0)) => false,
-                    (Some(1), Some(1)) => true,
-                    _ => return Err(invalid("inconsistent feature suppression flags")),
-                };
-                finish(&r)?;
-                let name = if !custom.is_empty() {
-                    custom
-                } else if !feature_name.is_empty() {
-                    feature_name
-                } else {
-                    format!("{}{sequence}", if base == "WorkPlane" { "Plane" } else { &base })
-                };
-                Ok(HistoryFeature { id, name, suppressed, dependencies, kind })
+                        _ => return Err(invalid(&format!("unsupported timeline feature {id}: class {} version {}", class.id, class.version))),
+                    };
+                    r.wide_string()?; // inherited external identity
+                    r.take(3)?;
+                    let dependencies = references(&mut r)?;
+                    validate_refs(&classes, &dependencies)?;
+                    r.u32()?; // evaluation cache status
+                    let base = r.wide_string()?;
+                    let sequence = r.u32()?;
+                    r.u32()?;
+                    let feature_name = r.wide_string()?;
+                    let (length, suppression) = match inherited_version {
+                        1 => (65, 50),
+                        2 => (66, 51),
+                        _ => return Err(invalid("unsupported inherited feature schema")),
+                    };
+                    let tail = r.take(length)?;
+                    let suppressed = match (tail.get(5), tail.get(suppression)) {
+                        (Some(0), Some(0)) => false,
+                        (Some(1), Some(1)) => true,
+                        _ => return Err(invalid("inconsistent feature suppression flags")),
+                    };
+                    finish(&r)?;
+                    let name = if !custom.is_empty() {
+                        custom
+                    } else if !feature_name.is_empty() {
+                        feature_name
+                    } else {
+                        format!("{}{sequence}", if base == "WorkPlane" { "Plane" } else { &base })
+                    };
+                    Ok(HistoryFeature { id, name, suppressed, dependencies, kind })
+                })();
+                Ok(TimelineEntry { id, class: class.id.clone(), version: class.version, feature })
             })
             .collect()
     }
+}
+
+pub(super) struct ExtrudeInputs {
+    pub operation: Operation,
+    pub axis: solvecraft_geom::Vec3,
+    pub distance: u64,
+    pub taper: u64,
+    pub start_offset: Option<u64>,
+}
+
+/// Consume the verified one-sided, profile-plane/offset-start schema, stopping
+/// at the profile container lists. Shared by inspection and reconstruction.
+pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>) -> Result<ExtrudeInputs> {
+    empty(r)?;
+    zeros(r, 1)?;
+    if !super::attributes::read(r)?.is_empty() {
+        return Err(invalid("unsupported extrusion attributes"));
+    }
+    r.take(3)?; // evaluation metadata
+    let operation = operation(r.u32()?)?;
+    if r.u32()? != 1 {
+        return Err(invalid("unsupported extrusion extent layout (observed one-sided schema required)"));
+    }
+    if r.u32()? != 2 {
+        return Err(invalid("unsupported extrusion distance extent"));
+    }
+    zeros(r, 1)?;
+    if r.take(1)? != [1] {
+        return Err(invalid("unsupported extrusion start type"));
+    }
+    let offset = match r.take(1)? {
+        [0] => false,
+        [1] => true,
+        _ => return Err(invalid("unsupported extrusion start-offset flag")),
+    };
+    zeros(r, 3)?;
+    let axis = solvecraft_geom::Vec3::new(f64::from_bits(r.u64()?), f64::from_bits(r.u64()?), f64::from_bits(r.u64()?));
+    if !axis.is_finite() {
+        return Err(invalid("non-finite extrusion axis"));
+    }
+    let start_offset = if offset {
+        let binding = r.reference()?;
+        require_class(classes, binding, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
+        zeros(r, 1)?;
+        Some(binding)
+    } else {
+        zeros(r, 2)?;
+        None
+    };
+    let distance = r.reference()?;
+    require_class(classes, distance, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
+    require_class(classes, r.reference()?, "0897AF07-EF1B-42E5-BDD9-1C746A085CBC", 0)?;
+    zeros(r, 1)?;
+    let taper = r.reference()?;
+    require_class(classes, taper, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
+    zeros(r, 1)?;
+    if r.u32()? != 1 {
+        return Err(invalid("unsupported extrusion extent flags"));
+    }
+    zeros(r, 36)?;
+    Ok(ExtrudeInputs { operation, axis, distance, taper, start_offset })
 }
 
 fn operation(value: u32) -> Result<Operation> {
@@ -173,16 +286,28 @@ fn operation(value: u32) -> Result<Operation> {
     }
 }
 
-fn placement(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, geometry: u64) -> Result<(SketchPlacement, String)> {
+fn placement(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, geometry: u64, version: u32) -> Result<(SketchPlacement, String)> {
     let mut r = payload(records.secondary(geometry)?, geometry)?;
     empty(&mut r)?;
     let transform = r.reference()?;
     require_class(classes, transform, TRANSFORM, 0)?;
-    r.take(17)?;
+    r.take(if version == 18 { 17 } else { 6 })?;
     let name = r.wide_string()?;
     zeros(&mut r, 1)?;
     let entities = references(&mut r)?;
     validate_refs(classes, &entities)?;
+    let mut legacy_entity_metadata = Vec::new();
+    if version == 17 {
+        for _ in 0..r.count(15)? {
+            let id = r.reference()?;
+            validate_refs(classes, &[id])?;
+            let flags = r.u32()?;
+            if flags != 1 {
+                return Err(invalid("unsupported legacy entity metadata"));
+            }
+            legacy_entity_metadata.push((id, flags));
+        }
+    }
     let parent = r.reference()?;
     validate_refs(classes, &[parent])?;
     finish(&r)?;
@@ -206,7 +331,7 @@ fn placement(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, geometry: u
     let owner = r.reference()?;
     validate_refs(classes, &[owner])?;
     finish(&r)?;
-    Ok((SketchPlacement { support: 0, matrix, owner, entities, projections: vec![] }, name))
+    Ok((SketchPlacement { support: 0, matrix, owner, entities, projections: vec![], legacy_entity_metadata }, name))
 }
 
 pub(super) fn payload(bytes: &[u8], id: u64) -> Result<Reader<'_>> {

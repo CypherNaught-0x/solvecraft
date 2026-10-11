@@ -100,13 +100,30 @@ fn fixture(order: &[u64], op: u32, suppressed: bool, matrix: Option<[f64; 16]>) 
     b.extend([0; 7]);
     u32(&mut b, op);
     u32(&mut b, 1);
-    b.extend([0; 111]);
+    u32(&mut b, 2);
+    b.push(0);
+    u32(&mut b, 1);
+    b.push(0);
+    for n in [0_f64, 0., 1.] {
+        b.extend(n.to_le_bytes());
+    }
+    b.extend([0; 2]);
+    reference(&mut b, 85);
+    reference(&mut b, 86);
+    b.push(0);
+    reference(&mut b, 87);
+    b.push(0);
+    u32(&mut b, 1);
+    b.extend([0; 36]);
     refs(&mut b, &[44]);
     for ids in [&[][..], &[76][..], &[][..], &[][..]] {
         refs(&mut b, ids);
     }
     common(&mut b, "Extrude", 3, "Depth", suppressed);
     add(10, EXTRUDE, 8, b, None);
+    add(85, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0, header(85), None);
+    add(86, "0897AF07-EF1B-42E5-BDD9-1C746A085CBC", 0, header(86), None);
+    add(87, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0, header(87), None);
     add(4, "C3423E04-7E85-4B44-8E31-A5FA9C100052", 2, header(4), None);
     add(44, "2CA5A1CD-C99B-4C9B-91AF-57989148E841", 1, header(44), None);
     for id in [8, 9, 76, 78] {
@@ -173,4 +190,70 @@ fn malformed_or_unrecognized_history_is_not_silently_partial() {
             assert!(d.history().is_err(), "record {id}, secondary {secondary}, prefix {keep}");
         }
     }
+}
+
+#[test]
+fn legacy_sketch_versions_preserve_names_placement_and_entity_metadata() {
+    for (layout, version, base, body_version) in [(4, 3, 1, 1), (5, 4, 1, 2), (5, 4, 2, 2)] {
+        let mut f = crate::f3d::import_tests::fixture(false);
+        // Replace only versioned fields in these original authored records.
+        let sketch = &mut f.0.get_mut(&8).unwrap();
+        sketch.1 = version;
+        sketch.2.drain(49..if version == 3 { 57 } else { 53 });
+        if base == 1 {
+            let n = sketch.2.len();
+            sketch.2.remove(n - 16);
+        }
+        // Both absent and explicitly empty optional metadata occur in old files.
+        sketch.2[5] = 1;
+        sketch.2.splice(6..6, [0; 4]);
+        let geo = &mut f.0.get_mut(&70).unwrap();
+        geo.1 = version + 13;
+        let secondary = geo.3.as_mut().unwrap();
+        secondary.drain(21..32);
+        if version == 4 {
+            let mut metadata = Vec::new();
+            u32(&mut metadata, 1);
+            reference(&mut metadata, 43);
+            u32(&mut metadata, 1);
+            let n = secondary.len();
+            secondary.splice(n - 11..n - 11, metadata);
+        }
+        let extrude = &mut f.0.get_mut(&9).unwrap().2;
+        if base == 1 {
+            let n = extrude.len();
+            extrude.remove(n - 16);
+        }
+        if body_version == 1 {
+            extrude.drain(147..151);
+        }
+        f.0.get_mut(&5).unwrap().1 = if layout == 4 { 2 } else { 3 };
+        f.put(1000, "A0A15D26-1F3B-4120-A3F1-9CDDA189AB74", base, vec![], None);
+        f.put(1001, "2EDC2536-D95B-4469-8ACA-DC07124D9C43", body_version, vec![], None);
+        let mut d = f.design();
+        d.layout = layout;
+        let features = d.history().unwrap();
+        assert_eq!(features.len(), 2);
+        assert_eq!(features[0].name, "Editable circle");
+        assert_eq!(features[1].name, "Extrude1");
+        let HistoryKind::Sketch { placement, .. } = &features[0].kind else { panic!("sketch") };
+        assert_eq!(placement.entities, [42, 41, 31, 56]);
+        assert_eq!(placement.legacy_entity_metadata, if version == 4 { vec![(43, 1)] } else { vec![] });
+        assert_eq!(placement.matrix, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
+        // The native import remains atomic; decoded entries do not silently skip
+        // unknown geometry schemas or legacy metadata during reconstruction.
+        assert!(d.to_document("Legacy").is_err());
+    }
+}
+
+#[test]
+fn timeline_inspection_retains_unsupported_entries_and_later_features() {
+    let d = fixture(&[90, 78, 10], 4, false, None);
+    let entries = d.timeline().unwrap();
+    assert_eq!(entries.iter().map(|e| e.id).collect::<Vec<_>>(), [90, 78, 10]);
+    assert!(entries[0].feature.is_ok());
+    assert!(entries[1].feature.is_err());
+    assert!(entries[2].feature.is_ok());
+    assert_eq!(entries[1].class, "opaque-78");
+    assert!(d.history().is_err());
 }

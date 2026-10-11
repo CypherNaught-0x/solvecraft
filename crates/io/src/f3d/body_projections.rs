@@ -203,6 +203,7 @@ impl Context<'_> {
             curve.clone()
         };
         if !profile.holes.is_empty()
+            || extent.start_offset.is_some()
             || extent.direction != Direction::Positive
             || self.doc.eval(&extent.distance, Kind::Length)? <= 0.
             || extent.taper.as_ref().map(|e| self.doc.eval(e, Kind::Angle)).transpose()?.is_some_and(|angle| angle.abs() > 1e-12)
@@ -470,15 +471,10 @@ pub(super) fn selector(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, i
     // Verify the reverse relationship on the producing extrusion. The second
     // role list is the single new-body output handle in the observed schema.
     let mut r = payload(records.primary(feature)?, feature)?;
-    empty(&mut r)?;
-    if r.take(2)? != [0, 1] {
-        return Err(invalid("unsupported projected extrusion attributes"));
+    let input = super::history::extrude_inputs(&mut r, classes)?;
+    if input.operation != solvecraft_doc::Operation::NewBody || input.start_offset.is_some() {
+        return Err(invalid("body-edge import requires an independent profile-plane extrusion"));
     }
-    r.take(7)?;
-    if r.u32()? != 4 {
-        return Err(invalid("body-edge import requires an independent extrusion"));
-    }
-    r.take(115)?;
     references(&mut r)?;
     if !references(&mut r)?.is_empty() || references(&mut r)? != handles || !references(&mut r)?.is_empty() || !references(&mut r)?.is_empty() {
         return Err(invalid("body handle disagrees with extrusion outputs"));

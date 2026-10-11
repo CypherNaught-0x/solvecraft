@@ -264,3 +264,63 @@ fn fixation_is_distinct_from_constraint_state_and_truncated_points_fail() {
     f.0.get_mut(&41).unwrap().2[24] = 2;
     assert!(f.design().sketch_points().is_err());
 }
+
+fn start_offset_fixture() -> Fixture {
+    let mut f = fixture(false);
+    let mut data = vec![0; 20];
+    u32(&mut data, 0);
+    reference(&mut data, 69);
+    wide(&mut data, "8 mm");
+    data.extend([0; 10]);
+    for text in ["ProfileOffset", "", "mm", "start"] {
+        wide(&mut data, text);
+    }
+    data.extend(0.8_f64.to_le_bytes());
+    data.extend([0; 12]);
+    f.put(68, "7A6A3D31-BE74-4E19-9115-20642944C2E4", 9, data, None);
+    let mut data = vec![0; 4];
+    data.push(1);
+    refs(&mut data, &[9]);
+    data.extend([0; 5]);
+    data.extend(0.8_f64.to_le_bytes());
+    reference(&mut data, 68);
+    f.put(69, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0, data, None);
+    let data = &mut f.0.get_mut(&9).unwrap().2;
+    data[27] = 1;
+    let mut offset = Vec::new();
+    reference(&mut offset, 69);
+    offset.push(0);
+    data.splice(55..57, offset);
+    f
+}
+
+#[test]
+fn extrusion_start_offsets_keep_parameter_identity_and_follow_expressions() {
+    let mut doc = start_offset_fixture().design().to_document("Offset cylinder").unwrap();
+    let verify = |doc: &Document, low: f64, high: f64| {
+        let mut model = Model::new();
+        model.evaluate(doc);
+        assert!(model.results.iter().all(|r| r.error.is_none()), "{:?}", model.results);
+        let bounds = model.state().bodies[0].mesh().bounds();
+        assert!((bounds.min.z - low).abs() < 1e-6 && (bounds.max.z - high).abs() < 1e-6, "{bounds:?}");
+        volume(doc, 900. * std::f64::consts::PI * 17.);
+    };
+    verify(&doc, 8., 25.);
+    assert!(doc.features[1].param_names.contains(&"start".to_string()));
+    assert!(!doc.params.iter().any(|p| p.name == "start"));
+    doc.change_param("start", "-height / 2", None, None).unwrap();
+    verify(&doc, -8.5, 8.5);
+    let reopened = crate::read_design(&crate::write_design(&doc)).unwrap();
+    verify(&reopened, -8.5, 8.5);
+    for id in [9, 68, 69] {
+        let n = start_offset_fixture().0[&id].2.len();
+        for keep in 0..n {
+            let mut f = start_offset_fixture();
+            f.0.get_mut(&id).unwrap().2.truncate(keep);
+            assert!(f.design().to_document("Truncated offset").is_err(), "record {id}, prefix {keep}");
+        }
+    }
+    let mut f = start_offset_fixture();
+    f.0.get_mut(&9).unwrap().2[27] = 2;
+    assert!(f.design().to_document("Unknown offset mode").is_err());
+}

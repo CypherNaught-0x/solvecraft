@@ -34,7 +34,7 @@ complete outer and inner boundaries for circle, polygon and arc profiles, signed
 operations and booleans against a sole existing body are supported. Offset planes
 retain named construction-plane and sketch dependencies for verified root frames,
 including chained and signed offsets. Multiple-body
-boolean targeting, two-sided/start/to-object extents, other sketch geometry and
+boolean targeting, two-sided/to-object extents, nonzero taper with start offsets, other sketch geometry and
 constraint schemas, assembly transforms and other feature types fail explicitly.
 
 ## Evidence
@@ -703,3 +703,47 @@ The HardEdgeBasin opening regression passed in 0.90 seconds. All nineteen local
 F3D import groups passed (the corpus-only Minimal check was run separately with
 its required corpus path). The edited overlapping rectangular-body import was
 rendered and visually checked.
+
+
+### Legacy timelines and editable extrusion start offsets
+
+The inspector now preserves every timeline position in supplied layout-4/5/8
+archives, reporting unsupported entries individually while decoding later supported
+entries. Full import remains atomic: partial inspection does not silently omit
+features from a reconstructed design. Timeline versions 2/3, sketch features 3/4/5,
+geometry placement 16/17/18 and inherited common-feature versions 1/2 have distinct,
+validated layouts. The version-17 secondary entity map is retained explicitly;
+reconstruction rejects it until its semantics are verified.
+
+The three older designs contain 137 timeline entries in total. Inspection decodes
+all seventeen timeline sketches, preserving original custom names, entity references,
+transforms and suppression. Public API timeline order and counts provide independent
+checks. Legacy geometry, constraints and unsupported feature types still prevent
+complete editable imports of these designs.
+
+One-sided distance extrusions now preserve the optional signed start-offset
+parameter, including its native name, expression and owning feature. The extent
+header contains separate one-byte start-kind and offset-presence fields; optional
+bindings and framing are checked before reading profiles. Body-feature versions
+1/2 have three/four reference-role lists respectively. Shared decoding keeps
+inspection, reconstruction and producer validation consistent.
+
+Three local exports independently test positive, negative and expression-based
+start offsets. Height/diameter/offset edits, volumes, world bounds, reopening and
+undo match public API measurements. Imported zero-angle taper parameters remain
+editable while using ordinary extrusion evaluation; nonzero taper with a start
+offset is still unsupported. Body-edge projections from offset extrusions are not
+yet supported. Field-authored records reject truncated bindings and invalid flags.
+
+The twenty-fourth original fixture, `extrusion-start-offset`, is a 30 × 20 × 17 mm
+prism starting at `height / 2`. Its analytic volume is 10,200 mm³. Independent
+negative-offset, height and width edits check volume and bounds, reopening and undo.
+All twenty local native-import test groups and all twenty-four original fixtures
+pass. No Fusion-produced files are committed.
+
+Validation: upstream `af536a7` is integrated. Full `cargo xtask ci` passed all
+28 test binaries, including 74 I/O tests, 107 document tests, 559 engine tests,
+198 kernel tests, 304 UI tests, all 24 native fixtures and ten-crate WASM checking.
+The HardEdgeBasin opening regression passed in 0.86 seconds. All twenty local
+F3D import groups and the legacy timeline/API comparison passed separately. The
+actual imported start-offset cylinder was rendered and visually checked.

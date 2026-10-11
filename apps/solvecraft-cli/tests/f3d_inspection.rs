@@ -279,3 +279,43 @@ fn projection_flags_and_line_types_match_public_api() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_CORPUS and SOLVECRAFT_F3D_PROBES with legacy API measurements"]
+fn legacy_timeline_preserves_every_entry_and_decodes_versioned_sketches() {
+    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-corpus-measurements.json")).unwrap()).unwrap();
+    for (name, count, decoded, sketch_count) in
+        [("adapter-x20-makita.f3d", 49, 25, 12), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 35, 15, 3), ("R36S Grip.f3d", 53, 8, 2)]
+    {
+        let mut s = Session::default();
+        let before = s.doc.clone();
+        let result = s.execute("file.inspect_f3d", &json!({"path":corpus.join(name)})).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&before, &s.doc));
+        let entries = result["designs"][0]["timeline"]["records"].as_array().unwrap();
+        assert_eq!(entries.len(), count);
+        assert_eq!(entries.len(), api[name]["timeline"].as_array().unwrap().len());
+        assert_eq!(entries.iter().filter(|r| r["decoded"]["unsupported"].is_null()).count(), decoded);
+        let mut sketches = 0;
+        for (entry, expected) in entries.iter().zip(api[name]["timeline"].as_array().unwrap()) {
+            if entry["class"] == "8DA771B7-52ED-42FC-94E2-2353FE141373" {
+                sketches += 1;
+                assert_eq!(expected["type"], "adsk::fusion::Sketch");
+                assert!(entry["decoded"]["unsupported"].is_null(), "{name}: {entry}");
+                assert!(!entry["decoded"]["sketch"]["entities"].as_array().unwrap().is_empty());
+                let native = entry["decoded"]["name"].as_str().unwrap();
+                // Fusion localizes and renumbers automatic names on import;
+                // preserve the original serialized names instead of substituting API names.
+                if name == "R36S Grip.f3d" {
+                    assert!(matches!(native, "Skizze1" | "Skizze6"));
+                } else {
+                    assert_eq!(native, expected["name"].as_str().unwrap());
+                }
+            }
+        }
+        assert_eq!(sketches, sketch_count);
+        assert!(s.execute("doc.open", &json!({"path":corpus.join(name)})).is_err());
+        assert!(std::sync::Arc::ptr_eq(&before, &s.doc));
+    }
+}
