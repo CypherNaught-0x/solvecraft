@@ -199,7 +199,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   comments, favorites and user/model roles. Legacy parameter schemas decode all
   411 records in the three larger supplied files; their legacy feature histories
   now expose every ordered timeline entry and all seventeen timeline sketches, but
-  still need full reconstruction. Signed extrusion start offsets preserve expressions
+  still need full reconstruction. Legacy analytic geometry now decodes all 775 points
+  and 599 curves in the supplied files, including split primary/secondary entities;
+  unresolved metadata and relationships remain explicit. Signed extrusion start offsets preserve expressions
   and parameter bindings through edits, reopening and undo; zero-angle taper inputs
   remain editable. Other feature types and native B-reps remain unsupported; see
   [the observed format and remaining work](docs/f3d.md). HardEdgeBasin opening now

@@ -319,3 +319,80 @@ fn legacy_timeline_preserves_every_entry_and_decodes_versioned_sketches() {
         assert!(std::sync::Arc::ptr_eq(&before, &s.doc));
     }
 }
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with resaved legacy archives and public-API curve measurements"]
+fn original_and_resaved_legacy_geometry_matches_public_api() {
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-legacy-curves.json")).unwrap()).unwrap();
+    let close = |a: f64, b: f64| (a - b).abs() < a.abs().max(b.abs()).max(1.) * 1e-8;
+    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").expect("set SOLVECRAFT_F3D_CORPUS"));
+    for (name, sketches) in api.as_object().unwrap() {
+        for path in [probes.join(name), corpus.join(name.strip_prefix("corpus-").unwrap())] {
+            let designs = solvecraft_engine::io::f3d::read_f3d(&std::fs::read(&path).unwrap()).unwrap();
+            let d = &designs[0];
+            let points = d.sketch_points().unwrap_or_else(|e| panic!("{name}: {e}"));
+            let mut expected_points: Vec<_> = sketches.as_array().unwrap().iter().flat_map(|s| s["points"].as_array().unwrap()).collect();
+            assert_eq!(points.len(), expected_points.len(), "{}: point count", path.display());
+            for p in &points {
+                let at = expected_points
+                    .iter()
+                    .position(|want| {
+                        p.position.iter().enumerate().all(|(axis, x)| close(*x, want["position"][axis].as_f64().unwrap())) && want["fixed"] == p.fixed
+                    })
+                    .unwrap_or_else(|| panic!("{}: missing point {p:?}", path.display()));
+                expected_points.swap_remove(at);
+            }
+            let position = |id: u64| points.iter().find(|p| p.id == id).unwrap().position;
+            let mut decoded = Vec::new();
+            for c in d.sketch_lines().unwrap_or_else(|e| panic!("{name}: {e}")) {
+                decoded.push(json!({"type":"adsk::fusion::SketchLine","construction":c.construction,"fixed":c.fixed,"start":c.start,"end":c.end}));
+            }
+            for c in d.sketch_circles().unwrap_or_else(|e| panic!("{name}: {e}")) {
+                decoded.push(
+                    json!({"type":"adsk::fusion::SketchCircle","construction":c.construction,"fixed":c.fixed,"center":c.center,"radius":c.radius}),
+                );
+            }
+            for a in d.sketch_arcs().unwrap_or_else(|e| panic!("{name}: {e}")) {
+                let c = a.circle;
+                decoded.push(json!({"type":"adsk::fusion::SketchArc","construction":c.construction,"fixed":c.fixed,"center":c.center,"radius":c.radius,"start":position(a.start_point),"end":position(a.end_point)}));
+            }
+            let expected: Vec<_> = sketches
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|s| s["curves"].as_array().unwrap())
+                .filter(|c| matches!(c["type"].as_str(), Some("adsk::fusion::SketchLine" | "adsk::fusion::SketchCircle" | "adsk::fusion::SketchArc")))
+                .collect();
+            assert_eq!(decoded.len(), expected.len(), "{name}: analytic curve count");
+            for want in expected {
+                let matched = decoded
+                    .iter()
+                    .position(|got| {
+                        for key in ["type", "construction", "fixed"] {
+                            if got[key] != want[key] {
+                                return false;
+                            }
+                        }
+                        if let Some(radius) = want["radius"].as_f64()
+                            && !got["radius"].as_f64().is_some_and(|r| close(r, radius))
+                        {
+                            return false;
+                        }
+                        for key in ["start", "end", "center"] {
+                            if let Some(p) = want[key].as_array() {
+                                for (axis, x) in p.iter().enumerate() {
+                                    if !got[key][axis].as_f64().is_some_and(|n| close(n, x.as_f64().unwrap())) {
+                                        return false;
+                                    }
+                                }
+                            }
+                        }
+                        true
+                    })
+                    .unwrap_or_else(|| panic!("{name}: missing analytic curve {want}"));
+                decoded.swap_remove(matched);
+            }
+        }
+    }
+}

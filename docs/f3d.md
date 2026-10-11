@@ -747,3 +747,41 @@ Validation: upstream `af536a7` is integrated. Full `cargo xtask ci` passed all
 The HardEdgeBasin opening regression passed in 0.86 seconds. All twenty local
 F3D import groups and the legacy timeline/API comparison passed separately. The
 actual imported start-offset cylinder was rendered and visually checked.
+
+
+### Legacy analytic geometry and split entity records
+
+The geometry reader now accepts verified layout-4/5/8 point, line, circle and arc
+schemas. All 775 points and 599 analytic curves from the three larger supplied
+files match public API coordinates and fixation; curve comparisons also check
+construction, radii and arc endpoints. The acceptance test reads both the original
+archives and their modern Fusion-resaved versions. It does not require a running
+Fusion installation, and no generated archives enter Git.
+
+Inherited curve metadata (`9FF71F46-205F-484B-A2B5-A245D0D8FE33`) versions 8/9 differ
+by a byte before the construction flag. Geometry version 17 adds a counted reference
+list before the owner. The former opaque curve tail contains a variable relationship
+list; these references are now bounded, validated and retained. Unknown point flags
+are exposed separately instead of receiving guessed constraint meanings.
+
+Specialized point `00D157C2-2332-4BD5-BB53-048C4081D1C3` and line
+`16DEFC4D-1816-4FB0-8E39-9BDA23954248`, both version 0, split attributes and geometry
+between primary and secondary records. Parent classes, framing, optional definition
+references and duplicated endpoint references are validated. Sixteen specialized
+lines and twenty-two specialized points in the adapter are included in the API
+comparison. Their dependent definitions remain explicit; reconstruction currently
+rejects them rather than flattening their cached geometry.
+
+A finite line's support axis can oppose its endpoint order. Both parallel
+orientations are valid, but a nonparallel or nonunit axis still fails. An original
+record regression checks the correct rectangular extrusion and volume after a
+width edit with the reversed axis. Additional authored tests cover versioned
+construction flags, split-record truncation, conflicting endpoints, retained
+relationships and unknown point metadata. Existing supported imports remain
+editable. Larger-file constraint and feature reconstruction is still unfinished.
+
+Validation: upstream `af536a7` remains integrated. Full `cargo xtask ci` passed
+28 test binaries, including 79 I/O tests, 107 document tests, 559 engine tests,
+198 kernel tests, 304 UI tests, all 24 native fixtures and ten-crate WASM checking.
+All twenty local F3D import groups and nine local inspection groups passed.
+The HardEdgeBasin opening regression passed in 0.88 seconds.

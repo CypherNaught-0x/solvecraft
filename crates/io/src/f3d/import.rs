@@ -61,6 +61,13 @@ impl Design {
         let circles: BTreeMap<_, _> = self.sketch_circles()?.into_iter().map(|c| (c.id, c)).collect();
         let arcs: BTreeMap<_, _> = self.sketch_arcs()?.into_iter().map(|a| (a.circle.id, a)).collect();
         let lines: BTreeMap<_, _> = self.sketch_lines()?.into_iter().map(|l| (l.id, l)).collect();
+        if points.values().any(|p| p.metadata.needs_reconstruction())
+            || circles.values().any(|c| c.metadata.needs_reconstruction())
+            || arcs.values().any(|a| a.circle.metadata.needs_reconstruction())
+            || lines.values().any(|l| l.metadata.needs_reconstruction())
+        {
+            return Err(invalid("sketch entity relationship reconstruction is not supported yet"));
+        }
         let constraints: BTreeMap<_, _> = self.sketch_constraints()?.into_iter().map(|c| (c.geometry, c)).collect();
         let profiles: BTreeMap<_, _> = self.sketch_profiles()?.into_iter().map(|p| (p.id, p)).collect();
         let mut doc = Document::new(name);

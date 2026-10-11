@@ -14,6 +14,7 @@ pub struct SketchCircle {
     pub construction: bool,
     pub fixed: bool,
     pub reference: bool,
+    pub metadata: EntityMetadata,
     pub profile_id: Option<(u64, u64)>,
 }
 
@@ -44,33 +45,32 @@ impl Design {
     }
 
     fn circular_records(&self) -> Result<Vec<CircularRecord>> {
-        if self.layout != 8 {
-            return Err(invalid("circle decoding requires metadata layout 8"));
-        }
         let Some(class) = self.classes.iter().find(|c| c.id == "F0130424-8B7E-4092-93C9-1CA807482534") else {
             return Ok(Vec::new());
         };
         if class.version != 0 {
             return Err(invalid("unsupported circle class version"));
         }
+        let schema = entity::Schema::read(self)?;
         let records = Records::new(self);
-        let objects = |guid: &str, version| -> BTreeSet<_> {
-            self.classes.iter().filter(|c| c.id == guid && c.version == version).flat_map(|c| c.objects.iter().copied()).collect()
-        };
-        let sketches = objects("44A64366-4BD3-4B24-881A-F94C206E8F2D", 18);
-        let points = objects("C2CEDAE7-1716-47C1-B7B1-07B70081D0FB", 11);
+        let classes: BTreeMap<_, _> = self.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
         class
             .objects
             .iter()
             .map(|id| {
-                let (c, arc) = decode(records.primary(*id)?)?;
-                if c.id != *id || !sketches.contains(&c.sketch) || !points.contains(&c.center_point) {
+                let (c, arc) = decode(records.primary(*id)?, schema)?;
+                schema.require_owner(&classes, c.sketch)?;
+                entity::require_point(&classes, c.center_point)?;
+                c.metadata.validate(&classes)?;
+                if c.id != *id {
                     return Err(invalid("inconsistent circle references"));
                 }
-                if let Some((a, b, _, _)) = arc
-                    && (a == b || a == c.center_point || b == c.center_point || !points.contains(&a) || !points.contains(&b))
-                {
-                    return Err(invalid("inconsistent arc endpoint references"));
+                if let Some((a, b, _, _)) = arc {
+                    if a == b || a == c.center_point || b == c.center_point {
+                        return Err(invalid("inconsistent arc endpoint references"));
+                    }
+                    entity::require_point(&classes, a)?;
+                    entity::require_point(&classes, b)?;
                 }
                 Ok((c, arc))
             })
@@ -78,7 +78,7 @@ impl Design {
     }
 }
 
-fn decode(bytes: &[u8]) -> Result<CircularRecord> {
+fn decode(bytes: &[u8], schema: entity::Schema) -> Result<CircularRecord> {
     let mut r = Reader { bytes, at: 0 };
     r.string()?;
     let id = r.u64()?;
@@ -121,14 +121,14 @@ fn decode(bytes: &[u8]) -> Result<CircularRecord> {
     r.take(if arc.is_some() { 2 } else { 4 })?;
     let fixed = points::fixed(&mut r)?;
     let reference = points::boolean(&mut r)?;
-    r.take(2)?;
+    r.take(if schema.curve == 9 { 2 } else { 1 })?;
     let construction = match r.take(1)? {
         [0] => false,
         [1] => true,
         _ => return Err(invalid("unsupported circle construction flag")),
     };
-    r.take(34)?; // Other flags and presentation fields remain uninterpreted.
-    let sketch = r.reference()?;
+    let mut metadata = EntityMetadata::default();
+    let sketch = schema.curve_tail(&mut r, &mut metadata)?;
     if r.at != bytes.len() {
         return Err(invalid("unsupported circle payload tail"));
     }
@@ -137,12 +137,16 @@ fn decode(bytes: &[u8]) -> Result<CircularRecord> {
         (None, None) => None,
         _ => return Err(invalid("incomplete circle profile identity")),
     };
-    Ok((SketchCircle { id, sketch, center_point, center, normal, x_axis, radius, construction, fixed, reference, profile_id }, arc))
+    Ok((SketchCircle { id, sketch, center_point, center, normal, x_axis, radius, construction, fixed, reference, profile_id, metadata }, arc))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn decode(bytes: &[u8]) -> Result<CircularRecord> {
+        super::decode(bytes, entity::Schema { geometry: 18, curve: 9 })
+    }
 
     fn circle(radius: f64) -> Vec<u8> {
         // Original synthetic data, deliberately not a copy of a Fusion record.

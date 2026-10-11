@@ -15,12 +15,15 @@ mod attributes;
 mod body_projections;
 mod circles;
 mod constraints;
+mod entity;
 #[cfg(test)]
 mod geometric_tests;
 mod history;
 mod import;
 #[cfg(test)]
 mod import_tests;
+#[cfg(test)]
+mod legacy_geometry_tests;
 mod lines;
 mod operations;
 mod parameters;
@@ -40,6 +43,7 @@ mod radial_tests;
 mod round_profile_tests;
 pub use circles::{SketchArc, SketchCircle};
 pub use constraints::{CurveRelation, LinearOrientation, SketchConstraint, SketchConstraints};
+pub use entity::EntityMetadata;
 pub use history::{HistoryFeature, HistoryKind, SketchPlacement, TimelineEntry};
 pub use import::import_f3d;
 pub use lines::SketchLine;

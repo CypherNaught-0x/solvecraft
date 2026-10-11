@@ -10,6 +10,7 @@ pub struct SketchPoint {
     pub fixed: bool,
     pub origin: bool,
     pub linked: bool,
+    pub metadata: EntityMetadata,
 }
 
 pub(super) fn fixed(r: &mut Reader<'_>) -> Result<bool> {
@@ -32,26 +33,37 @@ pub(super) fn boolean(r: &mut Reader<'_>) -> Result<bool> {
 
 impl Design {
     pub fn sketch_points(&self) -> Result<Vec<SketchPoint>> {
-        if self.layout != 8 {
-            return Err(invalid("point decoding requires metadata layout 8"));
-        }
-        let Some(class) = self.classes.iter().find(|c| c.id == "C2CEDAE7-1716-47C1-B7B1-07B70081D0FB") else { return Ok(vec![]) };
-        if class.version != 11 {
-            return Err(invalid("unsupported sketch point version"));
+        let schema = entity::Schema::read(self)?;
+        let point_classes: Vec<_> = self.classes.iter().filter(|c| matches!(c.id.as_str(), entity::POINT | entity::SPECIAL_POINT)).collect();
+        for class in &point_classes {
+            if !matches!((class.id.as_str(), class.version), (entity::POINT, 11) | (entity::SPECIAL_POINT, 0))
+                || (class.id == entity::SPECIAL_POINT && class.parent != entity::POINT)
+            {
+                return Err(invalid("unsupported sketch point version or parent"));
+            }
         }
         let records = Records::new(self);
         let classes: BTreeMap<_, _> = self.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
-        class
-            .objects
+        point_classes
             .iter()
-            .map(|id| {
+            .flat_map(|class| class.objects.iter().map(move |id| (class, id)))
+            .map(|(class, id)| {
                 let mut r = payload(records.primary(*id)?, *id)?;
                 empty(&mut r)?;
                 zeros(&mut r, 1)?;
                 attributes::read(&mut r)?;
+                let mut metadata = EntityMetadata { specialized: class.id == entity::SPECIAL_POINT, ..Default::default() };
+                if metadata.specialized {
+                    finish(&r)?;
+                    r = payload(records.secondary(*id)?, *id)?;
+                    empty(&mut r)?;
+                }
                 let connections = r.reference()?;
                 require_class(&classes, connections, "362B7EC3-0F09-47C8-A3BE-DC066715CDAE", 0)?;
-                zeros(&mut r, 3)?;
+                metadata.point_prefix = match r.take(3)? {
+                    [0, middle @ (0 | 1), 0] => [0, *middle, 0],
+                    _ => return Err(invalid("unsupported point prefix flags")),
+                };
                 let fixed = fixed(&mut r)?;
                 let origin = match r.take(1)? {
                     [0] => false,
@@ -59,7 +71,7 @@ impl Design {
                     _ => return Err(invalid("unsupported point origin flag")),
                 };
                 let linked = boolean(&mut r)?;
-                zeros(&mut r, 1)?;
+                metadata.point_auxiliary = boolean(&mut r)?;
                 let mut number = || -> Result<f64> {
                     let n = f64::from_bits(r.u64()?);
                     if !n.is_finite() {
@@ -75,10 +87,11 @@ impl Design {
                 if references(&mut r)? != [connections] {
                     return Err(invalid("unsupported point connection list"));
                 }
-                let sketch = r.reference()?;
-                require_class(&classes, sketch, "44A64366-4BD3-4B24-881A-F94C206E8F2D", 18)?;
+                let sketch = schema.owner(&mut r, &mut metadata)?;
+                schema.require_owner(&classes, sketch)?;
+                metadata.validate(&classes)?;
                 finish(&r)?;
-                Ok(SketchPoint { id: *id, sketch, position, fixed, origin, linked })
+                Ok(SketchPoint { id: *id, sketch, position, fixed, origin, linked, metadata })
             })
             .collect()
     }
