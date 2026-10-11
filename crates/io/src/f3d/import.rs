@@ -61,14 +61,8 @@ impl Design {
         let circles: BTreeMap<_, _> = self.sketch_circles()?.into_iter().map(|c| (c.id, c)).collect();
         let arcs: BTreeMap<_, _> = self.sketch_arcs()?.into_iter().map(|a| (a.circle.id, a)).collect();
         let lines: BTreeMap<_, _> = self.sketch_lines()?.into_iter().map(|l| (l.id, l)).collect();
-        if points.values().any(|p| p.metadata.needs_reconstruction())
-            || circles.values().any(|c| c.metadata.needs_reconstruction())
-            || arcs.values().any(|a| a.circle.metadata.needs_reconstruction())
-            || lines.values().any(|l| l.metadata.needs_reconstruction())
-        {
-            return Err(invalid("sketch entity relationship reconstruction is not supported yet"));
-        }
         let constraints: BTreeMap<_, _> = self.sketch_constraints()?.into_iter().map(|c| (c.geometry, c)).collect();
+        super::offset_import::metadata(&projections::Geometry { points: &points, lines: &lines, circles: &circles, arcs: &arcs }, &constraints)?;
         let profiles: BTreeMap<_, _> = self.sketch_profiles()?.into_iter().map(|p| (p.id, p)).collect();
         let mut doc = Document::new(name);
         let mut names = BTreeSet::new();
@@ -364,6 +358,12 @@ impl Design {
                     }
                     for constraint in &relations.constraints {
                         let (kind, param) = match constraint {
+                            SketchConstraint::OffsetCurves(offset) => {
+                                let parameter = length_parameter(&bindings, offset.binding)?;
+                                super::offset_import::attach(&mut sketch, offset, parameter)?;
+                                consumed.insert(offset.dimension);
+                                continue;
+                            }
                             SketchConstraint::LineMidpoints { id, lines: [a, b] } => {
                                 let a = curve_indices.get(a).copied().ok_or_else(|| invalid("missing midpoint line"))?;
                                 let b = curve_indices.get(b).copied().ok_or_else(|| invalid("missing midpoint line"))?;

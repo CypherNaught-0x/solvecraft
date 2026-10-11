@@ -25,6 +25,7 @@ mod import_tests;
 #[cfg(test)]
 mod legacy_geometry_tests;
 mod lines;
+mod offset_import;
 mod operations;
 mod parameters;
 #[cfg(test)]
@@ -350,6 +351,8 @@ mod angular_dimension_tests;
 mod midpoint_tests;
 #[cfg(test)]
 mod offset_dimension_tests;
+#[cfg(test)]
+mod offset_history_tests;
 #[cfg(test)]
 mod relationship_tests;
 #[cfg(test)]

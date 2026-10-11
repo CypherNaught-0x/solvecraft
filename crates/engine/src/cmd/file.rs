@@ -221,6 +221,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
             };
             let constraints = match d.sketch_constraints() {
                 Ok(sketches) => json!({"records":sketches.iter().map(|s|json!({"geometry":s.geometry,"feature":s.feature,"constraints":s.constraints.iter().map(|c|match c {
+                    solvecraft_io::f3d::SketchConstraint::OffsetCurves(o) => json!({"type":"offset_curves","id":o.id,"dimension":o.dimension,"binding":o.binding,"distance":o.distance,"sources":o.sources,"outputs":o.outputs}),
                     solvecraft_io::f3d::SketchConstraint::Symmetry {id,axis,entities} => json!({"type":"symmetry","id":id,"axis":axis,"entities":entities}),
                     solvecraft_io::f3d::SketchConstraint::Offset {id,line,entity,binding} => json!({"type":"offset_distance","id":id,"line":line,"entity":entity,"binding":binding}),
                     solvecraft_io::f3d::SketchConstraint::Angle {id,lines,quadrants,binding,cached_radians} => json!({"type":"angle","id":id,"lines":lines,"quadrants":quadrants,"binding":binding,"radians":cached_radians}),

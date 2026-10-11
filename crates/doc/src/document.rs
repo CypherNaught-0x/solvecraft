@@ -1381,10 +1381,13 @@ impl FeatureKind {
                 }
                 def.planes().into_iter().for_each(|p| plane_exprs(p, &mut v));
             }
-            FeatureKind::Sketch { plane, .. }
-            | FeatureKind::ConstructionPlane { plane }
-            | FeatureKind::Split { plane, .. }
-            | FeatureKind::SplitFace { plane, .. } => plane_exprs(plane, &mut v),
+            FeatureKind::Sketch { plane, sketch } => {
+                plane_exprs(plane, &mut v);
+                v.extend(sketch.offsets.iter().filter_map(|offset| offset.distance_expression.as_deref()));
+            }
+            FeatureKind::ConstructionPlane { plane } | FeatureKind::Split { plane, .. } | FeatureKind::SplitFace { plane, .. } => {
+                plane_exprs(plane, &mut v)
+            }
             FeatureKind::Extrude { extent, .. } => {
                 v.push(&extent.distance);
                 if let Some(d) = &extent.distance2 {
@@ -2155,6 +2158,11 @@ impl Document {
 
     /// Apply parameter values to every dimension in a sketch (in place).
     pub fn apply_dimension_values(&self, vals: &std::collections::BTreeMap<String, expr::Value>, sk: &mut Sketch) -> Result<()> {
+        for offset in &mut sk.offsets {
+            if let Some(expression) = &offset.distance_expression {
+                offset.distance = Self::eval_in(vals, expression, Kind::Length)?;
+            }
+        }
         for c in &mut sk.constraints {
             if let Some(p) = &c.param {
                 let kind = if c.kind.is_angle() { Kind::Angle } else { Kind::Length };

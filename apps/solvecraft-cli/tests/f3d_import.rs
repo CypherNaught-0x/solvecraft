@@ -988,3 +988,81 @@ fn line_midpoint_profile_edits_preserve_volume_bounds_and_history() {
         verify(&mut s, base);
     }
 }
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with native offset generator controls"]
+fn offset_generators_preserve_distance_source_edits_and_history() {
+    use solvecraft_engine::doc::{Document, sketch::CurveKind};
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    for family in ["history", "legacy", "center"] {
+        let api: Value = serde_json::from_slice(&std::fs::read(dir.join(format!("fusion-offset-{family}-measurements.json"))).unwrap()).unwrap();
+        let verify = |s: &mut Session, expected: &Value| {
+            assert!(s.model.results.iter().all(|r| r.error.is_none()));
+            let state = s.model.state();
+            let sketch = &state.sketches[0].sketch;
+            assert_eq!(sketch.offsets.len(), 1);
+            assert!(sketch.offsets[0].distance_expression.is_some());
+            let point_matches = |index: usize, coords: &Value| {
+                let p = sketch.points[index].pos;
+                (p.x - coords[0].as_f64().unwrap() * 10.).abs() < 1e-5 && (p.y - coords[1].as_f64().unwrap() * 10.).abs() < 1e-5
+            };
+            for key in ["parents", "children"] {
+                for curve in expected[key].as_array().unwrap() {
+                    assert!(
+                        sketch.curves.iter().any(|c| match &c.kind {
+                            CurveKind::Line { a, b } if curve["type"] == "adsk::fusion::SketchLine" =>
+                                point_matches(*a, &curve["start"]) && point_matches(*b, &curve["end"]),
+                            CurveKind::Circle { c, r } if curve["type"] == "adsk::fusion::SketchCircle" =>
+                                point_matches(*c, &curve["center"]) && (*r - curve["radius"].as_f64().unwrap() * 10.).abs() < 1e-5,
+                            _ => false,
+                        }),
+                        "missing {key} curve {curve}; expected {expected}; actual {:?}",
+                        sketch
+                    );
+                }
+            }
+            drop(state);
+            if expected["kind"] != "line" {
+                let m = volume(s, expected["volume"].as_f64().unwrap(), "offset generator");
+                assert_eq!(m["body_count"], 1);
+                for (end, key) in [(0, "min"), (1, "max")] {
+                    for axis in 0..3 {
+                        assert!(
+                            (m["bodies"][0]["bbox"][key][axis].as_f64().unwrap() - expected["bounds"][0][end][axis].as_f64().unwrap() * 10.).abs()
+                                < 1e-5
+                        );
+                    }
+                }
+            }
+        };
+        for (name, expected) in api.as_object().unwrap() {
+            let mut s = Session::default();
+            if expected["kind"] == "line" {
+                let error = s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_err();
+                assert!(error.to_string().contains("open offset endpoint"), "{name}: {error}");
+                continue;
+            }
+            s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+            verify(&mut s, expected);
+            verify(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), expected);
+            if !name.ends_with("-baseline") {
+                continue;
+            }
+            let original = s.doc.clone();
+            let distance = expected["sign"].as_i64().unwrap() * 8;
+            s.execute("parameters.change", &json!({"name":expected["offset_parameter"],"expression":format!("{distance} mm")})).unwrap();
+            let changed = &api[name.replace("-baseline", "-distance-changed")];
+            verify(&mut s, changed);
+            verify(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), changed);
+            s.execute("parameters.change", &json!({"name":expected["source_parameter"],"expression":"80 mm"})).unwrap();
+            let changed = &api[name.replace("-baseline", "-source-changed")];
+            verify(&mut s, changed);
+            verify(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), changed);
+            for _ in 0..2 {
+                s.execute("edit.undo", &json!({})).unwrap();
+            }
+            assert_eq!(s.doc, original);
+            verify(&mut s, expected);
+        }
+    }
+}

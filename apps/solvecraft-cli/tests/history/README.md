@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These twenty-nine designs and their JSON command recipes are original SolveCraft test
+These thirty designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -19,6 +19,7 @@ recipe, independent expectations and optional edits.
 | join-extrude | Contained cylinder joined into base | 5040π |
 | cut-extrude | Blind circular pocket | 4740π |
 | intersect-extrude | Intersection with smaller cylinder | 300π |
+| offset-circle-ring | Associative offset distance, source diameter and height edits | 3300π |
 | annulus-extrude | Exact outer/hole boundaries, both diameter edits | 9600π |
 | arc-extrude | Shared arc/chord endpoints, radius and height edits | 1350π |
 | rectangle-extrude | Width/depth dimensions, dependent expression | 10200 |
@@ -92,3 +93,7 @@ cargo test --profile ci -p solvecraft-cli --test editable_history write_original
 These are native SolveCraft history regression tests. The separate F3D tests
 check native record decoding against local Fusion API controls. Passing these
 fixtures does **not** establish general F3D editable-history support.
+
+The offset ring uses an outer radius of 30 mm and an inward gap of 5 mm,
+with height 12 mm: π(R² − (R − gap)²)h. The gap expression and source
+diameter remain editable; each change is checked after reopening and undo.

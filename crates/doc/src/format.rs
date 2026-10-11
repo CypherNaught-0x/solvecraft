@@ -41,13 +41,15 @@
 //!   migration never guesses attachments for older designs.
 //! - 14: exact circular-edge associations may span several named boundary edges.
 //!   Older edge links retain their existing single-edge or positional semantics.
+//! - 15: analytic offset distances can retain editable parameter expressions.
+//!   Older numeric offsets keep their existing values without new dependencies.
 
 use serde_json::Value;
 
 use crate::{DocError, Document, Result};
 
 /// The format this build writes.
-pub const FORMAT: u32 = 14;
+pub const FORMAT: u32 = 15;
 
 pub fn format_string(n: u32) -> String {
     format!("solvecraft/{n}")
@@ -60,12 +62,13 @@ pub fn version_of(s: &str) -> Option<u32> {
 
 /// JSON-level upgrades: entry `i` turns format `i + 1` into `i + 2`.
 type JsonStep = fn(&mut Value) -> Result<()>;
-const JSON_STEPS: [JsonStep; 13] = [
+const JSON_STEPS: [JsonStep; 14] = [
     |_| Ok(()),
     v2_to_v3,
     v3_to_v4,
     v4_to_v5,
     v5_to_v6,
+    |_| Ok(()),
     |_| Ok(()),
     |_| Ok(()),
     |_| Ok(()),

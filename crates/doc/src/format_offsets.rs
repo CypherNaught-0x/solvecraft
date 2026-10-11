@@ -95,6 +95,12 @@ pub(crate) fn validate_raw(value: &Value) -> Result<()> {
         let mut point_owners = std::collections::BTreeMap::new();
         let mut sketch_roles = 0usize;
         for offset in offsets {
+            if let Some(expression) = offset.get("distance_expression").filter(|v| !v.is_null()) {
+                let expression = expression.as_str().ok_or_else(invalid)?;
+                if expression.is_empty() || expression.len() > 4096 {
+                    return Err(invalid());
+                }
+            }
             let Some(topology) = offset.get("topology").filter(|topology| !topology.is_null()) else { continue };
             if groups.len() >= 128 {
                 return Err(invalid());
@@ -388,6 +394,7 @@ mod tests {
             sources: vec![("source".into(), true)],
             outputs: vec!["offset".into()],
             distance: 1.,
+            distance_expression: None,
             closed: true,
             topology: None,
         });

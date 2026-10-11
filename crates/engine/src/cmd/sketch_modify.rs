@@ -42,7 +42,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("offset")
         .key("O")
         .enabled(in_sketch)
-        .params(concat!("curves: [ids], distance: number (positive = left of the chain, or toward `side`), side?: [x,y], chain?: bool (default true: the connected chain)", created_doc!())),
+        .params(concat!("curves: [ids], distance: number or expression (positive = left of the chain, or toward `side`), side?: [x,y], chain?: bool (default true: the connected chain)", created_doc!())),
     CommandSpec::new("sketch.offset.break", "Break Offset Association", break_offset)
         .enabled(in_sketch)
         .params("curve: derived offset curve id (retains geometry and makes its points editable)"),
@@ -924,8 +924,21 @@ fn offset(s: &mut Session, p: &Value) -> Result<Value> {
     if ids.is_empty() {
         return Err(bad(cmd, "`curves` must list curves"));
     }
-    let d0 = num(p, "distance").filter(|d| d.abs() > 1e-9).ok_or_else(|| bad(cmd, "`distance` must be a non-zero number"))?;
+    let distance_expression = str_(p, "distance").map(str::to_owned);
+    let d0 = if let Some(expression) = &distance_expression {
+        s.doc.eval(expression, solvecraft_doc::expr::Kind::Length)?
+    } else {
+        num(p, "distance").ok_or_else(|| bad(cmd, "`distance` must be a number or expression"))?
+    };
+    if !d0.is_finite() || d0.abs() <= 1e-9 {
+        return Err(bad(cmd, "`distance` must be non-zero and finite"));
+    }
     let side = p.get("side").and_then(vec2);
+    let retained_expression = |distance: f64| {
+        distance_expression
+            .as_ref()
+            .map(|expression| if side.is_some() { format!("{}abs({expression})", if distance < 0. { "-" } else { "" }) } else { expression.clone() })
+    };
     let use_chain = bool_(p, "chain").unwrap_or(true);
     let (out, info) = edit(s, p, cmd, true, |sk, doc| {
         let (values, _) = doc.param_values();
@@ -964,6 +977,7 @@ fn offset(s: &mut Session, p: &Value) -> Result<Value> {
                 sources: vec![(ids[0].clone(), true)],
                 outputs: ids_of(sk, &made),
                 distance: r - nr,
+                distance_expression: retained_expression(r - nr),
                 closed: true,
                 topology: None,
             });
@@ -990,6 +1004,9 @@ fn offset(s: &mut Session, p: &Value) -> Result<Value> {
             None => d0,
         };
         if order.iter().any(|(i, _)| sk.shape(*i).is_none()) {
+            if distance_expression.is_some() {
+                return Err(bad(cmd, "parameterized free-form offsets are not supported yet"));
+            }
             // A smooth free-form entity is offset from exact pieces. Junctions that
             // would require trimming/intersecting independent normal offsets are
             // refused rather than joined by a guessed average point.
@@ -1008,6 +1025,7 @@ fn offset(s: &mut Session, p: &Value) -> Result<Value> {
             .collect::<Result<Vec<_>>>()?;
         if closed && sk.convex_offset_supported(&sources)? {
             let created = sk.add_convex_offset(sources.clone(), d)?;
+            sk.offsets.last_mut().ok_or_else(|| bad(cmd, "missing offset association"))?.distance_expression = retained_expression(d);
             let roles = sk
                 .offsets
                 .iter()
@@ -1108,7 +1126,14 @@ fn offset(s: &mut Session, p: &Value) -> Result<Value> {
         let outputs = ids_of(sk, &made);
         if pieces.iter().all(|p| !matches!(p, Piece::Free(_))) {
             let sources = order.iter().filter_map(|(i, forward)| sk.curves.get(*i).map(|c| (c.id.clone(), *forward))).collect();
-            sk.offsets.push(solvecraft_sketch::OffsetChain { sources, outputs: outputs.clone(), distance: d, closed, topology: None });
+            sk.offsets.push(solvecraft_sketch::OffsetChain {
+                sources,
+                outputs: outputs.clone(),
+                distance: d,
+                distance_expression: retained_expression(d),
+                closed,
+                topology: None,
+            });
             sk.refresh_offsets()?;
         }
         Ok((outputs, cons, None))

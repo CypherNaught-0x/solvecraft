@@ -1001,3 +1001,44 @@ ci` passed all 29 test binaries, including 94 I/O tests, 560 engine tests,
 WASM checking. The HardEdgeBasin opening guard passed in 0.87 seconds. All 28
 local import groups and ten inspection groups passed. The edited imported
 triangular prism was rendered and visually checked.
+
+
+### Associative circle and closed-line offsets
+
+Offset generators now retain their signed distance parameter, source curves and
+output identities for circles and connected closed line loops. Reconstruction
+checks both group ownership and every regenerated output point/radius against
+the stored geometry. Generator dependencies are ordered before reconstruction;
+cycles, duplicate producers, missing references and truncated records fail.
+Relationship reference order can change from interleaved to grouped after an
+edit; correspondence comes from the separately validated source/output groups.
+Connection slots are graph registrations, not curve directions.
+
+Fifty-six local public-API controls cover current and legacy offset creation,
+inward/outward circles and rectangles, shifted circle centers, distance edits,
+source edits and restored values. Forty closed-profile controls exercise editable
+imports, volume, bounds, reopening and undo. Sixteen open-line controls establish
+an important remaining limitation: native open offsets retain independent endpoint
+extents when their source grows. SolidCraft's current analytic chains extend with
+the source, so native open offsets are explicitly refused pending reconstruction
+of those endpoint freedoms. Mixed arc chains and other unverified generator
+schemas also remain unsupported.
+
+Design format 15 retains optional analytic offset distance expressions; older
+numeric offsets keep their values. Expressions participate in dependency tracking,
+parameter usage/deletion checks, renaming, recomputation and serialization. The
+`sketch.offset` command accepts length expressions for supported analytic offsets.
+Circle outputs with distinct center points follow source-center edits.
+
+The thirtieth original fixture, `offset-circle-ring`, has radius 30 mm, inward
+gap 5 mm and height 12 mm: volume π(30² − 25²)12 = 3300π mm³. Independent gap,
+source-diameter and height edits check analytic volume and world bounds through
+reopening and undo. The native importer also has original field-authored record
+tests, including malformed inputs. Fusion exports and screenshots stay local.
+
+Validation: upstream `e171ff0` is integrated without conflicts. Full `cargo xtask
+ci` passed 29 test binaries, including 97 I/O tests, 107 document tests,
+561 engine tests, 198 kernel tests, 305 UI tests, all 30 original history fixtures
+and ten-crate WASM checking. The HardEdgeBasin opening guard passed in 0.86
+seconds. All 29 local native-import groups and ten inspection groups passed.
+An imported offset ring was rendered and visually checked after a gap edit.

@@ -22,14 +22,6 @@ pub struct EntityMetadata {
     pub legacy: Vec<u64>,
 }
 impl EntityMetadata {
-    pub(super) fn needs_reconstruction(&self) -> bool {
-        self.specialized
-            || self.point_auxiliary
-            || self.point_prefix != [0; 3]
-            || !self.definition.is_empty()
-            || !self.relationships.is_empty()
-            || !self.legacy.is_empty()
-    }
     pub(super) fn validate(&self, classes: &BTreeMap<u64, &Class>) -> Result<()> {
         for id in self.definition.iter().chain(&self.relationships).chain(&self.legacy) {
             if !classes.contains_key(id) {

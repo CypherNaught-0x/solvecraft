@@ -72,7 +72,7 @@ fn tracking(f: &mut Fixture, loops: &[(Vec<(u64, bool)>, bool)]) {
     u32(&mut b, 0);
     f.put(101, "0D57BD2F-D09B-43FC-AD57-1E89A118C453", 1, b, None);
 }
-fn ring() -> Fixture {
+pub(super) fn ring() -> Fixture {
     let mut f = fixture(false);
     round(&mut f, 35, 18, 1., TAU, 0.);
     geometry(&mut f, &[42, 41, 31, 35, 56], &[56]);

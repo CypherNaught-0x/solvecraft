@@ -3,7 +3,9 @@
 use super::history::{empty, finish, payload, references, require_class, zeros};
 use super::*;
 mod graph;
+mod offsets;
 pub use graph::SketchConstraintGraph;
+pub use offsets::SketchOffset;
 
 #[derive(Debug, PartialEq)]
 pub struct SketchConstraints {
@@ -14,6 +16,7 @@ pub struct SketchConstraints {
 
 #[derive(Debug, PartialEq)]
 pub enum SketchConstraint {
+    OffsetCurves(SketchOffset),
     Coincident { id: u64, points: [u64; 2] },
     Horizontal { id: u64, line: u64 },
     Vertical { id: u64, line: u64 },
@@ -78,8 +81,19 @@ impl Design {
             .into_iter()
             .map(|graph| {
                 let geometry = &graph.geometry;
-                if graph.support.is_some() || !graph.auxiliary.is_empty() {
+                if graph.support.is_some() {
                     return Err(invalid("sketch container relationships are not supported yet"));
+                }
+                let offsets =
+                    offsets::ordered(graph.auxiliary.iter().map(|id| offsets::decode(&records, &classes, &graph, *id)).collect::<Result<Vec<_>>>()?)?;
+                let mut offset_records = BTreeSet::new();
+                for offset in &offsets {
+                    if bindings.get(&offset.binding) != Some(&graph.feature)
+                        || !offset_records.insert(offset.relation)
+                        || !offset_records.insert(offset.dimension)
+                    {
+                        return Err(invalid("conflicting offset relationships or parameter owner"));
+                    }
                 }
                 let feature = graph.feature;
                 let feature_class = classes.get(&feature).ok_or_else(|| invalid("missing sketch feature"))?;
@@ -89,11 +103,14 @@ impl Design {
                 let relations = graph.relations;
                 let dimensions = graph.dimensions;
                 let mut seen = BTreeSet::new();
-                let mut constraints = Vec::new();
+                let mut constraints: Vec<_> = offsets.into_iter().map(SketchConstraint::OffsetCurves).collect();
                 let point = |id: &u64| entity::require_point(&classes, *id).is_ok();
                 let line = |id: &u64| lines.get(id) == Some(geometry);
                 let round = |id: &u64| circles.get(id) == Some(geometry);
                 for id in relations {
+                    if offset_records.contains(&id) {
+                        continue;
+                    }
                     if !seen.insert(id) {
                         return Err(invalid("duplicate sketch constraint"));
                     }
@@ -177,6 +194,9 @@ impl Design {
                     });
                 }
                 for id in dimensions {
+                    if offset_records.contains(&id) {
+                        continue;
+                    }
                     if !seen.insert(id) {
                         return Err(invalid("duplicate sketch dimension"));
                     }
