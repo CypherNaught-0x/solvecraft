@@ -258,25 +258,44 @@ fn find(p: &mut [usize], mut i: usize) -> usize {
 /// arbitrary normal chosen for the single display vertex at that tip.
 fn tangent_patches(a: &truck_modeling::Surface, b: &truck_modeling::Surface, edge: &truck_modeling::Edge, tolerance: f64) -> bool {
     use truck_modeling::{BoundedCurve, ParametricCurve, ParametricSurface, ParametricSurface3D, SearchNearestParameter};
-    let quintic = |s: &truck_modeling::Surface| matches!(s,truck_modeling::Surface::BSplineSurface(p) if p.degrees()==(5,5));
-    if !quintic(a) || !quintic(b) {
+    // Fillet end transitions meet both other patches and the exact rational
+    // cylinder. Their tangent joins are construction seams as well. Keep the
+    // sampled check bounded to these small surface families.
+    let patch = |s: &truck_modeling::Surface| {
+        matches!(s, truck_modeling::Surface::BSplineSurface(p)
+            if matches!(p.degrees(), (3, 3) | (5, 5))
+                && p.control_points().len() <= 96
+                && p.control_points().iter().all(|r| r.len() <= 96))
+    };
+    let cylinder = |s: &truck_modeling::Surface| {
+        matches!(s, truck_modeling::Surface::NurbsSurface(p)
+            if matches!(p.degrees(), (2, 1) | (1, 2))
+                && p.control_points().len() <= 3
+                && p.control_points().iter().all(|r| r.len() <= 3))
+    };
+    if !((patch(a) && (patch(b) || cylinder(b))) || (patch(b) && cylinder(a))) {
         return false;
     }
     let (a, b) = (crate::body::evaluation::Surface(a.clone()), crate::body::evaluation::Surface(b.clone()));
     let curve = edge.curve();
     let (lo, hi) = curve.range_tuple();
+    let (mut a_hint, mut b_hint) = (None, None);
     (1..32).all(|i| {
         let p = curve.subs(lo + (hi - lo) * i as f64 / 32.0);
-        let normal = |s: &crate::body::evaluation::Surface| {
-            let (u, v) = s.search_nearest_parameter(p, None, 50)?;
+        let normal = |s: &crate::body::evaluation::Surface, hint: &mut Option<(f64, f64)>| {
+            let (mut u, mut v) = s.search_nearest_parameter(p, *hint, 50)?;
+            if from_p3(s.subs(u, v)).dist(from_p3(p)) > tolerance {
+                (u, v) = s.search_nearest_parameter(p, None, 50)?;
+            }
             if from_p3(s.subs(u, v)).dist(from_p3(p)) > tolerance {
                 return None;
             }
+            *hint = Some((u, v));
             let n = s.normal(u, v);
             let n = Vec3::new(n.x, n.y, n.z);
             n.is_finite().then_some(n)
         };
-        match (normal(&a), normal(&b)) {
+        match (normal(&a, &mut a_hint), normal(&b, &mut b_hint)) {
             (Some(x), Some(y)) => x.dot(y) > 0.02_f64.to_radians().cos(),
             _ => false,
         }
@@ -726,6 +745,41 @@ pub fn cylinder_face_at(b: &Body, p: Vec3) -> Option<CylinderFace> {
 mod seam_tests {
     use super::*;
     use truck_modeling as mt;
+
+    #[test]
+    fn transition_cylinder_join_requires_coincident_tangent_planes() {
+        let cylinder = mt::Surface::NurbsSurface(mt::NurbsSurface::new(mt::BSplineSurface::new(
+            (mt::KnotVec::bezier_knot(2), mt::KnotVec::bezier_knot(1)),
+            [(1.0, 0.0, 1.0), (1.0, 1.0, 0.5_f64.sqrt()), (0.0, 1.0, 1.0)]
+                .into_iter()
+                .map(|(x, y, w)| [0.0, 1.0].into_iter().map(|z| mt::Vector4::new(x * w, y * w, z * w, w)).collect())
+                .collect(),
+        )));
+        let a = mt::Point3::new(1.0, 0.0, 0.0);
+        let b = mt::Point3::new(1.0, 0.0, 1.0);
+        let edge = mt::Edge::try_new(&mt::builder::vertex(a), &mt::builder::vertex(b), mt::Curve::Line(mt::Line(a, b))).unwrap();
+        for degree in [3_usize, 5] {
+            let patch = |slope: f64, offset: f64| {
+                let knots = mt::KnotVec::bezier_knot(degree);
+                let controls = (0..=degree)
+                    .map(|i| {
+                        (0..=degree)
+                            .map(|j| {
+                                let t = j as f64 / degree as f64;
+                                let square = (j * j.saturating_sub(1)) as f64 / (degree * (degree - 1)) as f64;
+                                mt::Point3::new(1.0 - square + slope * t + offset, -t, i as f64 / degree as f64)
+                            })
+                            .collect()
+                    })
+                    .collect();
+                mt::Surface::BSplineSurface(mt::BSplineSurface::new((knots.clone(), knots), controls))
+            };
+            assert!(tangent_patches(&patch(0.0, 0.0), &cylinder, &edge, 1e-6));
+            assert!(tangent_patches(&cylinder, &patch(0.0, 0.0), &edge, 1e-6));
+            assert!(!tangent_patches(&patch(0.02, 0.0), &cylinder, &edge, 1e-6));
+            assert!(!tangent_patches(&patch(0.0, 0.01), &cylinder, &edge, 1e-6));
+        }
+    }
 
     #[test]
     fn tangent_patch_join_does_not_hide_a_crease() {
