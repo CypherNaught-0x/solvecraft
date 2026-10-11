@@ -5,7 +5,7 @@
 //! intersect their offset rails with the end planes, including sloped walls. The end faces get an arc
 //! (fillet) or a line (chamfer) at the corner, and a cylindrical (or planar) face is inserted.
 //! The result is exact. Edges meeting at an already blended corner, curved edges and other
-//! configurations are reported as not supported yet.
+//! configurations use the specialised loop, corner, and endpoint-fan builders below.
 
 use std::collections::HashMap;
 
@@ -43,10 +43,22 @@ pub(crate) fn plane_normal(f: &mt::Face) -> Option<Vec3> {
 /// Replace edges in a face's oriented boundary (by id, keeping orientation), and insert extra
 /// edges where consecutive edges no longer connect.
 pub(crate) fn rebuild_face(f: &mt::Face, subst: &HashMap<mt::EdgeID, mt::Edge>, connectors: &[mt::Edge]) -> Result<mt::Face> {
+    rebuild_face_without(f, subst, connectors, &[])
+}
+
+pub(crate) fn rebuild_face_without(
+    f: &mt::Face,
+    subst: &HashMap<mt::EdgeID, mt::Edge>,
+    connectors: &[mt::Edge],
+    removed: &[mt::EdgeID],
+) -> Result<mt::Face> {
     let mut wires = Vec::new();
     for w in f.absolute_boundaries() {
         let mut edges: Vec<mt::Edge> = Vec::new();
         for e in w.edge_iter() {
+            if removed.contains(&e.id()) {
+                continue;
+            }
             let ne = match subst.get(&e.id()) {
                 Some(n) => {
                     // `n` was built in the orientation of the stored edge; match this use.
@@ -444,7 +456,16 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
                 return Err(KernelError::Invalid(format!("no edge near {:?}", [p.x, p.y, p.z])));
             }
             let edge = Body::unique_edges(&solid).into_iter().nth(idx).ok_or_else(|| KernelError::Invalid("edge index".into()))?;
-            let attempt = match guard(what, || blend_one(&solid, &edge, size, r, shape)) {
+            let local = guard(what, || blend_one(&solid, &edge, size, r, shape)).or_else(|e| {
+                if shape == Shape::Round && crate::blend_end::can_trim(&solid, &edge) {
+                    guard(what, || crate::blend_end::fillet_one(&solid, &edge, size, r))
+                        .or_else(|_| guard(what, || crate::blend_trim::fillet_one(&solid, &edge, size, r)))
+                        .or_else(|_| guard(what, || crate::blend_end::with_transitions(&solid, &edge, size, r)))
+                } else {
+                    Err(e)
+                }
+            });
+            let attempt = match local {
                 Ok(o) => Ok((o, vec![j])),
                 // A curved edge, or one between curved faces: roll a ball along its smooth chain.
                 Err(e) if !curved_case(&solid, &edge) => Err(e),
@@ -978,7 +999,7 @@ mod tests {
     }
 
     #[test]
-    fn local_chamfer_intersects_sloped_end_planes() {
+    fn local_blends_intersect_sloped_end_planes() {
         for slope in [-0.5, 0.5] {
             let region = Region2 {
                 outer: Loop2::polygon(&[Vec2::ZERO, Vec2::new(40.0, 0.0), Vec2::new(40.0 - slope * 20.0, 20.0), Vec2::new(slope * 20.0, 20.0)]),
@@ -996,8 +1017,14 @@ mod tests {
                 assert!(result.solid.vertex_iter().any(|v| vtx(&v).dist(point) < 1e-8));
             }
             assert!(blend(&body, &pick, 25.0, Shape::Flat, "chamfer").is_err());
-            // Oblique fillet caps need elliptical trims, which this local path does not build.
-            assert!(blend(&body, &pick, 2.0, Shape::Round, "fillet").is_err());
+            // The circular cylinder now gets exact elliptical end trims. Integrate
+            // the removed quarter-square-minus-circle across width 40 - 2*slope*y.
+            let rounded = blend(&body, &pick, 2.0, Shape::Round, "fillet").unwrap();
+            let expected = 40.0 * 4.0 * (1.0 - std::f64::consts::FRAC_PI_4) - 2.0 * slope * 8.0 * (5.0 / 6.0 - std::f64::consts::FRAC_PI_4);
+            let actual = crate::measure(&body).unwrap().volume - crate::measure(&rounded).unwrap().volume;
+            assert!((actual - expected).abs() < 0.02, "{actual} vs {expected}");
+            assert!(rounded.validity().is_empty());
+            assert_eq!(rounded.unmeshed_faces(), 0);
         }
     }
 }
