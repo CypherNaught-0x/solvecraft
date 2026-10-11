@@ -334,3 +334,6 @@ completed in 0.87 seconds. All thirteen local evidence groups pass (nine import,
 four inspection); the main import group checks 42 supported controlled archives
 against independent API volumes and reopening. Annulus, major-arc and negative-sweep
 imports were rendered and visually checked; generated evidence remains local.
+
+Upstream `7abfe69` (merged documentation PR #157) was then integrated without
+conflicts. Post-merge full CI also passes, including the opening guard in 0.91 seconds.
