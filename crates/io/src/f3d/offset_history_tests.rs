@@ -1,7 +1,7 @@
 use super::import_tests::{Fixture, volume};
 use super::relationship_tests::{reference, refs, u32, u64, wide};
 
-fn fixture() -> Fixture {
+pub(super) fn fixture() -> Fixture {
     let mut f = super::round_profile_tests::ring();
     for (curve, group) in [(31, 301), (35, 302)] {
         let bytes = &mut f.0.get_mut(&curve).unwrap().2;

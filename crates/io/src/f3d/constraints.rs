@@ -84,8 +84,9 @@ impl Design {
                 if graph.support.is_some() {
                     return Err(invalid("sketch container relationships are not supported yet"));
                 }
-                let offsets =
-                    offsets::ordered(graph.auxiliary.iter().map(|id| offsets::decode(&records, &classes, &graph, *id)).collect::<Result<Vec<_>>>()?)?;
+                let offsets = offsets::ordered(
+                    graph.auxiliary.iter().map(|id| offsets::decode(&records, &classes, &graph, *id, self.layout)).collect::<Result<Vec<_>>>()?,
+                )?;
                 let mut offset_records = BTreeSet::new();
                 for offset in &offsets {
                     if bindings.get(&offset.binding) != Some(&graph.feature)

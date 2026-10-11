@@ -35,7 +35,10 @@ impl Context<'_> {
     fn rectangle_curve(&self, edge: &Edge, plane: solvecraft_geom::Plane, height: f64) -> Result<u64> {
         use solvecraft_geom::{Vec2, Vec3};
         let profile = self.profiles.get(&edge.feature).ok_or_else(|| invalid("missing native body profile"))?;
-        let [boundary] = profile.loops.as_slice() else { return Err(invalid("projected rectangle cannot contain holes")) };
+        let [loops] = profile.regions.as_slice() else {
+            return Err(invalid("projected rectangle has multiple regions"));
+        };
+        let [boundary] = loops.as_slice() else { return Err(invalid("projected rectangle cannot contain holes")) };
         if !boundary.outer || boundary.curves.len() != 4 {
             return Err(invalid("unsupported projected rectangle boundary"));
         }
@@ -702,7 +705,7 @@ mod tests {
             let state = model.state();
             let mut profiles = design.sketch_profiles().unwrap();
             // A cyclic order different from both creation and sorted id order.
-            profiles[0].loops[0].curves = vec![32, 31, 34, 33];
+            profiles[0].regions[0][0].curves = vec![32, 31, 34, 33];
             let profiles = BTreeMap::from([(9, &profiles[0])]);
             let mut points: BTreeMap<_, _> = design.sketch_points().unwrap().into_iter().map(|p| (p.id, p)).collect();
             for mut p in design.sketch_points().unwrap() {

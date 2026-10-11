@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These thirty designs and their JSON command recipes are original SolveCraft test
+These thirty-two designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -19,6 +19,8 @@ recipe, independent expectations and optional edits.
 | join-extrude | Contained cylinder joined into base | 5040π |
 | cut-extrude | Blind circular pocket | 4740π |
 | intersect-extrude | Intersection with smaller cylinder | 300π |
+| multiple-circles | Two selected regions, separate bodies, diameter/height edits | 6000π |
+| multiple-rings | Two regions with separate holes, diameter/height edits | 4500π |
 | offset-circle-ring | Associative offset distance, source diameter and height edits | 3300π |
 | annulus-extrude | Exact outer/hole boundaries, both diameter edits | 9600π |
 | arc-extrude | Shared arc/chord endpoints, radius and height edits | 1350π |
@@ -97,3 +99,8 @@ fixtures does **not** establish general F3D editable-history support.
 The offset ring uses an outer radius of 30 mm and an inward gap of 5 mm,
 with height 12 mm: π(R² − (R − gap)²)h. The gap expression and source
 diameter remain editable; each change is checked after reopening and undo.
+
+The multiple-region fixtures extrude circles of radii 10 and 20 mm by 12 mm.
+The ring variant has holes of radii 5 and 10 mm, giving
+π((10² − 5²) + (20² − 10²))12 = 4500π mm³. Diameter and height edits
+check both bodies and their bounds through reopening and undo.

@@ -494,12 +494,18 @@ impl Design {
                     let extent = extent(&records, &classes, &bindings, f.id, &plane)?;
                     source_profiles.insert(f.id, *profile);
                     let targets = if operation == Operation::NewBody {
-                        body_number += 1;
-                        let body = format!("Body{body_number}");
+                        let bodies: Vec<_> = profile
+                            .regions
+                            .iter()
+                            .map(|_| {
+                                body_number += 1;
+                                format!("Body{body_number}")
+                            })
+                            .collect();
                         if !f.suppressed {
-                            active_bodies.push(body.clone());
+                            active_bodies.extend(bodies.iter().cloned());
                         }
-                        new_body = Some(body);
+                        new_body = Some(bodies);
                         vec![]
                     } else {
                         if active_bodies.len() != 1 {
@@ -539,7 +545,7 @@ impl Design {
                 }
             }
             if let Some(body) = new_body {
-                feature.body_names = vec![body];
+                feature.body_names = body;
             }
             doc.params.retain(|p| !transferred.contains(&p.name));
         }
@@ -641,10 +647,14 @@ fn profile_selection(profile: &SketchProfile) -> Result<ProfileSel> {
         ids.sort();
         ids
     };
-    let outer = profile.loops.iter().find(|l| l.outer).ok_or_else(|| invalid("missing outer profile boundary"))?;
-    let mut holes: Vec<_> = profile.loops.iter().filter(|l| !l.outer).map(ids).collect();
-    holes.sort();
-    Ok(ProfileSel::WholeBoundaries { profiles: vec![solvecraft_doc::WholeProfileBoundary { outer: ids(outer), holes }] })
+    let mut profiles = Vec::new();
+    for loops in &profile.regions {
+        let outer = loops.iter().find(|l| l.outer).ok_or_else(|| invalid("missing outer profile boundary"))?;
+        let mut holes: Vec<_> = loops.iter().filter(|l| !l.outer).map(ids).collect();
+        holes.sort();
+        profiles.push(solvecraft_doc::WholeProfileBoundary { outer: ids(outer), holes });
+    }
+    Ok(ProfileSel::WholeBoundaries { profiles })
 }
 
 pub(super) fn plane(matrix: &[f64; 16]) -> Result<Plane> {

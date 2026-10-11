@@ -217,7 +217,10 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   expressions and dependencies, including validated references to deleted bindings.
   Verified circle and closed-line offset generators preserve source and distance
   dependencies through edits, reopening and undo. Native open offset endpoints
-  remain unsupported because they have independent extents. Thirty original
+  remain unsupported because they have independent extents. Legacy offset groups
+  now decode all six Gridfinity generators and its full constraint list. Multiple
+  selected regions preserve separate bodies and each region's holes through edits;
+  nine complete legacy profile records match current resaves. Thirty-two original
   editable-history fixtures check analytic volumes and bounds.
   Signed extrusion start offsets preserve expressions
   and parameter bindings through edits, reopening and undo; zero-angle taper inputs

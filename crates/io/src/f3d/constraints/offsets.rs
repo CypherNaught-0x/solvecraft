@@ -40,7 +40,8 @@ pub(super) fn ordered(mut offsets: Vec<SketchOffset>) -> Result<Vec<SketchOffset
     Ok(result)
 }
 
-fn group(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, other: u64, owner: u64, source: bool) -> Result<Vec<u64>> {
+fn group(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, ids: [u64; 3], source: bool, layout: u32) -> Result<Vec<u64>> {
+    let [id, other, owner] = ids;
     require_class(classes, id, "04e598ff-2979-5e41-8bc0-5c435c810909", 0)?;
     let mut r = payload(records.primary(id)?, id)?;
     empty(&mut r)?;
@@ -59,14 +60,26 @@ fn group(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, other:
     finish(&r)?;
     let mut r = payload(records.secondary(id)?, id)?;
     empty(&mut r)?;
-    if references(&mut r)? != curves || r.u64()? != 0 || r.reference()? != owner {
+    if references(&mut r)? != curves || r.u64()? != 0 {
+        return Err(invalid("inconsistent offset group curves"));
+    }
+    if matches!(layout, 4 | 5) {
+        zeros(&mut r, 4)?;
+    }
+    if r.reference()? != owner {
         return Err(invalid("inconsistent offset group owner or curves"));
     }
     finish(&r)?;
     Ok(curves)
 }
 
-pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, graph: &SketchConstraintGraph, id: u64) -> Result<SketchOffset> {
+pub(super) fn decode(
+    records: &Records<'_>,
+    classes: &BTreeMap<u64, &Class>,
+    graph: &SketchConstraintGraph,
+    id: u64,
+    layout: u32,
+) -> Result<SketchOffset> {
     require_class(classes, id, "afc07c10-99ac-5304-ae1b-dbee335b0e43", 1)?;
     let mut r = payload(records.primary(id)?, id)?;
     empty(&mut r)?;
@@ -106,8 +119,8 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, gra
     if !graph.relations.contains(&relation) || !graph.dimensions.contains(&dimension) {
         return Err(invalid("offset relationships are outside their sketch"));
     }
-    let sources = group(records, classes, source_group, target_group, id, true)?;
-    let outputs = group(records, classes, target_group, source_group, id, false)?;
+    let sources = group(records, classes, [source_group, target_group, id], true, layout)?;
+    let outputs = group(records, classes, [target_group, source_group, id], false, layout)?;
     let source_set: BTreeSet<_> = sources.iter().copied().collect();
     let output_set: BTreeSet<_> = outputs.iter().copied().collect();
     if sources.len() != outputs.len() || !source_set.contains(&first) || !source_set.is_disjoint(&output_set) {
@@ -144,8 +157,12 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, gra
     let mut r = payload(records.primary(dimension)?, dimension)?;
     empty(&mut r)?;
     one(&mut r)?;
-    if r.u32()? != 2 || operand(&mut r)? != 0 || operand(&mut r)? != first {
+    if r.u32()? != 2 || operand(&mut r)? != 0 {
         return Err(invalid("invalid offset dimension operands"));
+    }
+    let dimension_curve = operand(&mut r)?;
+    if !source_set.contains(&dimension_curve) {
+        return Err(invalid("offset dimension refers outside its source group"));
     }
     attributes::read(&mut r)?;
     r.take(220)?;
@@ -156,7 +173,7 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, gra
         return Err(invalid("invalid offset dimension kind"));
     }
     let binding = r.reference()?;
-    if references(&mut r)? != [first] {
+    if references(&mut r)? != [dimension_curve] {
         return Err(invalid("invalid offset dimension curve"));
     }
     zeros(&mut r, 1)?;
@@ -190,5 +207,34 @@ mod tests {
         assert!(ordered(vec![offset(1, 12, 11), offset(2, 11, 12)]).is_err());
         assert!(ordered(vec![offset(1, 10, 11), offset(2, 12, 11)]).is_err());
         assert!(ordered(vec![offset(1, 10, 10)]).is_err());
+    }
+
+    #[test]
+    fn legacy_offset_groups_preserve_owners_and_reject_nonzero_extra_fields() {
+        use super::super::super::offset_history_tests::fixture;
+        let decode_fixture = |f: super::super::super::import_tests::Fixture, layout| {
+            let design = f.design();
+            let records = Records::new(&design);
+            let classes = design.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+            let graphs = design.sketch_constraint_graphs().unwrap();
+            decode(&records, &classes, &graphs[0], 300, layout)
+        };
+        let expected = decode_fixture(fixture(), 8).unwrap();
+        for layout in [4, 5] {
+            for malformed in [false, true] {
+                let mut f = fixture();
+                for id in [301, 302] {
+                    let bytes = f.0.get_mut(&id).unwrap().3.as_mut().unwrap();
+                    let at = bytes.len() - 11;
+                    bytes.splice(at..at, [u8::from(malformed), 0, 0, 0]);
+                }
+                let result = decode_fixture(f, layout);
+                if malformed {
+                    assert!(result.is_err());
+                } else {
+                    assert_eq!(result.unwrap(), expected);
+                }
+            }
+        }
     }
 }

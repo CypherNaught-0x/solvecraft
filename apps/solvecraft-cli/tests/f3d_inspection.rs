@@ -428,3 +428,108 @@ fn legacy_constraint_containers_preserve_complete_relationship_lists() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires local legacy/resaved archives and offset API measurements"]
+fn legacy_offset_sources_outputs_and_parameters_match_public_api() {
+    use solvecraft_engine::io::f3d::SketchConstraint;
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
+    let api: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(probes.join("fusion-legacy-offset-profile-measurements.json")).unwrap()).unwrap();
+    let name = "Gridfinity Storage Box Shelves (Parametric) V1.0.f3d";
+    let expected = api[name]["offsets"].as_array().unwrap();
+    assert_eq!(expected.len(), 6);
+    let mut original = None;
+    for path in [corpus.join(name), probes.join(format!("corpus-{name}"))] {
+        let designs = solvecraft_engine::io::f3d::read_f3d(&std::fs::read(path).unwrap()).unwrap();
+        let d = &designs[0];
+        let parameters = d.parameters().unwrap();
+        let mut curves = std::collections::BTreeMap::new();
+        for c in d.sketch_lines().unwrap() {
+            curves.insert(c.id, json!({"type":"adsk::fusion::SketchLine","start":c.start,"end":c.end}));
+        }
+        for c in d.sketch_circles().unwrap() {
+            curves.insert(c.id, json!({"type":"adsk::fusion::SketchCircle","center":c.center,"radius":c.radius}));
+        }
+        for a in d.sketch_arcs().unwrap() {
+            let c = a.circle;
+            curves.insert(c.id, json!({"type":"adsk::fusion::SketchArc","center":c.center,"radius":c.radius}));
+        }
+        let graphs = d.sketch_constraints().unwrap();
+        let mut decoded = Vec::new();
+        for graph in &graphs {
+            for c in &graph.constraints {
+                let SketchConstraint::OffsetCurves(offset) = c else { continue };
+                let parameter = parameters.iter().find(|p| p.binding == Some(offset.binding)).unwrap();
+                let want = expected.iter().find(|row| row["parameter"] == parameter.name).unwrap();
+                assert!((want["distance"].as_f64().unwrap() - offset.distance).abs() < 1e-9);
+                assert!((parameter.value - offset.distance).abs() < 1e-9);
+                for (key, ids) in [("parents", &offset.sources), ("children", &offset.outputs)] {
+                    let mut actual: Vec<_> = ids.iter().map(|id| &curves[id]).collect();
+                    assert_eq!(actual.len(), want[key].as_array().unwrap().len());
+                    for entity in want[key].as_array().unwrap() {
+                        let index = actual
+                            .iter()
+                            .position(|c| {
+                                if c["type"] != entity["type"] {
+                                    return false;
+                                }
+                                for key in ["start", "end", "center"] {
+                                    if let Some(coords) = c[key].as_array() {
+                                        for (i, coordinate) in coords.iter().enumerate() {
+                                            if (coordinate.as_f64().unwrap() - entity[key][i].as_f64().unwrap()).abs() > 1e-8 {
+                                                return false;
+                                            }
+                                        }
+                                    }
+                                }
+                                c["radius"].as_f64().is_none_or(|r| (r - entity["radius"].as_f64().unwrap()).abs() < 1e-8)
+                            })
+                            .unwrap_or_else(|| panic!("{} {key}: missing {entity}", parameter.name));
+                        actual.remove(index);
+                    }
+                }
+                decoded.push((offset.id, offset.sources.clone(), offset.outputs.clone(), offset.dimension, parameter.name.clone()));
+            }
+        }
+        assert_eq!(decoded.len(), 6);
+        if let Some(original) = &original {
+            assert_eq!(&decoded, original);
+        } else {
+            original = Some(decoded);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires local original and resaved legacy archives"]
+fn complete_legacy_profile_boundaries_match_resaved_records() {
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
+    let mut successes = 0;
+    for name in ["adapter-x20-makita.f3d", "Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", "R36S Grip.f3d"] {
+        let mut original = None;
+        for path in [corpus.join(name), probes.join(format!("corpus-{name}"))] {
+            let mut ds = solvecraft_engine::io::f3d::read_f3d(&std::fs::read(path).unwrap()).unwrap();
+            let d = &mut ds[0];
+            let class = d.classes.iter().position(|c| c.id == "4BD53E5A-0B3E-45E5-AE8B-02044306485A").unwrap();
+            let ids = d.classes[class].objects.clone();
+            let mut decoded = std::collections::BTreeMap::new();
+            for id in ids {
+                d.classes[class].objects = vec![id];
+                if let Ok(profiles) = d.sketch_profiles() {
+                    decoded.insert(id, profiles);
+                }
+            }
+            eprintln!("{name}, layout {}: {} complete profiles", d.layout, decoded.len());
+            if let Some(original) = &original {
+                assert_eq!(&decoded, original);
+                successes += decoded.len();
+            } else {
+                original = Some(decoded);
+            }
+        }
+    }
+    assert_eq!(successes, 9, "complete legacy profile coverage changed");
+}

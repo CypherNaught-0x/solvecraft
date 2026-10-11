@@ -1066,3 +1066,47 @@ fn offset_generators_preserve_distance_source_edits_and_history() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires local multiple-profile public API controls"]
+fn multiple_profile_regions_preserve_holes_bodies_edits_and_undo() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-multiple-profile-measurements.json")).unwrap()).unwrap();
+    let verify = |s: &mut Session, row: &Value| {
+        let measured = volume(s, row["volume"].as_f64().unwrap(), "multiple profiles");
+        assert_eq!(measured["body_count"], row["body_count"]);
+        let mut boxes: Vec<_> = measured["bodies"].as_array().unwrap().iter().map(|b| &b["bbox"]).collect();
+        for expected in row["bounds"].as_array().unwrap() {
+            let index = boxes
+                .iter()
+                .position(|b| {
+                    [(0, "min"), (1, "max")].into_iter().all(|(end, key)| {
+                        (0..3).all(|axis| (b[key][axis].as_f64().unwrap() - expected[end][axis].as_f64().unwrap() * 10.).abs() < 1e-5)
+                    })
+                })
+                .expect("missing body bounds");
+            boxes.remove(index);
+        }
+    };
+    for (name, row) in api.as_object().unwrap() {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        verify(&mut s, row);
+        if name.ends_with("-baseline") {
+            let original = s.doc.clone();
+            for (suffix, parameter, expression) in
+                [("diameter-changed", "diameter_parameter", "30 mm"), ("height-changed", "height_parameter", "20 mm")]
+            {
+                s.execute("parameters.change", &json!({"name":row[parameter],"expression":expression})).unwrap();
+                let expected = &api[name.replace("baseline", suffix)];
+                verify(&mut s, expected);
+                verify(&mut Session::new(solvecraft_engine::doc::Document::from_json(&s.doc.to_json()).unwrap()), expected);
+            }
+            for _ in 0..2 {
+                s.execute("edit.undo", &json!({})).unwrap();
+            }
+            assert_eq!(s.doc, original);
+            verify(&mut s, row);
+        }
+    }
+}

@@ -1042,3 +1042,44 @@ ci` passed 29 test binaries, including 97 I/O tests, 107 document tests,
 and ten-crate WASM checking. The HardEdgeBasin opening guard passed in 0.86
 seconds. All 29 local native-import groups and ten inspection groups passed.
 An imported offset ring was rendered and visually checked after a gap edit.
+
+
+### Legacy offset groups and multiple selected regions
+
+The layout-4/5 offset group secondary stream retains an additional zero field
+before its generator owner; current Fusion resaves remove it. Offset dimensions
+may select any curve in the source group, independently of the generator's
+selected curve. Both references are validated against the complete source group.
+All six generators and the complete Gridfinity sketch-constraint list now decode.
+An independent public-API comparison verifies every parent/output curve and its
+signed parameter in both the original and resaved archives. Original record tests
+cover the legacy field and refuse nonzero or malformed values.
+
+Profile tracking now retains a bounded list of selected regions, each with its
+own outer loop and holes. Disconnected regions from one sketch produce separate
+bodies in one editable extrusion. References and holes are preserved across
+parameter edits rather than selecting profiles by their transient indexes.
+Duplicate regions, malformed flags and truncated tracking records are rejected.
+Six local circle/ring controls check individual body bounds, summed volume,
+diameter/height edits, reopening and undo. Original field-authored tests provide
+normal-suite decoding and malformed-input coverage.
+
+The same complete-boundary framing is verified for nine legacy records: six in
+the adapter and three in Gridfinity, equal to their current Fusion resaves.
+Other records contain split/intersecting curves or unresolved tracking identities;
+those still require reconstruction. This does not establish full import of the
+larger archives. Body-support links, other feature types, open offset endpoints
+and remaining legacy geometry schemas are also unfinished.
+
+Two new original fixtures, `multiple-circles` and `multiple-rings`, bring the
+editable-history suite to 32 projects. Radii 10/20 mm and height 12 mm give
+6000π mm³ for the cylinders; holes of radii 5/10 mm reduce the rings to 4500π.
+Both fixtures check diameter and height edits, body count, bounds, reopening and
+undo. Fusion exports remain local evidence.
+
+Validation: full `cargo xtask ci` passed 29 test binaries, including 100 I/O
+tests, 107 document tests, 561 engine tests, 198 kernel tests, 305 UI tests,
+all 32 original fixtures and ten-crate WASM checking. The HardEdgeBasin opening
+guard passed in 0.87 seconds. All 30 local import groups and 12 inspection groups
+passed. The imported two-ring model was rendered and visually checked after
+diameter and height edits. Upstream `e171ff0` remains current and integrated.

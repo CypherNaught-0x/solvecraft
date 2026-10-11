@@ -174,7 +174,7 @@ fn rectangle_with_dimensions(aligned: bool, reversed: bool) -> Fixture {
 fn polygon_history_retains_dimensions_and_selected_curve_references() {
     let d = rectangle().design();
     let profiles = d.sketch_profiles().unwrap();
-    assert_eq!(profiles[0].loops[0].curves, [31, 34, 33, 32]);
+    assert_eq!(profiles[0].regions[0][0].curves, [31, 34, 33, 32]);
     assert!(d.circle_profiles().is_err());
     let mut doc = d.to_document("Original rectangular prism").unwrap();
     volume(&doc, 30. * 20. * 17.);

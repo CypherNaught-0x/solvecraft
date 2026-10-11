@@ -133,8 +133,8 @@ pub(super) fn arc(sweep: f64, axis: f64) -> Fixture {
 fn holes_preserve_selected_boundaries_across_edits_and_reopening() {
     let d = ring().design();
     let p = d.sketch_profiles().unwrap();
-    assert!(!p[0].loops[0].outer);
-    assert!(p[0].loops[0].reversed[0]);
+    assert!(!p[0].regions[0][0].outer);
+    assert!(p[0].regions[0][0].reversed[0]);
     let mut doc = d.to_document("Original annulus").unwrap();
     volume(&doc, 800. * PI * 17.);
     doc.change_param("d7", "80 mm", None, None).unwrap();
@@ -233,5 +233,72 @@ fn fixed_arc_support_preserves_free_endpoint_motion() {
             assert!((p.y - expected.1).abs() < 1e-5);
         }
         volume(&crate::read_design(&crate::write_design(&doc)).unwrap(), 450. * (angle - angle.sin()) * 17.);
+    }
+}
+
+fn multiple_regions(duplicate: bool) -> Fixture {
+    let mut f = ring();
+    let mut b = vec![];
+    attributes(&mut b, 18);
+    for x in [8_f64, 0., 0., 0., 0., 1., 1., 0., 0., 1., 0., TAU] {
+        b.extend(x.to_le_bytes());
+    }
+    reference(&mut b, 75);
+    b.extend([0; 44]);
+    reference(&mut b, 70);
+    f.put(35, "F0130424-8B7E-4092-93C9-1CA807482534", 0, b, None);
+    let mut b = vec![0; 6];
+    reference(&mut b, 76);
+    b.extend([0, 0, 0, 1, 1, 0, 0, 0]);
+    for x in [8_f64, 0., 0.] {
+        b.extend(x.to_le_bytes());
+    }
+    b.extend([0; 30]);
+    refs(&mut b, &[76]);
+    reference(&mut b, 70);
+    f.put(75, "C2CEDAE7-1716-47C1-B7B1-07B70081D0FB", 11, b, None);
+    f.put(76, "362B7EC3-0F09-47C8-A3BE-DC066715CDAE", 0, vec![], None);
+    geometry(&mut f, &[42, 41, 31, 35, 75, 56], &[56]);
+    let mut b = vec![0; 6];
+    reference(&mut b, 100);
+    u32(&mut b, 2);
+    for tag in [17, if duplicate { 17 } else { 18 }] {
+        u32(&mut b, 1);
+        u32(&mut b, 1);
+        u32(&mut b, 3);
+        u64(&mut b, tag);
+        u64(&mut b, 2);
+        u32(&mut b, 0);
+        u32(&mut b, 1);
+        u32(&mut b, 1);
+        u64(&mut b, 0);
+        b.push(1);
+        u32(&mut b, 0);
+    }
+    f.0.get_mut(&101).unwrap().2 = b;
+    f
+}
+
+#[test]
+fn multiple_profile_regions_keep_separate_bodies_and_editable_dimensions() {
+    let mut doc = multiple_regions(false).design().to_document("Two original disks").unwrap();
+    assert_eq!(doc.features[1].body_names, ["Body1", "Body2"]);
+    volume(&doc, 1000. * PI * 17.);
+    doc.change_param("d7", "80 mm", None, None).unwrap();
+    volume(&doc, 1700. * PI * 17.);
+    let mut model = solvecraft_doc::Model::new();
+    model.evaluate(&doc);
+    assert_eq!(model.state().bodies.len(), 2);
+    volume(&crate::read_design(&crate::write_design(&doc)).unwrap(), 1700. * PI * 17.);
+}
+
+#[test]
+fn multiple_profile_regions_reject_duplicates_and_truncation() {
+    assert!(multiple_regions(true).design().sketch_profiles().is_err());
+    let length = multiple_regions(false).0[&101].2.len();
+    for keep in 0..length {
+        let mut f = multiple_regions(false);
+        f.0.get_mut(&101).unwrap().2.truncate(keep);
+        assert!(f.design().sketch_profiles().is_err(), "prefix {keep}");
     }
 }
