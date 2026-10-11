@@ -310,14 +310,18 @@ impl Design {
                                     None,
                                 )
                             }
-                            SketchConstraint::Linear { id, points: [a, b], vertical, binding } => {
+                            SketchConstraint::Linear { id, points: [a, b], orientation, binding } => {
                                 let p = point_indices.get(a).copied().ok_or_else(|| invalid("missing dimension point"))?;
                                 let q = point_indices.get(b).copied().ok_or_else(|| invalid("missing dimension point"))?;
                                 let parameter = length_parameter(&bindings, *binding)?;
                                 consumed.insert(*id);
                                 let value = parameter.value * 10.;
                                 (
-                                    if *vertical { ConstraintKind::DistanceY { p, q, value } } else { ConstraintKind::DistanceX { p, q, value } },
+                                    match orientation {
+                                        LinearOrientation::Horizontal => ConstraintKind::DistanceX { p, q, value },
+                                        LinearOrientation::Vertical => ConstraintKind::DistanceY { p, q, value },
+                                        LinearOrientation::Aligned => ConstraintKind::Distance { p, q, value },
+                                    },
                                     Some(parameter.name.clone()),
                                 )
                             }

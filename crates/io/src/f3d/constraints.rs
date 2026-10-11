@@ -15,12 +15,19 @@ pub enum SketchConstraint {
     Coincident { id: u64, points: [u64; 2] },
     Horizontal { id: u64, line: u64 },
     Vertical { id: u64, line: u64 },
-    Linear { id: u64, points: [u64; 2], vertical: bool, binding: u64 },
+    Linear { id: u64, points: [u64; 2], orientation: LinearOrientation, binding: u64 },
     Diameter { id: u64, circle: u64, binding: u64 },
     Radius { id: u64, circle: u64, binding: u64 },
     AlignedPoints { id: u64, points: [u64; 2], vertical: bool },
     PointCurve { id: u64, point: u64, curve: u64, midpoint: bool },
     Curves { id: u64, curves: [u64; 2], relation: CurveRelation },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LinearOrientation {
+    Horizontal,
+    Vertical,
+    Aligned,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -173,15 +180,9 @@ impl Design {
                         if r.u32()? != 3 || r.reference()? != 0 {
                             return Err(invalid("unsupported linear dimension operands"));
                         }
-                        let vertical = match r.u32()? {
-                            4 => false,
-                            5 => true,
-                            _ => return Err(invalid("unsupported linear dimension orientation")),
-                        };
+                        let qualifier = r.u32()?;
                         let a = r.reference()?;
-                        if r.u32()? != u32::from(vertical) {
-                            return Err(invalid("unsupported linear dimension axis"));
-                        }
+                        let axis = r.u32()?;
                         let b = r.reference()?;
                         zeros(&mut r, 4)?;
                         if a == b {
@@ -196,17 +197,22 @@ impl Design {
                         r.wide_string()?; // display prefix, including expression marker
                         r.wide_string()?;
                         r.take(44)?;
-                        if r.u64()? != if vertical { 0x800000 } else { 0x400000 } {
-                            return Err(invalid("unsupported linear dimension flags"));
-                        }
+                        let orientation = match (qualifier, axis, r.u64()?) {
+                            (4, 0, 0x400000) => LinearOrientation::Horizontal,
+                            (5, 1, 0x800000) => LinearOrientation::Vertical,
+                            (5, 1, 0x4000) => LinearOrientation::Aligned,
+                            _ => return Err(invalid("unsupported linear dimension orientation or flags")),
+                        };
                         let binding = r.reference()?;
-                        if bindings.get(&binding) != Some(&feature) || references(&mut r)? != [a, b] {
+                        let back = references(&mut r)?;
+                        let matches_points = back == [a, b] || (orientation == LinearOrientation::Aligned && back == [b, a]);
+                        if bindings.get(&binding) != Some(&feature) || !matches_points {
                             return Err(invalid("inconsistent linear dimension binding or points"));
                         }
                         zeros(&mut r, 1)?;
                         finish(&r)?;
                         dimension_owner(&records, id, *geometry)?;
-                        constraints.push(SketchConstraint::Linear { id, points: [a, b], vertical, binding });
+                        constraints.push(SketchConstraint::Linear { id, points: [a, b], orientation, binding });
                         continue;
                     }
                     let radial = classes.get(&id).is_some_and(|c| c.id == "8EDAC24D-35D4-4591-B8E7-B3EA081C9DF0");

@@ -464,3 +464,31 @@ seconds. All eighteen local evidence groups pass (thirteen import and five
 inspection), including the 411-record legacy comparison and eight new user
 parameter controls. An imported rectangle after renaming and editing its base
 parameter was rendered and visually checked.
+
+## Aligned point dimensions
+
+Twelve local rectangular controls use the documented
+[point-distance API](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/fusion_SketchDimensions_addDistanceDimension.htm)
+with aligned orientation. They vary diagonal length, rectangle aspect ratio and
+selected-point order. The observed version-3 linear dimension has qualifier `5`,
+axis `1` and flag `0x4000`, versus `0x800000` for vertical distance. It reconstructs
+as a Euclidean point-distance constraint. Other unverified tuples still fail.
+
+Fusion normalizes the primary operand order but retains the selected order in
+the final reference list. Aligned dimensions permit either ordering of the same
+two distinct points; mismatched membership, ownership and bindings fail.
+Original field-authored tests check this interpretation, dependency edits,
+reopening, invalid qualifiers/references and every truncated record prefix.
+
+An eighteenth native fixture defines a rectangle by width and diagonal, then
+extrudes it. Its side length follows √(diagonal² − width²), with analytic volume
+and bounds checked after edits, reopening and undo. Local import checks also
+compare all twelve controls with independent public-API measurements and edit
+their diagonal to a value absent from the exported controls.
+
+Validation: full `cargo xtask ci` passes all 25 binaries, 55 IO tests, eighteen
+native fixtures and ten-crate WASM checks; the opening regression guard passes
+in 2.42 seconds. All fourteen local import groups pass, including the twelve
+aligned controls. Both the authored fixture and a reversed-selection import
+after a diagonal edit were rendered and visually checked. Upstream `a7512e5`
+(browser-storage documentation) was merged without conflicts.

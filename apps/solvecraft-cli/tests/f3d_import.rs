@@ -29,6 +29,7 @@ fn native_import_reconstructs_and_regenerates_controlled_history() {
         "fusion-plane-measurements.json",
         "fusion-user-parameter-measurements.json",
         "fusion-user-rectangle-measurements.json",
+        "fusion-aligned-measurements.json",
     ] {
         let cases: Value = serde_json::from_slice(&std::fs::read(dir.join(source)).unwrap()).unwrap();
         for (name, api) in cases.as_object().unwrap() {
@@ -196,6 +197,33 @@ fn imported_rectangle_dimensions_regenerate_and_undo() {
     volume(&mut Session::new(reopened), 36., "reopened native feature input");
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(*s.doc, *before);
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
+fn aligned_dimensions_remain_editable_with_reversed_native_references() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let cases: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-aligned-measurements.json")).unwrap()).unwrap();
+    for (name, api) in cases.as_object().unwrap() {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let solvecraft_engine::doc::FeatureKind::Sketch { sketch, .. } = &s.doc.features[0].kind else { panic!("sketch") };
+        assert_eq!(
+            sketch.constraints.iter().filter(|c| matches!(c.kind, solvecraft_engine::doc::sketch::ConstraintKind::Distance { .. })).count(),
+            1
+        );
+        volume(&mut s, api["volume"].as_f64().unwrap(), name);
+        let original = s.doc.clone();
+        s.execute("parameters.change", &json!({"name":"diagonal","expression":"65 mm"})).unwrap();
+        let width: f64 = if name.contains("wide") { 4. } else { 3. };
+        let depth = (6.5_f64.powi(2) - width.powi(2)).sqrt();
+        let measure = volume(&mut s, width * depth, name);
+        assert!((measure["bodies"][0]["bbox"]["max"][1].as_f64().unwrap() - depth * 10.).abs() < 1e-5, "{name}");
+        let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+        volume(&mut Session::new(reopened), width * depth, name);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc, original);
+    }
 }
 
 #[test]

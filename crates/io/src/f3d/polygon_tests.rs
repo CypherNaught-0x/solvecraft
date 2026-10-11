@@ -3,8 +3,14 @@ use super::relationship_tests::{reference, refs, string, u32, u64, wide};
 
 /// An original 30 x 20 x 17 mm rectangle. No exported native bytes are reused.
 pub(super) fn rectangle() -> Fixture {
+    rectangle_with_dimensions(false, false)
+}
+
+fn rectangle_with_dimensions(aligned: bool, reversed: bool) -> Fixture {
     let mut f = fixture(false);
-    for (id, connection, x, y, origin) in [(42, 44, 0_f64, 0., true), (41, 43, 3., 0., false), (71, 73, 3., 2., false), (72, 74, 0., 2., false)] {
+    let depth = if aligned { 4. } else { 2. };
+    for (id, connection, x, y, origin) in [(42, 44, 0_f64, 0., true), (41, 43, 3., 0., false), (71, 73, 3., depth, false), (72, 74, 0., depth, false)]
+    {
         let mut b = vec![0; 4];
         b.extend([0, 1]);
         u32(&mut b, 0);
@@ -22,9 +28,9 @@ pub(super) fn rectangle() -> Fixture {
     }
     for (id, tag, start, end, position, delta) in [
         (31, 17, 42, 41, [0_f64, 0., 0.], [3_f64, 0., 0.]),
-        (32, 18, 41, 71, [3., 0., 0.], [0., 2., 0.]),
-        (33, 19, 71, 72, [3., 2., 0.], [-3., 0., 0.]),
-        (34, 20, 72, 42, [0., 2., 0.], [0., -2., 0.]),
+        (32, 18, 41, 71, [3., 0., 0.], [0., depth, 0.]),
+        (33, 19, 71, 72, [3., depth, 0.], [-3., 0., 0.]),
+        (34, 20, 72, 42, [0., depth, 0.], [0., -depth, 0.]),
     ] {
         let mut b = vec![0; 4];
         b.extend([0, 1]);
@@ -61,6 +67,8 @@ pub(super) fn rectangle() -> Fixture {
     for (id, param, binding, a, b, vertical, name, expr, value) in
         [(56, 62, 61, 42, 41, false, "width", "30 mm", 3_f64), (57, 76, 75, 41, 71, true, "heightSketch", "20 mm", 2.)]
     {
+        let diagonal = aligned && vertical;
+        let (a, expr, value) = if diagonal { (42, "50 mm", 5.) } else { (a, expr, value) };
         let mut data = vec![0; 4];
         data.push(1);
         u32(&mut data, 3);
@@ -76,9 +84,18 @@ pub(super) fn rectangle() -> Fixture {
         wide(&mut data, "fx: ");
         wide(&mut data, expr);
         data.extend([0; 44]);
-        u64(&mut data, if vertical { 0x800000 } else { 0x400000 });
+        u64(
+            &mut data,
+            if diagonal {
+                0x4000
+            } else if vertical {
+                0x800000
+            } else {
+                0x400000
+            },
+        );
         reference(&mut data, binding);
-        refs(&mut data, &[a, b]);
+        refs(&mut data, &if diagonal && reversed { [b, a] } else { [a, b] });
         data.push(0);
         let mut secondary = vec![0; 4];
         reference(&mut secondary, 70);
@@ -185,4 +202,41 @@ fn incomplete_polygon_records_never_become_partial_history() {
     let mut f = rectangle();
     f.0.get_mut(&101).unwrap().2[33..41].copy_from_slice(&999u64.to_le_bytes());
     assert!(f.design().sketch_profiles().is_err());
+}
+
+#[test]
+fn aligned_dimensions_retain_diagonal_distance_and_dependency_edits() {
+    for reversed in [false, true] {
+        let d = rectangle_with_dimensions(true, reversed).design();
+        let mut doc = d.to_document("Original diagonal rectangle").unwrap();
+        let solvecraft_doc::FeatureKind::Sketch { sketch, .. } = &doc.features[0].kind else { panic!("sketch") };
+        let constraint = sketch.constraints.iter().find(|c| c.param.as_deref() == Some("heightSketch")).unwrap();
+        assert!(matches!(constraint.kind, solvecraft_doc::sketch::ConstraintKind::Distance { .. }));
+        volume(&doc, 30. * 40. * 17.);
+        doc.params.iter_mut().find(|p| p.name == "heightSketch").unwrap().expr = "width * 2".into();
+        volume(&doc, 30. * 2700_f64.sqrt() * 17.);
+        let reopened = crate::read_design(&crate::write_design(&doc)).unwrap();
+        assert_eq!(doc, reopened);
+        volume(&reopened, 30. * 2700_f64.sqrt() * 17.);
+    }
+}
+
+#[test]
+fn aligned_dimension_records_validate_flags_references_and_truncation() {
+    let fixture = rectangle_with_dimensions(true, true);
+    let original = &fixture.0[&57].2;
+    for keep in 0..original.len() {
+        let mut f = rectangle_with_dimensions(true, true);
+        f.0.get_mut(&57).unwrap().2.truncate(keep);
+        assert!(f.design().to_document("Truncated diagonal").is_err(), "prefix {keep}");
+    }
+    // Field-authored layout: qualifier at 20, axis at 35, final point backref
+    // at len-11. Unknown orientation and mismatched membership must fail.
+    for (offset, bytes) in
+        [(20, 4u32.to_le_bytes().to_vec()), (35, 0u32.to_le_bytes().to_vec()), (original.len() - 11, 999u64.to_le_bytes().to_vec())]
+    {
+        let mut f = rectangle_with_dimensions(true, true);
+        f.0.get_mut(&57).unwrap().2[offset..offset + bytes.len()].copy_from_slice(&bytes);
+        assert!(f.design().to_document("Invalid diagonal").is_err(), "offset {offset}");
+    }
 }

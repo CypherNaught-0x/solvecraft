@@ -31,7 +31,7 @@ mod radial_tests;
 #[cfg(test)]
 mod round_profile_tests;
 pub use circles::{SketchArc, SketchCircle};
-pub use constraints::{CurveRelation, SketchConstraint, SketchConstraints};
+pub use constraints::{CurveRelation, LinearOrientation, SketchConstraint, SketchConstraints};
 pub use history::{HistoryFeature, HistoryKind, SketchPlacement};
 pub use import::import_f3d;
 pub use lines::SketchLine;

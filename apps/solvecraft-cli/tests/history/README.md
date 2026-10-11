@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These seventeen designs and their JSON command recipes are original SolveCraft test
+These eighteen designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -22,6 +22,7 @@ recipe, independent expectations and optional edits.
 | annulus-extrude | Exact outer/hole boundaries, both diameter edits | 9600π |
 | arc-extrude | Shared arc/chord endpoints, radius and height edits | 1350π |
 | rectangle-extrude | Width/depth dimensions, dependent expression | 10200 |
+| aligned-dimension | Width and diagonal distance, dependent side and bounds | 12000 |
 | rectangle-negative | Rectangular prism with downward height | 10200 |
 | reordered-sketch | Feature order differs from object ID order | 5340π |
 
@@ -29,6 +30,9 @@ The annulus uses radii 30 and 10 mm with height 12 mm, giving π(R² − r²)h.
 The semicircular segment uses radius 15 mm and height 12 mm, giving πr²h/2.
 
 The rectangular prisms are 30 × 20 × 17 mm; expectations use width × depth × height.
+The aligned-dimension prism has width 30 mm, diagonal 50 mm and height 10 mm.
+Its depth follows √(diagonal² − width²); diagonal and width edits check both
+volume and bounds, including after reopening and undo.
 
 The plane fixtures use radius 10 mm and height 15 mm. Editing their parent plane
 changes world bounds while preserving volume. Bounds are checked after each edit,

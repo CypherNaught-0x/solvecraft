@@ -204,7 +204,11 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                     solvecraft_io::f3d::SketchConstraint::Curves {id,curves,relation} => json!({"type":format!("{relation:?}").to_lowercase(),"id":id,"curves":curves}),
                     solvecraft_io::f3d::SketchConstraint::Horizontal{id,line}=>json!({"type":"horizontal","id":id,"line":line}),
                     solvecraft_io::f3d::SketchConstraint::Vertical{id,line}=>json!({"type":"vertical","id":id,"line":line}),
-                    solvecraft_io::f3d::SketchConstraint::Linear{id,points,vertical,binding}=>json!({"type":if *vertical{"distance_y"}else{"distance_x"},"id":id,"points":points,"binding":binding}),
+                    solvecraft_io::f3d::SketchConstraint::Linear{id,points,orientation,binding}=>json!({"type":match orientation {
+                        solvecraft_io::f3d::LinearOrientation::Horizontal => "distance_x",
+                        solvecraft_io::f3d::LinearOrientation::Vertical => "distance_y",
+                        solvecraft_io::f3d::LinearOrientation::Aligned => "distance",
+                    },"id":id,"points":points,"binding":binding}),
                 }).collect::<Vec<_>>()})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
