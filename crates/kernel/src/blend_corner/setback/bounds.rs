@@ -32,13 +32,17 @@ impl Trim {
         };
         let mut segments = Vec::new();
         for boundary in boundaries {
-            let mt::Curve::NurbsCurve(curve) = &boundary.curve else {
-                return Err(unsupported("non-rational setback trim"));
+            let controls = match &boundary.curve {
+                mt::Curve::NurbsCurve(curve) if curve.control_points().len() == curve.degree() + 1 => curve.control_points().clone(),
+                mt::Curve::BSplineCurve(curve) if curve.control_points().len() == curve.degree() + 1 => {
+                    curve.control_points().iter().map(|p| mt::Vector4::new(p.x, p.y, p.z, 1.0)).collect()
+                }
+                mt::Curve::Line(line) => {
+                    vec![mt::Vector4::new(line.0.x, line.0.y, line.0.z, 1.0), mt::Vector4::new(line.1.x, line.1.y, line.1.z, 1.0)]
+                }
+                _ => return Err(unsupported("non-Bezier patch trim")),
             };
-            if curve.control_points().len() != curve.degree() + 1 {
-                return Err(unsupported("non-Bezier setback trim"));
-            }
-            let mut stack = vec![(curve.control_points().clone(), 0)];
+            let mut stack = vec![(controls, 0)];
             while let Some((controls, depth)) = stack.pop() {
                 if segments.len() + stack.len() > 32768 || depth > 24 {
                     return Err(unsupported("setback trim exceeds its budget"));
@@ -112,7 +116,13 @@ impl Trim {
         !self.inside((u0 + u1) * 0.5, (v0 + v1) * 0.5)
     }
 
-    pub(super) fn violations(&self, surface: &mt::BSplineSurface<mt::Point3>, planes: &[(Vec3, Vec3)], tolerance: f64) -> Result<Vec<Uv>> {
+    pub(super) fn violations(
+        &self,
+        surface: &mt::BSplineSurface<mt::Point3>,
+        planes: &[(Vec3, Vec3)],
+        tolerance: f64,
+        refinement_margin: f64,
+    ) -> Result<Vec<Uv>> {
         let mut violations = Vec::new();
         let mut stack = vec![(surface.clone(), [0.0, 1.0, 0.0, 1.0], 0)];
         let mut visited = 0;
@@ -140,7 +150,7 @@ impl Trim {
                 // Leave a margin when refining an uncertain hull. Waiting for
                 // a sample to exceed the full tolerance can chase a level set
                 // indefinitely even though the hull has not yet been certified.
-                if !p.is_finite() || planes.iter().any(|(n, q)| (p - *q).dot(*n) > tolerance * 0.5) {
+                if !p.is_finite() || planes.iter().any(|(n, q)| (p - *q).dot(*n) > tolerance * refinement_margin) {
                     violations.push((u, v));
                     if violations.len() >= 128 {
                         return Ok(violations);
@@ -177,7 +187,7 @@ impl Trim {
 
     #[cfg(test)]
     fn contains(&self, surface: &mt::BSplineSurface<mt::Point3>, planes: &[(Vec3, Vec3)], tolerance: f64) -> Result<()> {
-        if self.violations(surface, planes, tolerance)?.is_empty() {
+        if self.violations(surface, planes, tolerance, 0.5)?.is_empty() {
             Ok(())
         } else {
             Err(unsupported("the setback surface leaves the original material"))

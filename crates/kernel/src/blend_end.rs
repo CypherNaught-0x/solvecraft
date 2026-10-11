@@ -1,12 +1,16 @@
 //! Straight fillets trimmed by the fan of faces at each endpoint.
 //! The cylinder stays circular; oblique planes cut ellipses, not tilted circles.
 
-use crate::blend::{plane_normal, rebuild_face, unsupported, vtx};
+use crate::blend::{plane_normal, unsupported, vtx};
 use crate::body::{Solid, from_p3, p3};
 use crate::{KernelError, Result};
 use solvecraft_geom::Vec3;
 use std::collections::HashMap;
-use truck_modeling::{self as mt, BoundedCurve, Cut, ParameterDivision1D, ParametricCurve, ParametricSurface3D, SearchNearestParameter, builder};
+use truck_modeling::{
+    self as mt, BoundedCurve, Cut, Invertible, ParameterDivision1D, ParametricCurve, ParametricSurface3D, SearchNearestParameter, builder,
+};
+
+mod transition;
 
 fn h(p: Vec3, w: f64) -> mt::Vector4 {
     mt::Vector4::new(p.x * w, p.y * w, p.z * w, w)
@@ -221,6 +225,14 @@ pub(crate) fn can_trim(solid: &Solid, edge: &mt::Edge) -> bool {
 }
 
 pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> Result<Solid> {
+    fillet_one_impl(solid, edge, size, r, false)
+}
+
+pub(crate) fn with_transitions(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> Result<Solid> {
+    fillet_one_impl(solid, edge, size, r, true)
+}
+
+fn fillet_one_impl(solid: &Solid, edge: &mt::Edge, size: f64, r: f64, transitions: bool) -> Result<Solid> {
     if !(r.is_finite() && r > 0.0 && (size * 4.0).is_finite() && size > 0.0) {
         return Err(KernelError::Invalid("fillet radius and body size must be finite and positive".into()));
     }
@@ -291,6 +303,9 @@ pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> R
     };
     let mut subst = HashMap::new();
     let mut ends = Vec::new();
+    let mut face_caps: HashMap<usize, Vec<mt::Edge>> = HashMap::new();
+    let mut patches = Vec::new();
+    let mut removed = Vec::new();
     for (v, p) in [(v0, p0), (v1, p1)] {
         // Walk the endpoint fan from side A to side B, retaining every intervening face.
         let mut fan = Vec::new();
@@ -314,96 +329,120 @@ pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> R
         if fi != fb {
             return Err(unsupported("too many faces at the fillet endpoint"));
         }
-        if fan.iter().take(fan.len().saturating_sub(1)).any(|(_, i)| faces.get(*i).is_none_or(|f| plane_normal(f).is_none())) {
-            return Err(unsupported("this fillet needs rebuilding where it meets an earlier curved blend"));
-        }
-        let base = conic(p + t1 * s, p, p + t2 * s, w);
-        let center = p + t1 * s + n1 * (sign * r);
-        let mut points = Vec::new();
-        let count = fan.len();
-        for (i, (seam, next)) in fan.iter().enumerate() {
-            let oriented = if seam.front() == v { seam.clone() } else { seam.inverse() };
-            let c = oriented.oriented_curve();
-            let residual = |q: Vec3| {
-                if i == 0 {
-                    (q - p).dot(t1) - s
-                } else if i + 1 == count {
-                    (q - p).dot(t2) - s
-                } else {
-                    let x = q - center;
-                    (x - d * x.dot(d)).len() - r
-                }
-            };
-            let hit = crossing(&c, residual, tol);
-            let (t, q) = match hit {
-                Ok(hit) => hit,
-                Err(_) if i > 0 && i + 1 < count && matches!(c, mt::Curve::Line(_)) => {
-                    // A reflex joint in the end-face fan may extend its shared seam.
-                    // Loop intersection and global bounds checks cannot establish
-                    // that this local extension lies on the material side.
-                    let a = fan.get(i - 1).and_then(|(_, fi)| faces.get(*fi));
-                    let b = faces.get(*next);
-                    if !matches!((a, b), (Some(a), Some(b)) if reflex_joint(a, b, seam.id())) {
-                        return Err(unsupported("a convex endpoint joint cannot extend its seam backwards"));
+        let exact = (|| -> Result<_> {
+            if fan.iter().take(fan.len().saturating_sub(1)).any(|(_, i)| faces.get(*i).is_none_or(|f| plane_normal(f).is_none())) {
+                return Err(unsupported("this fillet needs rebuilding where it meets an earlier curved blend"));
+            }
+            let base = conic(p + t1 * s, p, p + t2 * s, w);
+            let center = p + t1 * s + n1 * (sign * r);
+            let mut local_subst = HashMap::new();
+            let mut points = Vec::new();
+            let count = fan.len();
+            for (i, (seam, next)) in fan.iter().enumerate() {
+                let oriented = if seam.front() == v { seam.clone() } else { seam.inverse() };
+                let c = oriented.oriented_curve();
+                let residual = |q: Vec3| {
+                    if i == 0 {
+                        (q - p).dot(t1) - s
+                    } else if i + 1 == count {
+                        (q - p).dot(t2) - s
+                    } else {
+                        let x = q - center;
+                        (x - d * x.dot(d)).len() - r
                     }
-                    let back = vtx(oriented.back());
-                    let away = (back - p).normalized().ok_or_else(|| unsupported("zero length endpoint seam"))?;
-                    let ext = mt::Curve::Line(mt::Line(p3(p), p3(p - away * size)));
-                    let (_, q) =
-                        crossing(&ext, residual, tol).map_err(|_| unsupported("this fillet needs a different arrangement of faces at its end"))?;
-                    (0.0, q)
+                };
+                let hit = crossing(&c, residual, tol);
+                let (t, q) = match hit {
+                    Ok(hit) => hit,
+                    Err(_) if i > 0 && i + 1 < count && matches!(c, mt::Curve::Line(_)) => {
+                        // A reflex joint in the end-face fan may extend its shared seam.
+                        // Loop intersection and global bounds checks cannot establish
+                        // that this local extension lies on the material side.
+                        let a = fan.get(i - 1).and_then(|(_, fi)| faces.get(*fi));
+                        let b = faces.get(*next);
+                        if !matches!((a, b), (Some(a), Some(b)) if reflex_joint(a, b, seam.id())) {
+                            return Err(unsupported("a convex endpoint joint cannot extend its seam backwards"));
+                        }
+                        let back = vtx(oriented.back());
+                        let away = (back - p).normalized().ok_or_else(|| unsupported("zero length endpoint seam"))?;
+                        let ext = mt::Curve::Line(mt::Line(p3(p), p3(p - away * size)));
+                        let (_, q) = crossing(&ext, residual, tol)
+                            .map_err(|_| unsupported("this fillet needs a different arrangement of faces at its end"))?;
+                        (0.0, q)
+                    }
+                    Err(e) => return Err(e),
+                };
+                let q0 = q - d * (q - p).dot(d);
+                if !in_bounds(q) {
+                    return Err(unsupported("the fillet endpoint leaves the part's bounds"));
                 }
-                Err(e) => return Err(e),
-            };
-            let q0 = q - d * (q - p).dot(d);
-            if !in_bounds(q) {
-                return Err(unsupported("the fillet endpoint leaves the part's bounds"));
+                let u = if i == 0 {
+                    0.0
+                } else if i + 1 == count {
+                    1.0
+                } else {
+                    base.search_nearest_parameter(p3(q0), None, 100).ok_or_else(|| unsupported("endpoint seam misses the fillet"))?
+                };
+                if !(0.0..=1.0).contains(&u) || from_p3(base.subs(u)).dist(q0) > tol * 10.0 {
+                    return Err(unsupported("endpoint seam misses the fillet arc"));
+                }
+                if points.last().is_some_and(|(prev, _): &(f64, mt::Vertex)| u <= *prev + 1e-8) {
+                    return Err(unsupported("fillet crosses the endpoint faces out of order"));
+                }
+                let nv = builder::vertex(p3(q));
+                let (_, last) = c.range_tuple();
+                let ne = if matches!(c, mt::Curve::Line(_)) {
+                    builder::line(&nv, oriented.back())
+                } else {
+                    mt::Edge::try_new(&nv, oriented.back(), trim(c, t, last)).map_err(|e| KernelError::Failed(format!("fillet seam: {e}")))?
+                };
+                local_subst.insert(seam.id(), if oriented.front() == seam.absolute_front() { ne } else { ne.inverse() });
+                points.push((u, nv));
             }
-            let u = if i == 0 {
-                0.0
-            } else if i + 1 == count {
-                1.0
-            } else {
-                base.search_nearest_parameter(p3(q0), None, 100).ok_or_else(|| unsupported("endpoint seam misses the fillet"))?
-            };
-            if !(0.0..=1.0).contains(&u) || from_p3(base.subs(u)).dist(q0) > tol * 10.0 {
-                return Err(unsupported("endpoint seam misses the fillet arc"));
+            let mut caps = Vec::new();
+            for (i, pair) in points.windows(2).enumerate() {
+                let [(lo, a), (hi, b)] = pair else {
+                    return Err(unsupported("fillet endpoint"));
+                };
+                let (_, g) = fan.get(i).ok_or_else(|| unsupported("fillet endpoint face"))?;
+                let f = faces.get(*g).ok_or_else(|| unsupported("fillet endpoint face"))?;
+                let ca = on_end(f, p + t1 * s, d, p)?;
+                let cb = on_end(f, p + t2 * s, d, p)?;
+                let curve = trim(conic(ca, p, cb, w), *lo, *hi);
+                // A nearly parallel end plane can give an ellipse with a large
+                // excursion between its endpoints, even when those endpoints fit.
+                let samples = curve.parameter_division(curve.range_tuple(), tol.max(1e-6)).1;
+                if samples.len() > 8192 || samples.into_iter().any(|q| !in_bounds(from_p3(q))) {
+                    return Err(unsupported("the fillet end section leaves the part's bounds"));
+                }
+                let cap = mt::Edge::try_new(a, b, curve).map_err(|e| KernelError::Failed(format!("fillet cap: {e}")))?;
+                caps.push((*g, cap));
             }
-            if points.last().is_some_and(|(prev, _): &(f64, mt::Vertex)| u <= *prev + 1e-8) {
-                return Err(unsupported("fillet crosses the endpoint faces out of order"));
+            let a = points.first().map(|x| x.1.clone()).ok_or_else(|| unsupported("fillet endpoint"))?;
+            let b = points.last().map(|x| x.1.clone()).ok_or_else(|| unsupported("fillet endpoint"))?;
+            Ok((a, b, caps, local_subst))
+        })();
+        match exact {
+            Ok((a, b, caps, replacements)) => {
+                subst.extend(replacements);
+                for (fi, cap) in &caps {
+                    face_caps.entry(*fi).or_default().push(cap.clone());
+                }
+                ends.push((a, b, caps));
             }
-            let nv = builder::vertex(p3(q));
-            let (_, last) = c.range_tuple();
-            let ne = if matches!(c, mt::Curve::Line(_)) {
-                builder::line(&nv, oriented.back())
-            } else {
-                mt::Edge::try_new(&nv, oriented.back(), trim(c, t, last)).map_err(|e| KernelError::Failed(format!("fillet seam: {e}")))?
-            };
-            subst.insert(seam.id(), if oriented.front() == seam.absolute_front() { ne } else { ne.inverse() });
-            points.push((u, nv));
+            Err(original) if !transitions => return Err(original),
+            Err(_) => {
+                let direction = if v == v0 { d } else { -d };
+                let end = transition::build(&faces, &fan, v, p, direction, t1, t2, n1, n2, sign, s, r, w, size, tol, bounds, fa, fb)?;
+                subst.extend(end.replacements);
+                removed.extend(end.removed);
+                for (fi, cap) in end.connections {
+                    face_caps.entry(fi).or_default().push(cap);
+                }
+                patches.extend(end.patches.into_iter().map(|patch| (v == v0, patch)));
+                ends.push((end.a, end.b, end.sections.into_iter().map(|section| (usize::MAX, section)).collect()));
+            }
         }
-        let mut caps = Vec::new();
-        for (i, pair) in points.windows(2).enumerate() {
-            let [(lo, a), (hi, b)] = pair else {
-                return Err(unsupported("fillet endpoint"));
-            };
-            let (_, g) = fan.get(i).ok_or_else(|| unsupported("fillet endpoint face"))?;
-            let f = faces.get(*g).ok_or_else(|| unsupported("fillet endpoint face"))?;
-            let ca = on_end(f, p + t1 * s, d, p)?;
-            let cb = on_end(f, p + t2 * s, d, p)?;
-            let curve = trim(conic(ca, p, cb, w), *lo, *hi);
-            // A nearly parallel end plane can give an ellipse with a large
-            // excursion between its endpoints, even when those endpoints fit.
-            let samples = curve.parameter_division(curve.range_tuple(), tol.max(1e-6)).1;
-            if samples.len() > 8192 || samples.into_iter().any(|q| !in_bounds(from_p3(q))) {
-                return Err(unsupported("the fillet end section leaves the part's bounds"));
-            }
-            let cap = mt::Edge::try_new(a, b, curve).map_err(|e| KernelError::Failed(format!("fillet cap: {e}")))?;
-            caps.push((*g, cap));
-        }
-        let a = points.first().map(|x| x.1.clone()).ok_or_else(|| unsupported("fillet endpoint"))?;
-        let b = points.last().map(|x| x.1.clone()).ok_or_else(|| unsupported("fillet endpoint"))?;
-        ends.push((a, b, caps));
     }
     let [(a0, b0, c0), (a1, b1, c1)] = &ends[..] else {
         return Err(unsupported("fillet endpoints"));
@@ -424,8 +463,8 @@ pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> R
         if i == fb {
             sub.insert(edge.id(), lb.clone());
         }
-        let caps: Vec<_> = c0.iter().chain(c1).filter(|(g, _)| *g == i).map(|(_, e)| e.clone()).collect();
-        let rebuilt = rebuild_face(f, &sub, &caps)?;
+        let caps = face_caps.remove(&i).unwrap_or_default();
+        let rebuilt = crate::blend::rebuild_face_without(f, &sub, &caps, &removed)?;
         if i == fa || i == fb || !caps.is_empty() {
             uncrossed(&rebuilt, tol)?;
         }
@@ -453,6 +492,13 @@ pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> R
         }
     }
     out.push(mt::Face::try_new(vec![wire], surf).map_err(|e| KernelError::Failed(format!("fillet cylinder: {e}")))?);
+    for (at_start, mut patch) in patches {
+        if at_start != forward {
+            patch = mt::Face::try_new(patch.boundaries().iter().map(|w| w.inverse()).collect(), patch.oriented_surface())
+                .map_err(|e| KernelError::Failed(format!("transition orientation: {e}")))?;
+        }
+        out.push(patch);
+    }
     let mut shells = solid.boundaries().clone();
     if let Some(sh) = shells.get_mut(si) {
         *sh = out.into();
@@ -481,19 +527,25 @@ mod tests {
         body
     }
     fn check(body: &Body, p: Vec3, r: f64) -> Body {
+        let out = check_geometry(body, p, r);
+        let delta = crate::measure(&out).unwrap().volume - crate::measure(body).unwrap().volume;
+        assert!(delta.abs() > 1e-6 && delta.abs() < 500.0, "volume delta {delta}");
+        out
+    }
+    fn check_geometry(body: &Body, p: Vec3, r: f64) -> Body {
         let out = crate::fillet(body, &[p], r).unwrap_or_else(|e| panic!("fillet {p:?}, radius {r}: {e}"));
         assert!(out.validity().is_empty());
         assert_eq!(out.unmeshed_faces(), 0);
-        let delta = crate::measure(&out).unwrap().volume - crate::measure(body).unwrap().volume;
-        assert!(delta.abs() > 1e-6 && delta.abs() < 500.0, "volume delta {delta}");
         for f in out.solid.face_iter() {
             let s = f.surface();
             for e in f.edge_iter() {
                 let c = e.curve();
                 let (a, b) = c.range_tuple();
+                let mut hint = None;
                 for j in 0..=16 {
                     let q = c.subs(a + (b - a) * j as f64 / 16.0);
-                    let (u, v) = s.search_nearest_parameter(q, None, 100).unwrap();
+                    let (u, v) = s.search_nearest_parameter(q, hint, 100).unwrap();
+                    hint = Some((u, v));
                     assert!(from_p3(s.subs(u, v)).dist(from_p3(q)) < 1e-4, "boundary off face");
                 }
             }
@@ -615,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_corner_patch_preserves_completed_floor_fillets() {
+    fn vertical_corners_after_floor_rounds() {
         let mut b = shallow_basin();
         let inset = 12.0 * 10.0_f64.to_radians().tan();
         for p in [
@@ -627,34 +679,113 @@ mod tests {
             b = check(&b, p, 1.5);
         }
         let before: Vec<_> = b.solid.vertex_iter().map(|v| vtx(&v)).collect();
+        let volume = crate::measure(&b).unwrap().volume;
         for x in [15.0 + inset * 0.5, 75.0 - inset * 0.5] {
             for y in [45.0 - inset * 0.5, (1.8 + 35.0 - inset) * 0.5] {
-                assert!(crate::fillet(&b, &[Vec3::new(x, y, 10.0)], 1.5).is_err());
+                let out = check_geometry(&b, Vec3::new(x, y, 10.0), 1.5);
+                let delta = crate::measure(&out).unwrap().volume - volume;
+                assert!(delta > 1e-6 && delta < 500.0, "volume delta {delta}");
+                check_transition_tangency(&out);
                 assert_eq!(before, b.solid.vertex_iter().map(|v| vtx(&v)).collect::<Vec<_>>());
             }
         }
     }
 
-    #[test]
-    fn unsupported_front_corner_patch_is_an_error() {
-        let b = shallow_basin();
-        let inset = 12.0 * 10.0_f64.to_radians().tan();
-        for x in [15.0 + inset * 0.5, 75.0 - inset * 0.5] {
-            assert!(crate::fillet(&b, &[Vec3::new(x, (1.8 + 35.0 - inset) * 0.5, 10.0)], 1.5).is_err());
+    fn check_transition_tangency(out: &Body) {
+        for patch in out.solid.face_iter().filter(|f| matches!(f.surface(), mt::Surface::BSplineSurface(_))) {
+            for edge in patch.edge_iter() {
+                let neighbor = out.solid.face_iter().find(|f| f.id() != patch.id() && f.edge_iter().any(|e| e.id() == edge.id())).unwrap();
+                if matches!(neighbor.surface(), mt::Surface::BSplineSurface(_))
+                    || (plane_normal(neighbor).is_some() && !matches!(edge.curve(), mt::Curve::Line(_)))
+                {
+                    continue;
+                }
+                let curve = edge.curve();
+                let (a, b) = curve.range_tuple();
+                let (mut patch_hint, mut neighbor_hint) = (None, None);
+                for i in 0..=32 {
+                    let p = curve.subs(a + (b - a) * i as f64 / 32.0);
+                    let normal = |f: &mt::Face, hint: &mut Option<(f64, f64)>| {
+                        let s = f.oriented_surface();
+                        let (u, v) = s.search_nearest_parameter(p, *hint, 100).unwrap();
+                        *hint = Some((u, v));
+                        let n = s.normal(u, v);
+                        Vec3::new(n.x, n.y, n.z)
+                    };
+                    let angle = normal(patch, &mut patch_hint).dot(normal(neighbor, &mut neighbor_hint)).clamp(-1.0, 1.0).acos().to_degrees();
+                    assert!(angle < 0.02, "transition kink {angle} degrees");
+                }
+            }
         }
     }
 
     #[test]
-    fn unsupported_corner_to_rim_patch_is_an_error() {
+    fn front_corner_transition_patch() {
+        let b = shallow_basin();
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        let volume = crate::measure(&b).unwrap().volume;
+        for x in [15.0 + inset * 0.5, 75.0 - inset * 0.5] {
+            let out = check_geometry(&b, Vec3::new(x, (1.8 + 35.0 - inset) * 0.5, 10.0), 1.5);
+            let delta = crate::measure(&out).unwrap().volume - volume;
+            assert!(delta > 1e-6 && delta < 500.0, "volume delta {delta}");
+            check_transition_tangency(&out);
+        }
+    }
+
+    #[test]
+    fn corner_to_rim_transition_patch() {
         let b = shallow_basin();
         let picks = [Vec3::new(45.0, 1.8, 16.0), Vec3::new(45.0, 45.0, 16.0), Vec3::new(15.0, 23.4, 16.0), Vec3::new(75.0, 23.4, 16.0)];
         let rim = crate::fillet(&b, &picks, 0.3).unwrap();
         let inset = 12.0 * 10.0_f64.to_radians().tan();
+        let volume = crate::measure(&rim).unwrap().volume;
         for x in [15.0 + inset * 0.5, 75.0 - inset * 0.5] {
             for y in [45.0 - inset * 0.5, (1.8 + 35.0 - inset) * 0.5] {
-                assert!(crate::fillet(&rim, &[Vec3::new(x, y, 10.0)], 1.5).is_err());
+                let out = check_geometry(&rim, Vec3::new(x, y, 10.0), 1.5);
+                let delta = crate::measure(&out).unwrap().volume - volume;
+                assert!(delta > 1e-6 && delta < 500.0, "volume delta {delta}");
+                check_transition_tangency(&out);
             }
         }
+    }
+
+    #[test]
+    fn basin_rim_floor_and_all_vertical_corner_transitions() {
+        let mut body = shallow_basin();
+        let rim = [Vec3::new(45.0, 1.8, 16.0), Vec3::new(45.0, 45.0, 16.0), Vec3::new(15.0, 23.4, 16.0), Vec3::new(75.0, 23.4, 16.0)];
+        body = crate::fillet(&body, &rim, 0.3).unwrap();
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        for p in [
+            Vec3::new(15.0 + inset, 40.0 - inset, 4.0),
+            Vec3::new(75.0 - inset, 40.0 - inset, 4.0),
+            Vec3::new(45.0, 45.0 - inset, 4.0),
+            Vec3::new(45.0, 35.0 - inset, 4.0),
+        ] {
+            body = check(&body, p, 1.5);
+        }
+        let mut measured = crate::measure(&body).unwrap();
+        for x in [15.0 + inset * 0.5, 75.0 - inset * 0.5] {
+            for y in [45.0 - inset * 0.5, (1.8 + 35.0 - inset) * 0.5] {
+                let old = measured.volume;
+                body = check_geometry(&body, Vec3::new(x, y, 10.0), 1.5);
+                measured = crate::measure(&body).unwrap();
+                let delta = measured.volume - old;
+                assert!(delta > 1e-6 && delta < 500.0, "volume delta {delta}");
+                check_transition_tangency(&body);
+            }
+        }
+        assert!(measured.bbox.min.x >= -1e-4 && measured.bbox.min.y >= -1e-4 && measured.bbox.min.z >= -1e-4);
+        assert!(measured.bbox.max.x <= 90.0 + 1e-4 && measured.bbox.max.y <= 48.0 + 1e-4 && measured.bbox.max.z <= 16.0 + 1e-4);
+        let step = crate::step_export_bodies(
+            &[crate::ExportBody { name: "Basin transitions".into(), body: &body, color: None }],
+            &crate::StepHeader::default(),
+        )
+        .unwrap();
+        let imported = crate::step_import(&step).unwrap();
+        let restored = &imported.bodies[0].body;
+        assert!(restored.validity().is_empty());
+        assert_eq!(restored.unmeshed_faces(), 0);
+        assert!((crate::measure(restored).unwrap().volume - measured.volume).abs() < 0.05);
     }
 
     #[test]

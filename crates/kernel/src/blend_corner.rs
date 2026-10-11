@@ -26,7 +26,7 @@ use crate::blend::{plane_normal, unsupported, vtx};
 use crate::body::{Body, Solid, p3, v3};
 use crate::{KernelError, Result, guard};
 
-mod setback;
+pub(crate) mod setback;
 
 /// Fillet each edge nearest a point with its own radius.
 pub fn fillet_radii(body: &Body, edges: &[(Vec3, f64)]) -> Result<Body> {

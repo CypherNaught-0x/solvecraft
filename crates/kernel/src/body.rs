@@ -5,6 +5,7 @@ use truck_modeling as mt;
 
 use crate::{KernelError, Result, guard};
 
+mod evaluation;
 #[path = "shell_groups.rs"]
 mod shell_groups;
 
@@ -103,7 +104,19 @@ fn mesh_shells(solid: &Solid, tol: f64) -> Vec<MeshedShell> {
         // The robust search tries the exact one first, so exact geometry costs nothing extra; a
         // face can also come back as an empty mesh rather than none (boolean results with
         // approximate intersection curves), so always use it.
-        .map(|sh| sh.robust_triangulation(tol))
+        .map(|sh| {
+            let evaluated: truck_topology::Shell<mt::Point3, mt::Curve, evaluation::Surface> = sh
+                .face_iter()
+                .map(|face| {
+                    let mut f = truck_topology::Face::new_unchecked(face.absolute_boundaries().clone(), evaluation::Surface(face.surface()));
+                    if !face.orientation() {
+                        f.invert();
+                    }
+                    f
+                })
+                .collect();
+            evaluated.robust_triangulation(tol)
+        })
         .collect()
 }
 
@@ -114,6 +127,7 @@ fn mesh_shells(solid: &Solid, tol: f64) -> Vec<MeshedShell> {
 #[allow(clippy::type_complexity)]
 fn refined(pm: &PolygonMesh, surf: &mt::Surface, tol: f64) -> Option<Vec<[(Vec3, Vec3); 3]>> {
     use mt::{ParametricSurface, ParametricSurface3D};
+    let surf = evaluation::Surface(surf.clone());
     let (pos, uvs, nor) = (pm.positions(), pm.uv_coords(), pm.normals());
     if uvs.is_empty() {
         return None;

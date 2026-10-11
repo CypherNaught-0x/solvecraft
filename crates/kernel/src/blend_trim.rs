@@ -11,7 +11,7 @@ use truck_modeling::{self as mt, BoundedCurve, ParameterDivision1D, ParametricCu
 
 /// Containment in the original trimmed face, including holes. A closed rebuilt
 /// loop alone cannot distinguish trimming a corner from adding an exterior lobe.
-struct FaceRegion {
+pub(crate) struct FaceRegion {
     surface: mt::Surface,
     loops: Vec<Vec<(f64, f64)>>,
 }
@@ -33,7 +33,7 @@ fn reflex_vertex(face: &mt::Face, vertex: &mt::Vertex) -> bool {
 }
 
 impl FaceRegion {
-    fn new(face: &mt::Face, tol: f64) -> Result<Self> {
+    pub(crate) fn new(face: &mt::Face, tol: f64) -> Result<Self> {
         let surface = face.surface();
         let mut loops = Vec::new();
         let mut count = 0;
@@ -63,7 +63,7 @@ impl FaceRegion {
         Ok(Self { surface, loops })
     }
 
-    fn contains(&self, p: mt::Point3, tol: f64) -> bool {
+    pub(crate) fn contains(&self, p: mt::Point3, tol: f64) -> bool {
         use mt::ParametricSurface;
         let Some((u, v)) = self.surface.search_nearest_parameter(p, None, 100) else { return false };
         if !u.is_finite() || !v.is_finite() || from_p3(self.surface.subs(u, v)).dist(from_p3(p)) > tol * 10.0 {
