@@ -826,3 +826,70 @@ fn fixed_arc_support_preserves_endpoint_edits_volume_and_bounds() {
     assert_eq!(s.doc, original);
     verify(&mut s, base);
 }
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES with symmetry creation-order controls"]
+fn symmetry_roles_survive_axis_creation_order_and_reversed_entity_pairs() {
+    use solvecraft_engine::doc::{
+        Document,
+        sketch::{ConstraintKind, CurveKind},
+    };
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-symmetry-order-measurements.json")).unwrap()).unwrap();
+    assert_eq!(api.as_object().unwrap().len(), 30);
+    let verify = |s: &mut Session, expected: &Value| {
+        assert!(s.model.results.iter().all(|r| r.error.is_none()));
+        let state = s.model.state();
+        let sketch = &state.sketches[0].sketch;
+        let symmetries: Vec<_> =
+            sketch.constraints.iter().filter_map(|c| if let ConstraintKind::Symmetric { l, .. } = c.kind { Some(l) } else { None }).collect();
+        assert_eq!(symmetries.len(), if expected["kind"] == "lines" { 2 } else { 1 });
+        for l in symmetries {
+            let CurveKind::Line { a, b } = sketch.curves[l].kind else { panic!("axis") };
+            for (point, key) in [(a, "start"), (b, "end")] {
+                let p = sketch.points[point].pos;
+                assert!((p.x - expected["axis"][key][0].as_f64().unwrap() * 10.).abs() < 1e-5);
+                assert!((p.y - expected["axis"][key][1].as_f64().unwrap() * 10.).abs() < 1e-5);
+            }
+        }
+        for entity in expected["entities"].as_array().unwrap() {
+            for key in ["position", "start", "end", "center"] {
+                let Some(pos) = entity[key].as_array() else { continue };
+                assert!(
+                    sketch.points.iter().any(|p| {
+                        (p.pos.x - pos[0].as_f64().unwrap() * 10.).abs() < 1e-5 && (p.pos.y - pos[1].as_f64().unwrap() * 10.).abs() < 1e-5
+                    }),
+                    "missing {key}: {entity}"
+                );
+            }
+        }
+        if expected["kind"] == "circles" {
+            let m = volume(s, expected["volume"].as_f64().unwrap(), "symmetry creation order");
+            assert_eq!(m["body_count"], expected["body_count"]);
+            for (end, key) in [(0, "min"), (1, "max")] {
+                for axis in 0..3 {
+                    let extremes = |values: Vec<f64>| values.into_iter().reduce(|a, b| if end == 0 { a.min(b) } else { a.max(b) }).unwrap();
+                    let actual = extremes(m["bodies"].as_array().unwrap().iter().map(|b| b["bbox"][key][axis].as_f64().unwrap()).collect());
+                    let want = extremes(expected["bounds"].as_array().unwrap().iter().map(|b| b[end][axis].as_f64().unwrap() * 10.).collect());
+                    assert!((actual - want).abs() < 1e-5);
+                }
+            }
+        }
+    };
+    for (name, expected) in api.as_object().unwrap() {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        verify(&mut s, expected);
+        let original = s.doc.clone();
+        verify(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), expected);
+        if expected["kind"] == "circles" && name.ends_with("-baseline") {
+            let changed = &api[name.replace("-baseline", "-changed")];
+            s.execute("parameters.change", &json!({"name":"d1","expression":"30 mm"})).unwrap();
+            verify(&mut s, changed);
+            verify(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), changed);
+            s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.doc, original);
+            verify(&mut s, expected);
+        }
+    }
+}

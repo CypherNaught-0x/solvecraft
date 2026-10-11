@@ -204,6 +204,8 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   unresolved metadata and relationships remain explicit. Legacy constraint containers preserve
   complete relation/dimension lists across versions 16–18. Verified point, line and circle
   symmetry imports preserve editable relationships, including equal circle radii.
+  Symmetry axes and entity roles come from ordered references independently of
+  graph registration order, verified against all 113 supplied-file symmetries.
   Point-to-line and parallel-line offset dimensions retain their driving parameters
   through edits, reopening and undo; independent controls check both volume and bounds.
   Angular dimensions preserve quadrants and clockwise/supplementary edit directions,

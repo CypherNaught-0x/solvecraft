@@ -929,3 +929,35 @@ binaries, including 89 I/O tests, 560 engine tests, 198 kernel tests, all 28
 original history fixtures, the HardEdgeBasin opening guard and ten-crate WASM
 checking. All 25 local F3D import groups passed. The edited imported segment was
 rendered and visually checked. Upstream `4af2d06` remains integrated.
+
+### Symmetry roles independent of graph registration order
+
+Symmetry records have two lists with different purposes: graph operands carry
+connection slots, while the ordered references identify entity one, entity two
+and the mirror axis. Reconstruction now uses the ordered references after
+checking that both lists contain the same unique objects. Previously an axis
+created after a mirrored entity was mistaken for an entity itself; circle/point
+imports failed, and line imports could use the wrong mirror line.
+
+Thirty local controls cover points, lines and circles, axes created first,
+between the entities or last, and both API entity argument orders. Circle controls
+also change and restore a driving diameter; tests compare volume, bounds,
+mirrored positions and the actual axis after edits, reopening and undo. Original
+record tests permute all six graph operand orders independently of the two entity
+orders, and reject malformed ordered references. The existing original symmetric
+cylinder fixture continues to cover editable geometry in ordinary CI.
+
+The same ordered references match all 113 symmetry constraints reported by the
+public API for the supplied files: nine in the adapter and 104 in Gridfinity.
+Nine adapter and 88 Gridfinity constraints put the axis outside the first graph
+operand position. Gridfinity's constraint decoding now advances to the retained
+auxiliary relationship blocker. Adapter also contains line-to-line midpoint
+relationships that still need reconstruction; R36S retains body support links.
+Those and the remaining feature schemas still prevent full editable import of
+the larger archives. Fusion controls and API snapshots remain local evidence.
+
+Validation for symmetry ordering: full `cargo xtask ci` passed 29 test binaries,
+including 90 I/O tests, all 28 original history fixtures, the HardEdgeBasin
+opening guard and ten-crate WASM checking. All 26 local import groups passed.
+The edited imported cylinder pair was rendered and visually checked; upstream
+`4af2d06` remains integrated without additional commits to merge.

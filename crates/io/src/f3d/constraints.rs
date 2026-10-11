@@ -125,9 +125,13 @@ impl Design {
                     }
                     zeros(&mut r, 1)?;
                     finish(&r)?;
-                    constraints.push(match (kind, operands.as_slice()) {
+                    // Symmetry's ordered references are entity one, entity two,
+                    // axis. Graph operands follow registration order instead;
+                    // an axis created last must not become a mirrored entity.
+                    let semantic = if kind == 0x400 { back.as_slice() } else { operands.as_slice() };
+                    constraints.push(match (kind, semantic) {
                         (1, [a, b]) if point(a) && point(b) => SketchConstraint::Coincident { id, points: [*a, *b] },
-                        (0x400, [axis, a, b])
+                        (0x400, [a, b, axis])
                             if line(axis)
                                 && ((point(a) && point(b))
                                     || (line(a) && line(b))

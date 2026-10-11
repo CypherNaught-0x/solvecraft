@@ -1,8 +1,24 @@
 use super::import_tests::{Fixture, fixture, volume};
-use super::relationship_tests::{reference, refs, u64, wide};
+use super::relationship_tests::{reference, refs, u32, u64, wide};
 use super::*;
 use solvecraft_doc::sketch::{ConstraintKind, Sketch};
 use solvecraft_geom::Vec2;
+
+fn relation(f: &mut Fixture, operands: &[u64], ordered: &[u64]) {
+    let mut b = vec![0; 4];
+    b.push(1);
+    u32(&mut b, operands.len() as u32);
+    for (slot, id) in operands.iter().enumerate() {
+        reference(&mut b, *id);
+        u32(&mut b, slot as u32 + 7);
+    }
+    b.push(0);
+    reference(&mut b, 70);
+    u64(&mut b, 0x400);
+    refs(&mut b, ordered);
+    b.push(0);
+    f.put(306, "60403D47-0C49-49B0-BDE8-1679608164A2", 3, b, None);
+}
 
 fn circles() -> Fixture {
     let mut f = fixture(false);
@@ -38,7 +54,7 @@ fn circles() -> Fixture {
     b.extend([0; 44]);
     reference(&mut b, 70);
     f.put(305, "F0130424-8B7E-4092-93C9-1CA807482534", 0, b, None);
-    super::geometric_tests::relation(&mut f, 306, 0x400, &[304, 31, 305]);
+    relation(&mut f, &[304, 31, 305], &[31, 305, 304]);
     let mut primary = vec![0; 6];
     wide(&mut primary, "Original symmetry");
     u64(&mut primary, 0);
@@ -81,9 +97,37 @@ fn native_circle_symmetry_keeps_equal_radius_during_parameter_edits() {
         f.0.get_mut(&306).unwrap().2.truncate(n);
         assert!(f.design().to_document("Truncated symmetry").is_err(), "{n}");
     }
-    let mut f = circles();
-    super::geometric_tests::relation(&mut f, 306, 0x400, &[31, 304, 305]);
-    assert!(f.design().sketch_constraints().is_err());
+    for ordered in [vec![31, 304, 305], vec![31, 31, 304], vec![31, 305, 999], vec![31, 305]] {
+        let mut f = circles();
+        relation(&mut f, &[304, 31, 305], &ordered);
+        assert!(f.design().sketch_constraints().is_err());
+    }
+}
+
+#[test]
+fn symmetry_roles_are_independent_of_graph_registration_order() {
+    for operands in [[304, 31, 305], [304, 305, 31], [31, 304, 305], [31, 305, 304], [305, 304, 31], [305, 31, 304]] {
+        for entities in [[31, 305], [305, 31]] {
+            let mut f = circles();
+            relation(&mut f, &operands, &[entities[0], entities[1], 304]);
+            let design = f.design();
+            assert!(
+                design.sketch_constraints().unwrap()[0]
+                    .constraints
+                    .iter()
+                    .any(|c| { matches!(c, SketchConstraint::Symmetry { axis: 304, entities: pair, .. } if *pair == entities) })
+            );
+            let mut doc = design.to_document("Ordered symmetry roles").unwrap();
+            doc.change_param("d7", "40 mm", None, None).unwrap();
+            volume(&doc, 400. * std::f64::consts::PI * 17.);
+            let mut model = solvecraft_doc::Model::new();
+            model.evaluate(&doc);
+            let state = model.state();
+            let sketch = &state.sketches[0].sketch;
+            assert!((sketch.radius(sketch.curve_index("c305").unwrap()).unwrap() - 20.).abs() < 1e-6);
+            assert_eq!(crate::read_design(&crate::write_design(&doc)).unwrap(), doc);
+        }
+    }
 }
 
 #[test]
