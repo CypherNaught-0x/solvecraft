@@ -92,7 +92,24 @@ impl ParametricSurface for Surface {
 }
 impl ParametricSurface3D for Surface {
     fn normal(&self, u: f64, v: f64) -> mt::Vector3 {
-        if matches!(self.0, mt::Surface::BSplineSurface(_)) { self.uder(u, v).cross(self.vder(u, v)).normalize() } else { self.0.normal(u, v) }
+        let mt::Surface::BSplineSurface(s) = &self.0 else { return self.0.normal(u, v) };
+        let normal = self.uder(u, v).cross(self.vder(u, v));
+        if normal.magnitude2() > 0.0 && normal.magnitude2().is_finite() {
+            return normal.normalize();
+        }
+        // At an isolated singular corner the surface has directional limiting
+        // normals. Use the interior limit for its display vertex; a surface
+        // that remains degenerate still returns the original invalid normal.
+        let (ur, vr) = s.range_tuple();
+        if u.is_finite() && v.is_finite() && (u == ur.0 || u == ur.1 || v == vr.0 || v == vr.1) {
+            let inward = |t: f64, (a, b): (f64, f64)| (t + if t < (a + b) * 0.5 { 1e-3 * (b - a) } else { -1e-3 * (b - a) }).clamp(a, b);
+            let (u, v) = (inward(u, ur), inward(v, vr));
+            let limit = self.uder(u, v).cross(self.vder(u, v));
+            if limit.magnitude2() > 0.0 && limit.magnitude2().is_finite() {
+                return limit.normalize();
+            }
+        }
+        normal.normalize()
     }
 }
 impl ParameterDivision2D for Surface {
@@ -109,13 +126,152 @@ impl SearchParameter<D2> for Surface {
 impl SearchNearestParameter<D2> for Surface {
     type Point = mt::Point3;
     fn search_nearest_parameter<H: Into<SPHint2D>>(&self, p: mt::Point3, hint: H, trials: usize) -> Option<(f64, f64)> {
-        self.0.search_nearest_parameter(p, hint, trials)
+        let hint = hint.into();
+        let mt::Surface::BSplineSurface(s) = &self.0 else { return self.0.search_nearest_parameter(p, hint, trials) };
+        if s.degrees() != (5, 5) {
+            return self.0.search_nearest_parameter(p, hint, trials);
+        }
+        if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
+            return None;
+        }
+        let (ur, vr) = s.range_tuple();
+        let clamp = |(u, v): (f64, f64)| (u.clamp(ur.0, ur.1), v.clamp(vr.0, vr.1));
+        let improve = |(mut u, mut v): (f64, f64)| {
+            for _ in 0..trials.min(100) {
+                let q = self.subs(u, v) - p;
+                let du = self.uder(u, v);
+                let dv = self.vder(u, v);
+                let a = du.magnitude2();
+                let b = du.dot(dv);
+                let c = dv.magnitude2();
+                let det = a * c - b * b;
+                if !det.is_finite() || det <= 1e-24 * a * c {
+                    break;
+                }
+                let su = (c * du.dot(q) - b * dv.dot(q)) / det;
+                let sv = (a * dv.dot(q) - b * du.dot(q)) / det;
+                if !su.is_finite() || !sv.is_finite() {
+                    break;
+                }
+                let old = q.magnitude2();
+                let mut scale = 1.0;
+                let mut next = (u, v);
+                for _ in 0..20 {
+                    let candidate = clamp((u - scale * su, v - scale * sv));
+                    if self.subs(candidate.0, candidate.1).distance2(p) < old {
+                        next = candidate;
+                        break;
+                    }
+                    scale *= 0.5;
+                }
+                let delta = (next.0 - u).abs() + (next.1 - v).abs();
+                (u, v) = next;
+                if delta < 1e-13 {
+                    break;
+                }
+            }
+            (u, v)
+        };
+        let seed = match hint {
+            SPHint2D::Parameter(u, v) if u.is_finite() && v.is_finite() => clamp((u, v)),
+            _ => mt::algo::surface::presearch(self, p, (ur, vr), 12),
+        };
+        let first = Some(improve(seed));
+        let valid = |(u, v): (f64, f64)| u.is_finite() && v.is_finite() && u >= ur.0 && u <= ur.1 && v >= vr.0 && v <= vr.1;
+        let distance = |(u, v)| self.subs(u, v).distance2(p);
+        let mut best = first.filter(|uv| valid(*uv));
+        if best.is_some_and(|uv| distance(uv) < 1e-24) {
+            return best;
+        }
+        let mut consider = |uv| {
+            if valid(uv) && distance(uv).is_finite() && best.is_none_or(|old| distance(uv) < distance(old)) {
+                best = Some(uv);
+            }
+        };
+        if !matches!(hint, SPHint2D::None) {
+            consider(improve(mt::algo::surface::presearch(self, p, (ur, vr), 12)));
+        }
+        // A singular boundary can trap Newton's iteration. Search its four
+        // regular one-dimensional boundary curves as independent candidates.
+        if s.is_clamped() {
+            let rows = s.control_points().len();
+            let columns = s.control_points().first().map_or(0, Vec::len);
+            if let (Some(last_u), Some(last_v)) = (rows.checked_sub(1), columns.checked_sub(1)) {
+                for (curve, along_u, fixed) in [
+                    (s.row_curve(0), true, vr.0),
+                    (s.row_curve(last_v), true, vr.1),
+                    (s.column_curve(0), false, ur.0),
+                    (s.column_curve(last_u), false, ur.1),
+                ] {
+                    let (a, b) = curve.range_tuple();
+                    let uv = |t| if along_u { (t, fixed) } else { (fixed, t) };
+                    consider(uv(a));
+                    consider(uv(b));
+                    if let Some(mut t) = curve.search_nearest_parameter(p, None, trials) {
+                        // Polish the one-dimensional boundary solve: the generic
+                        // Newton stopping threshold is too coarse at a flat pole.
+                        for _ in 0..16 {
+                            let d = curve.der(t);
+                            let norm = d.magnitude2();
+                            if !norm.is_finite() || norm <= 0.0 {
+                                break;
+                            }
+                            let next = (t - (curve.subs(t) - p).dot(d) / norm).clamp(a, b);
+                            if !next.is_finite() {
+                                break;
+                            }
+                            let delta = (next - t).abs();
+                            t = next;
+                            if delta <= 1e-14 * (b - a) {
+                                break;
+                            }
+                        }
+                        consider(uv(t));
+                    }
+                }
+            }
+        }
+        best
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bounded_projection_recovers_from_a_singular_or_outside_hint() {
+        // x=u³, y=v³: the origin is stationary in both parameters.
+        let cubic = [0.0, 0.0, 0.0, 0.1, 0.4, 1.0];
+        let ctrl = cubic.iter().map(|x| cubic.iter().map(|y| mt::Point3::new(*x, *y, 0.0)).collect()).collect();
+        let knots = mt::KnotVec::bezier_knot(5);
+        let surface = Surface(mt::Surface::BSplineSurface(mt::BSplineSurface::new((knots.clone(), knots), ctrl)));
+        for p in [mt::Point3::new(0.0, 0.5, 0.0), mt::Point3::new(0.125, 0.343, 0.0), mt::Point3::new(0.0, 0.0, 0.0)] {
+            for hint in [(0.0, 0.0), (9.0, -9.0)] {
+                let (u, v) = surface.search_nearest_parameter(p, hint, 100).unwrap();
+                assert!((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v));
+                assert!(surface.subs(u, v).distance(p) < 1e-10);
+            }
+        }
+        assert!(surface.search_nearest_parameter(mt::Point3::new(f64::NAN, 0.0, 0.0), None, 100).is_none());
+    }
+
+    #[test]
+    fn interior_fold_does_not_acquire_a_fallback_normal() {
+        let knots = mt::KnotVec::bezier_knot(2);
+        let ctrl = [0.25, -0.25, 0.25].into_iter().map(|x| (0..3).map(|j| mt::Point3::new(x, j as f64 / 2.0, 0.0)).collect()).collect();
+        let s = Surface(mt::Surface::BSplineSurface(mt::BSplineSurface::new((knots.clone(), knots), ctrl)));
+        assert!(!s.normal(0.5, 0.5).magnitude2().is_finite());
+    }
+
+    #[test]
+    fn singular_corner_uses_a_finite_interior_normal() {
+        let knots = mt::KnotVec::bezier_knot(2);
+        let ctrl =
+            (0..3).map(|i| (0..3).map(|j| mt::Point3::new(if i == 2 { 1.0 } else { 0.0 }, if j == 2 { 1.0 } else { 0.0 }, 0.0)).collect()).collect();
+        let surface = Surface(mt::Surface::BSplineSurface(mt::BSplineSurface::new((knots.clone(), knots), ctrl)));
+        assert_eq!(surface.normal(0.0, 0.0), mt::Vector3::new(0.0, 0.0, 1.0));
+        assert_eq!(surface.normal(0.0, 0.5), mt::Vector3::new(0.0, 0.0, 1.0));
+    }
     #[test]
     fn sparse_evaluation_preserves_knots_and_domain_endpoints() {
         let knots = mt::KnotVec::from(vec![0.0, 0.0, 0.0, 0.0, 0.2, 0.4, 0.4, 0.7, 1.0, 1.0, 1.0, 1.0]);

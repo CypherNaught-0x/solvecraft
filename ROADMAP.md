@@ -298,9 +298,11 @@ retain their saved two-finger scroll preference; camera motion is available thro
   sections use a tolerance-checked cubic fit. Local bounded spline transitions support
   shallow concave corners and corners meeting earlier cylindrical rim or floor rounds,
   while keeping the main fillet cylindrical. Exact end curves preserve neighboring
-  faces, and crease fans retain their existing sharp meeting. Shared projections check
-  that transition domains do not overlap; boundary position, tangency and control-hull
-  bounds are checked before accepting a patch. Transition interiors minimize bending
+  faces. Fan patches share one boundary spline and tangent plane along each internal
+  join; isolated singular tips preserve the neighboring faces' distinct limiting normals.
+  Projected-Jacobian and control-hull certificates reject folded or protruding fills.
+  Shared projections also check that transition domains do not overlap; boundary
+  position and tangency are checked before accepting a patch. Transition interiors minimize bending
   instead of fitting a faceted guide, with an interior concavity/normal regression.
   Non-cylindrical ends, folded domains and
   transitions outside these conservative bounds still return an error;

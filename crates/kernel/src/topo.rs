@@ -253,10 +253,41 @@ fn find(p: &mut [usize], mut i: usize) -> usize {
     i
 }
 
+/// A corner fill can have different directional limits at its isolated tip.
+/// Classify the shared edge by its interior tangent planes, rather than the
+/// arbitrary normal chosen for the single display vertex at that tip.
+fn tangent_patches(a: &truck_modeling::Surface, b: &truck_modeling::Surface, edge: &truck_modeling::Edge, tolerance: f64) -> bool {
+    use truck_modeling::{BoundedCurve, ParametricCurve, ParametricSurface, ParametricSurface3D, SearchNearestParameter};
+    let quintic = |s: &truck_modeling::Surface| matches!(s,truck_modeling::Surface::BSplineSurface(p) if p.degrees()==(5,5));
+    if !quintic(a) || !quintic(b) {
+        return false;
+    }
+    let (a, b) = (crate::body::evaluation::Surface(a.clone()), crate::body::evaluation::Surface(b.clone()));
+    let curve = edge.curve();
+    let (lo, hi) = curve.range_tuple();
+    (1..32).all(|i| {
+        let p = curve.subs(lo + (hi - lo) * i as f64 / 32.0);
+        let normal = |s: &crate::body::evaluation::Surface| {
+            let (u, v) = s.search_nearest_parameter(p, None, 50)?;
+            if from_p3(s.subs(u, v)).dist(from_p3(p)) > tolerance {
+                return None;
+            }
+            let n = s.normal(u, v);
+            let n = Vec3::new(n.x, n.y, n.z);
+            n.is_finite().then_some(n)
+        };
+        match (normal(&a), normal(&b)) {
+            (Some(x), Some(y)) => x.dot(y) > 0.02_f64.to_radians().cos(),
+            _ => false,
+        }
+    })
+}
+
 /// Per edge (in `Body::edges` order): is it a seam between two pieces of the same surface?
 pub fn seam_flags(b: &Body, mesh: &Mesh) -> Vec<bool> {
     let solid = &*b.solid;
-    let nf = solid.face_iter().count();
+    let faces: Vec<_> = solid.face_iter().collect();
+    let nf = faces.len();
     let tol = (b.size() * 1e-4).max(1e-6);
     let surfs = classify_faces(b, mesh, nf, tol);
     let verts = face_vertices(mesh, nf);
@@ -284,6 +315,15 @@ pub fn seam_flags(b: &Body, mesh: &Mesh) -> Vec<bool> {
             Some([a, b2]) => {
                 (!matches!(surfs.get(*a), Some(Surf::Plane { .. })) && same_surface(&surfs, &verts, mesh.edges.get(ei), *a, *b2, tol * 10.0))
                     || (surf_keys.get(*a).is_some_and(|k| Some(k) == surf_keys.get(*b2)) && !matches!(surfs.get(*a), Some(Surf::Plane { .. })))
+                    || (!matches!(surfs.get(*a), Some(Surf::Plane { .. }))
+                        && !matches!(surfs.get(*b2), Some(Surf::Plane { .. }))
+                        && match (faces.get(*a), faces.get(*b2)) {
+                            (Some(a), Some(b)) => a
+                                .edge_iter()
+                                .find(|e| format!("{:?}", e.id()) == *k)
+                                .is_some_and(|edge| tangent_patches(&a.oriented_surface(), &b.oriented_surface(), &edge, tol * 0.01)),
+                            _ => false,
+                        })
             }
             _ => false,
         })
@@ -680,4 +720,38 @@ pub fn cylinder_face_at(b: &Body, p: Vec3) -> Option<CylinderFace> {
         }
     }
     Some(CylinderFace { axis_point: ap, axis, radius: r, start: lo, end: hi, internal: inward < 0.0 })
+}
+
+#[cfg(test)]
+mod seam_tests {
+    use super::*;
+    use truck_modeling as mt;
+
+    #[test]
+    fn tangent_patch_join_does_not_hide_a_crease() {
+        let surface = |right: bool, slope: f64| {
+            let knots = mt::KnotVec::bezier_knot(5);
+            let ctrl = (0_usize..6)
+                .map(|i| {
+                    (0_usize..6)
+                        .map(|j| {
+                            let u = i as f64 / 5.0;
+                            let square = (i * (i.saturating_sub(1))) as f64 / 20.0;
+                            mt::Point3::new(
+                                u + if right { 1.0 } else { 0.0 },
+                                j as f64 / 5.0,
+                                if right { square + slope * u } else { 1.0 - 2.0 * u + square },
+                            )
+                        })
+                        .collect()
+                })
+                .collect();
+            mt::Surface::BSplineSurface(mt::BSplineSurface::new((knots.clone(), knots), ctrl))
+        };
+        let a = mt::Point3::new(1.0, 0.0, 0.0);
+        let b = mt::Point3::new(1.0, 1.0, 0.0);
+        let edge = mt::Edge::try_new(&mt::builder::vertex(a), &mt::builder::vertex(b), mt::Curve::Line(mt::Line(a, b))).unwrap();
+        assert!(tangent_patches(&surface(false, 0.0), &surface(true, 0.0), &edge, 1e-6));
+        assert!(!tangent_patches(&surface(false, 0.0), &surface(true, 0.02), &edge, 1e-6));
+    }
 }

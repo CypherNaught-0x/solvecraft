@@ -1,5 +1,5 @@
-//! Continue an existing crease through a local patch fan. Both sides meet the
-//! primary cylinder smoothly; each patch meets its own old end face smoothly.
+//! Join an endpoint fan with common boundary splines and tangent planes.
+//! Isolated singular tips accommodate the old faces' different limiting normals.
 
 use super::*;
 
@@ -50,42 +50,28 @@ pub(super) fn build(
         let ds = -axis * length;
         // Use the actual adjacent surface normals, not the derivative of an
         // approximated intersection spline, for the crease's terminal frame.
-        let normal = |index: usize| -> Result<(Vec3, crate::offset::Surf)> {
+        let normal = |index: usize| -> Result<Vec3> {
             let (_, fi) = fan.get(index).ok_or_else(|| unsupported("transition seam face"))?;
             let face = faces.get(*fi).ok_or_else(|| unsupported("transition seam face"))?;
             let surface = face.oriented_surface();
             let (u, v) = surface.search_nearest_parameter(point.point(), None, 100).ok_or_else(|| unsupported("transition seam parameters"))?;
             let n = surface.normal(u, v);
-            let analytic = crate::offset::surf_of(face, size * 1e-8).ok_or_else(|| unsupported("transition seam curvature"))?;
-            Ok((Vec3::new(n.x, n.y, n.z), analytic))
+            Ok(Vec3::new(n.x, n.y, n.z))
         };
-        let (na, first) = normal(i - 1)?;
-        let (nb, second) = normal(i)?;
-        let mut tangent = na.cross(nb).normalized().ok_or_else(|| unsupported("tangent transition crease faces"))?;
-        if tangent.dot(d) < 0.0 {
+        let na = normal(i - 1)?;
+        let nb = normal(i)?;
+        let common = (na + nb).normalized().ok_or_else(|| unsupported("opposite terminal normals"))?;
+        let chord = end - start;
+        let mut tangent = (chord - common * chord.dot(common)).normalized().ok_or_else(|| unsupported("terminal direction"))?;
+        if tangent.dot(end - start) < 0.0 {
             tangent = -tangent;
         }
-        let normal_curvature = |surface: crate::offset::Surf| -> Result<f64> {
-            match surface {
-                crate::offset::Surf::Plane { .. } => Ok(0.0),
-                crate::offset::Surf::Cylinder { a, r, convex, .. } => Ok(-(if convex { 1.0 } else { -1.0 }) * (1.0 - tangent.dot(a).powi(2)) / r),
-                _ => Err(unsupported("transition seam curvature")),
-            }
-        };
-        let (ka, kb) = (normal_curvature(first)?, normal_curvature(second)?);
-        let dot = na.dot(nb);
-        let denominator = 1.0 - dot * dot;
-        if denominator <= 1e-8 {
-            return Err(unsupported("nearly tangent transition crease faces"));
-        }
-        let curvature = na * ((ka - dot * kb) / denominator) + nb * ((kb - dot * ka) / denominator);
         let mut end_length = length;
         let mut controls = [start; 6];
         let mut bounded = false;
         for _ in 0..16 {
             let de = tangent * end_length;
-            let dde = curvature * (end_length * end_length);
-            controls = [start, start + ds / 5.0, start + ds * 0.4, end - de * 0.4 + dde / 20.0, end - de / 5.0, end];
+            controls = [start, start + ds / 5.0, start + ds * 0.4, end - de * 0.4, end - de / 5.0, end];
             if controls.iter().all(|p| p.is_finite() && planes.iter().all(|(n, q)| (*p - *q).dot(*n) <= size * 1e-8)) {
                 bounded = true;
                 break;
@@ -113,8 +99,7 @@ pub(super) fn build(
         let edge = mt::Edge::try_new(a, b, trim(curve.clone(), *lo, *hi)).map_err(|e| KernelError::Failed(format!("transition arc: {e}")))?;
         let end = wire.get(i + 2).ok_or_else(|| unsupported("transition end boundary"))?;
         let end_normal = boundaries.get(i + 2).ok_or_else(|| unsupported("transition end normal"))?.normal.clone();
-        let (_, fi) = fan.get(i).ok_or_else(|| unsupported("transition fan end face"))?;
-        let face = faces.get(*fi).ok_or_else(|| unsupported("transition fan end face"))?;
+
         let seam_normal = |seam: &mt::Edge, index: usize, reverse: bool| -> Result<Normal> {
             if index == 0 {
                 return Ok(boundaries.get(1).ok_or_else(|| unsupported("transition rail normal"))?.normal.clone());
@@ -123,25 +108,26 @@ pub(super) fn build(
                 return Ok(boundaries.last().ok_or_else(|| unsupported("transition rail normal"))?.normal.clone());
             }
             let c = seam.oriented_curve();
-            let (a, b) = c.range_tuple();
+            let (a, _b) = c.range_tuple();
             let boundary = Boundary { curve: c.clone(), normal: cylinder.clone() };
             let n0 = boundary.sample(a)?.1;
-            let p = from_p3(c.subs(b));
-            let d = c.der(b);
-            let d = Vec3::new(d.x, d.y, d.z) * (b - a);
-            let surface = face.oriented_surface();
-            let (u, v) = surface.search_nearest_parameter(p3(p), None, 100).ok_or_else(|| unsupported("transition fan normal"))?;
-            let n = surface.normal(u, v);
-            let n1 = Vec3::new(n.x, n.y, n.z);
-            let derivative = match crate::offset::surf_of(face, size * 1e-8) {
-                Some(crate::offset::Surf::Plane { .. }) => Vec3::ZERO,
-                Some(crate::offset::Surf::Cylinder { a, r, convex, .. }) => (d - a * d.dot(a)) * (if convex { 1.0 } else { -1.0 } / r),
-                _ => return Err(unsupported("transition fan end curvature")),
+            let terminal_normal = |which: usize| -> Result<Vec3> {
+                let (_, fi) = fan.get(which).ok_or_else(|| unsupported("fan face"))?;
+                let face = faces.get(*fi).ok_or_else(|| unsupported("fan face"))?;
+                let surface = face.oriented_surface();
+                let (u, v) = surface.search_nearest_parameter(seam.back().point(), None, 100).ok_or_else(|| unsupported("fan terminal normal"))?;
+                let n = surface.normal(u, v);
+                Ok(Vec3::new(n.x, n.y, n.z))
             };
+            let mut n1 =
+                (terminal_normal(index - 1)? + terminal_normal(index)?).normalized().ok_or_else(|| unsupported("opposite terminal normals"))?;
+            if n1.dot(out) < 0.0 {
+                n1 = -n1;
+            }
             Ok(if reverse {
-                Normal::Hermite { start: n1, end: n0, start_der: -derivative, end_der: Vec3::ZERO }
+                Normal::Hermite { start: n1, end: n0, start_der: Vec3::ZERO, end_der: Vec3::ZERO }
             } else {
-                Normal::Hermite { start: n0, end: n1, start_der: Vec3::ZERO, end_der: derivative }
+                Normal::Hermite { start: n0, end: n1, start_der: Vec3::ZERO, end_der: Vec3::ZERO }
             })
         };
         let conditions = [
@@ -150,12 +136,66 @@ pub(super) fn build(
             Boundary { curve: end.oriented_curve(), normal: end_normal },
             Boundary { curve: sb.oriented_curve().inverse(), normal: seam_normal(sb, i + 1, true)? },
         ];
-        pieces.push((vec![edge.inverse(), sa.clone(), end.clone(), sb.inverse()], conditions));
+        pieces.push((vec![edge.inverse(), sa.clone(), end.clone(), sb.inverse()], conditions, [i > 0, i + 2 < points.len()]));
         sections.push(edge);
     }
-    crate::blend_corner::setback::partition::check(&pieces.iter().map(|(wire, _)| wire.clone()).collect::<Vec<_>>(), out, size)?;
-    for (wire, conditions) in pieces {
-        let surface = crate::blend_corner::setback::transition(&conditions, out, size, planes)?;
+    crate::blend_corner::setback::partition::check(&pieces.iter().map(|(wire, _, _)| wire.clone()).collect::<Vec<_>>(), out, size)?;
+    let mut fitted = Vec::new();
+    for density in [20, 32, 40, 56] {
+        let attempt = pieces
+            .iter()
+            .map(|(wire, conditions, singular)| {
+                crate::blend_corner::setback::parametric::fit(conditions, *singular, out, size, planes, density)
+                    .map(|surface| (wire.clone(), surface))
+            })
+            .collect::<Result<Vec<_>>>();
+        if let Ok(value) = attempt {
+            fitted = value;
+            break;
+        }
+    }
+    if fitted.is_empty() {
+        return Err(unsupported("cannot fit a common fan boundary grid"));
+    }
+    let boundary_curve = |surface: &mt::Surface, edge: &mt::Edge| -> Result<mt::Curve> {
+        let mt::Surface::BSplineSurface(s) = surface else {
+            return Err(unsupported("fan spline"));
+        };
+        let nu = s.control_points().len();
+        let nv = s.control_points().first().map_or(0, Vec::len);
+        if nu == 0 || nv == 0 {
+            return Err(unsupported("fan control net"));
+        }
+        for c in [s.row_curve(0), s.row_curve(nv - 1), s.column_curve(0), s.column_curve(nu - 1)] {
+            for c in [c.clone(), c.inverse()] {
+                let (a, b) = c.range_tuple();
+                if from_p3(c.subs(a)).dist(vtx(edge.front())) < 1e-7 && from_p3(c.subs(b)).dist(vtx(edge.back())) < 1e-7 {
+                    return Ok(mt::Curve::BSplineCurve(c));
+                }
+            }
+        }
+        Err(unsupported("fan boundary correspondence"))
+    };
+    for i in 1..fitted.len() {
+        let edge = seams.get(i).ok_or_else(|| unsupported("fan seam"))?;
+        let ca = boundary_curve(&fitted[i - 1].1, edge)?;
+        let cb = boundary_curve(&fitted[i].1, edge)?;
+        let (mt::Curve::BSplineCurve(a), mt::Curve::BSplineCurve(b)) = (&ca, &cb) else {
+            return Err(unsupported("fan boundary spline"));
+        };
+        if a.knot_vec().len() != b.knot_vec().len()
+            || a.control_points().len() != b.control_points().len()
+            || a.knot_vec().iter().zip(b.knot_vec().iter()).any(|(a, b)| (a - b).abs() > 1e-14)
+            || a.control_points().iter().zip(b.control_points()).any(|(a, b)| from_p3(*a).dist(from_p3(*b)) > 1e-8)
+        {
+            return Err(unsupported("fan boundary control hulls disagree"));
+        }
+        let seam = mt::Edge::try_new(edge.front(), edge.back(), ca).map_err(|e| KernelError::Failed(format!("fan seam: {e}")))?;
+        fitted[i - 1].0[3] = seam.inverse();
+        fitted[i].0[1] = seam;
+    }
+    crate::blend_corner::setback::partition::check(&fitted.iter().map(|(wire, _)| wire.clone()).collect::<Vec<_>>(), out, size)?;
+    for (wire, surface) in fitted {
         patches.push(mt::Face::try_new(vec![wire.into()], surface).map_err(|e| KernelError::Failed(format!("transition fan patch: {e}")))?);
     }
     Ok((sections, patches))

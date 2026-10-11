@@ -537,7 +537,7 @@ mod tests {
         assert!(out.validity().is_empty());
         assert_eq!(out.unmeshed_faces(), 0);
         for f in out.solid.face_iter() {
-            let s = f.surface();
+            let s = crate::body::evaluation::Surface(f.surface());
             for e in f.edge_iter() {
                 let c = e.curve();
                 let (a, b) = c.range_tuple();
@@ -545,8 +545,18 @@ mod tests {
                 for j in 0..=16 {
                     let q = c.subs(a + (b - a) * j as f64 / 16.0);
                     let (u, v) = s.search_nearest_parameter(q, hint, 100).unwrap();
+                    // A continuation seed can leave the bounded spline domain.
+                    // Independently retry projection before checking the actual gap.
+                    let (u, v) =
+                        if from_p3(s.subs(u, v)).dist(from_p3(q)) >= 1e-4 { s.search_nearest_parameter(q, None, 100).unwrap() } else { (u, v) };
                     hint = Some((u, v));
-                    assert!(from_p3(s.subs(u, v)).dist(from_p3(q)) < 1e-4, "boundary off face");
+                    assert!(
+                        from_p3(s.subs(u, v)).dist(from_p3(q)) < 1e-4,
+                        "boundary off face: sample {j} uv=({u},{v}), gap={}, spline={}, fresh={:?}",
+                        from_p3(s.subs(u, v)).dist(from_p3(q)),
+                        matches!(s.0, mt::Surface::BSplineSurface(_)),
+                        s.search_nearest_parameter(q, None, 100)
+                    );
                 }
             }
         }
@@ -695,25 +705,52 @@ mod tests {
         for patch in out.solid.face_iter().filter(|f| matches!(f.surface(), mt::Surface::BSplineSurface(_))) {
             for edge in patch.edge_iter() {
                 let neighbor = out.solid.face_iter().find(|f| f.id() != patch.id() && f.edge_iter().any(|e| e.id() == edge.id())).unwrap();
-                if matches!(neighbor.surface(), mt::Surface::BSplineSurface(_))
-                    || (plane_normal(neighbor).is_some() && !matches!(edge.curve(), mt::Curve::Line(_)))
-                {
+                if plane_normal(neighbor).is_some() && !matches!(edge.curve(), mt::Curve::Line(_)) {
                     continue;
                 }
                 let curve = edge.curve();
                 let (a, b) = curve.range_tuple();
                 let (mut patch_hint, mut neighbor_hint) = (None, None);
                 for i in 0..=32 {
-                    let p = curve.subs(a + (b - a) * i as f64 / 32.0);
+                    // At a singular corner the normal is direction-dependent. Check
+                    // each boundary's limiting direction close to both endpoints.
+                    let mut fraction = i as f64 / 32.0;
+                    if i == 0 || i == 32 {
+                        // Cubically reparameterized edges have almost no physical
+                        // separation from their pole at a fixed parameter epsilon.
+                        let start = curve.subs(if i == 0 { a } else { b });
+                        let length = from_p3(curve.subs(a)).dist(from_p3(curve.subs(b)));
+                        let (mut low, mut high) = (0.0, 1.0);
+                        for _ in 0..40 {
+                            let mid = (low + high) * 0.5;
+                            let f = if i == 0 { mid } else { 1.0 - mid };
+                            if from_p3(curve.subs(a + (b - a) * f)).dist(from_p3(start)) < length * 1e-4 {
+                                low = mid;
+                            } else {
+                                high = mid;
+                            }
+                        }
+                        fraction = if i == 0 { high } else { 1.0 - high };
+                    }
+                    let p = curve.subs(a + (b - a) * fraction);
                     let normal = |f: &mt::Face, hint: &mut Option<(f64, f64)>| {
-                        let s = f.oriented_surface();
+                        let s = crate::body::evaluation::Surface(f.oriented_surface());
                         let (u, v) = s.search_nearest_parameter(p, *hint, 100).unwrap();
+                        let (u, v) =
+                            if from_p3(s.subs(u, v)).dist(from_p3(p)) >= 1e-4 { s.search_nearest_parameter(p, None, 100).unwrap() } else { (u, v) };
+                        assert!(from_p3(s.subs(u, v)).dist(from_p3(p)) < 1e-4);
                         *hint = Some((u, v));
                         let n = s.normal(u, v);
                         Vec3::new(n.x, n.y, n.z)
                     };
                     let angle = normal(patch, &mut patch_hint).dot(normal(neighbor, &mut neighbor_hint)).clamp(-1.0, 1.0).acos().to_degrees();
-                    assert!(angle < 0.02, "transition kink {angle} degrees");
+                    assert!(
+                        angle < 0.02,
+                        "transition kink {angle} degrees at {fraction}, point {p:?}, parameters {patch_hint:?}/{neighbor_hint:?}, edge endpoints {:?}/{:?}, spline neighbor {}",
+                        edge.front().point(),
+                        edge.back().point(),
+                        matches!(neighbor.surface(), mt::Surface::BSplineSurface(_))
+                    );
                 }
             }
         }
@@ -747,6 +784,42 @@ mod tests {
                 check_transition_tangency(&out);
             }
         }
+    }
+
+    #[test]
+    fn transition_internal_seams_are_tangent() {
+        let mut body = shallow_basin();
+        let rim = [Vec3::new(45.0, 1.8, 16.0), Vec3::new(45.0, 45.0, 16.0), Vec3::new(15.0, 23.4, 16.0), Vec3::new(75.0, 23.4, 16.0)];
+        body = crate::fillet(&body, &rim, 0.3).unwrap();
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        for p in [
+            Vec3::new(15.0 + inset, 40.0 - inset, 4.0),
+            Vec3::new(75.0 - inset, 40.0 - inset, 4.0),
+            Vec3::new(45.0, 45.0 - inset, 4.0),
+            Vec3::new(45.0, 35.0 - inset, 4.0),
+        ] {
+            body = check(&body, p, 1.5);
+        }
+        body = check_geometry(&body, Vec3::new(15.0 + inset * 0.5, 45.0 - inset * 0.5, 10.0), 1.5);
+        check_transition_tangency(&body);
+        let mesh = body.display_mesh(0.01).unwrap();
+        let mut seen = std::collections::HashSet::new();
+        let mut index = 0;
+        let mut joins = 0;
+        for face in body.solid.face_iter() {
+            for edge in face.edge_iter() {
+                if !seen.insert(edge.id()) {
+                    continue;
+                }
+                let adjacent: Vec<_> = body.solid.face_iter().filter(|f| f.edge_iter().any(|e| e.id() == edge.id())).collect();
+                if adjacent.len() == 2 && adjacent.iter().all(|f| matches!(f.surface(),mt::Surface::BSplineSurface(s) if s.degrees()==(5,5))) {
+                    assert!(mesh.seams[index], "a smooth internal fan seam is still drawn");
+                    joins += 1;
+                }
+                index += 1;
+            }
+        }
+        assert!(joins > 0);
     }
 
     #[test]
