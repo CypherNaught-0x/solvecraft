@@ -484,10 +484,15 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
                 .collect::<Vec<_>>()
         };
         let mut limits = Vec::new();
-        for ((bu, dbu, ddbu), wu, u) in &quadrature(&ku, nu)? {
-            for ((bv, dbv, ddbv), wv, v) in &quadrature(&kv, nv)? {
-                if inside(*u, *v) {
-                    if radii.is_some() && boundaries.len() == 6 {
+        let qu = quadrature(&ku, nu)?;
+        let qv = quadrature(&kv, nv)?;
+        for ((bu, dbu, ddbu), wu, u) in &qu {
+            for ((bv, dbv, ddbv), wv, v) in &qv {
+                // Transition fits use only the hull-certificate constraints below.
+                // Do not scan their densely sampled trim polygon or build thousands
+                // of collocation rows that the active-set loop never consumes.
+                if radii.is_some() && inside(*u, *v) {
+                    if boundaries.len() == 6 {
                         rows.push(tensor(bu, bv, 0.1 * (wu * wv).sqrt(), guide(*u, *v)));
                     }
                     let base = origin + x * (du * u) + y * (dv * v);
@@ -554,6 +559,10 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
             );
             let mut worst: f64 = 0.0;
             let mut kink: f64 = 0.0;
+            // The same surface and derivative conventions as display meshing,
+            // but visiting only the nonzero spline basis support. Dense evaluation
+            // here multiplies every boundary sample by the entire control net.
+            let evaluation = crate::body::evaluation::Surface(surface.clone());
             for boundary in boundaries {
                 let (a, b) = boundary.curve.range_tuple();
                 let count = if radii.is_some() { 513 } else { 1537 };
@@ -561,8 +570,8 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
                     let (p, normal) = boundary.sample(a + (b - a) * i as f64 / count as f64)?;
                     let q = p - origin;
                     let (u, v) = (q.dot(x) / du, q.dot(y) / dv);
-                    let point = from_p3(surface.subs(u, v));
-                    let nn = surface.normal(u, v);
+                    let point = from_p3(evaluation.subs(u, v));
+                    let nn = evaluation.normal(u, v);
                     let nn = Vec3::new(nn.x, nn.y, nn.z);
                     if !point.is_finite() || !nn.is_finite() {
                         return Err(unsupported("non-finite setback surface"));
