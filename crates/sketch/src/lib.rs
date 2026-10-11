@@ -15,6 +15,7 @@ mod linalg;
 mod link;
 mod model;
 mod offset;
+mod offset_topology;
 mod periodic;
 mod profiles;
 mod shape;
@@ -31,8 +32,9 @@ pub use freeform_offset::{FreeformOffset, OFFSET_TOLERANCE};
 pub use link::{Link, LinkGeom, LinkKind, LinkSource, MAX_LINK_ENTITIES};
 pub use model::{Constraint, ConstraintKind, Curve, CurveKind, SPoint, Sketch, SketchError, SketchView};
 pub use offset::OffsetChain;
+pub use offset_topology::{OffsetCreated, OffsetRole, OffsetRoleFlags, OffsetRoleKind, OffsetTopology};
 pub use periodic::periodic_beziers;
-pub use profiles::{Profile, find_drawn_profiles, find_profiles, merge_regions};
+pub use profiles::{CurvePick, Profile, distinct_curves, find_drawn_profiles, find_profiles, merge_regions, profile_at_point, profile_by_curves};
 pub use shape::{Shape, intersections};
 pub use solver::{Hold, SolveReport, SolveStatus, measure_dimension, solve, solve_holding};
 pub use text::{MAX_TEXT_CHARS, text_geometry};
@@ -40,3 +42,6 @@ pub use wire::{MAX_FIT_POINTS, MAX_WIRE_POINTS, Wire, WireSpace, fit_polyline};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod virtual_corner_tests;

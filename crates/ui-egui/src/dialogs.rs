@@ -1263,7 +1263,7 @@ fn auto_operation(app: &SolveApp, d: &mut Dialog) {
 }
 
 /// Show the active dialog (if any), docked flush to the right edge of the viewport just below
-/// the view cube, sized to its content.
+/// the axis view, sized to its content.
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
     let _language = crate::i18n::scope(&app.preferences.language);
@@ -1272,7 +1272,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     update_fill_cells(app, &mut d);
     let t = Tokens::get();
     let vp = app.viewport.rect.unwrap_or_else(|| ctx.content_rect());
-    let anchor = egui::pos2(vp.right(), vp.top() + crate::viewport::VIEW_CUBE_CLEARANCE);
+    let anchor = egui::pos2(vp.right(), vp.top() + crate::viewport::AXIS_VIEW_CLEARANCE);
     let mut keep = true;
     let mut ok = false;
     let mut applied = false;
@@ -2923,19 +2923,16 @@ pub(crate) fn profile_indices(ss: &solvecraft_engine::doc::SolvedSketch, sel: &P
     match sel {
         ProfileSel::All => (0..ps.len()).collect(),
         ProfileSel::Indices { indices } => indices.iter().copied().filter(|i| *i < ps.len()).collect(),
+        ProfileSel::OffsetBoundaries { .. } | ProfileSel::WholeBoundaries { .. } => {
+            solvecraft_engine::doc::profile_selection_indices(ss, sel).unwrap_or_default()
+        }
         ProfileSel::Curves { loops } => loops
             .iter()
             .filter_map(|l| {
-                let mut want: Vec<&String> = l.iter().collect();
-                want.sort();
-                ps.iter().position(|p| {
-                    let mut have: Vec<&String> = p.outer_curves.iter().collect();
-                    have.sort();
-                    have == want
-                })
+                solvecraft_engine::doc::profile_selection_indices(ss, &ProfileSel::Curves { loops: vec![l.clone()] }).ok()?.first().copied()
             })
             .collect(),
-        ProfileSel::Points { points } => points.iter().filter_map(|q| ps.iter().position(|p| p.region.contains(*q))).collect(),
+        ProfileSel::Points { points } => points.iter().filter_map(|q| solvecraft_engine::doc::sketch::profile_at_point(ps, *q)).collect(),
     }
 }
 
