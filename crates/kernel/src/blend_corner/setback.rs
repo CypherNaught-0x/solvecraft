@@ -4,6 +4,7 @@
 
 use super::*;
 mod bounds;
+pub(crate) mod parametric;
 pub(crate) mod partition;
 mod reference;
 use crate::body::from_p3;
@@ -36,7 +37,15 @@ impl Boundary {
                     + start_der * (u * u * u - 2.0 * u * u + u)
                     + end_der * (u * u * u - u * u);
                 let d = self.curve.der(t);
-                let tangent = Vec3::new(d.x, d.y, d.z).normalized().ok_or_else(|| unsupported("singular transition seam tangent"))?;
+                let direction = Vec3::new(d.x, d.y, d.z);
+                let chord = from_p3(self.curve.subs(hi)).dist(from_p3(self.curve.subs(lo))) / (hi - lo);
+                // A stationary endpoint has no unique curve tangent. Its
+                // explicitly supplied limiting normal remains well-defined.
+                let tangent = if (t == lo || t == hi) && direction.len() < chord * 1e-8 {
+                    Vec3::ZERO
+                } else {
+                    direction.normalized().ok_or_else(|| unsupported("singular transition seam tangent"))?
+                };
                 (n - tangent * n.dot(tangent)).normalized().ok_or_else(|| unsupported("singular transition seam normal"))?
             }
             Normal::Plane(n) => n,

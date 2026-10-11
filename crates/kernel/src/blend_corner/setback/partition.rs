@@ -148,9 +148,24 @@ pub(crate) fn check(wires: &[Vec<mt::Edge>], direction: Vec3, size: f64) -> Resu
         let mut polygon = Vec::new();
         for edge in wire {
             let curve = edge.oriented_curve();
+            let bounded = match &curve {
+                mt::Curve::Line(_) => true,
+                mt::Curve::BSplineCurve(c) => c.control_points().len() <= 256 && c.degree() <= 7,
+                mt::Curve::NurbsCurve(c) => c.control_points().len() <= 256 && c.degree() <= 7,
+                _ => false,
+            };
+            if !bounded {
+                return Err(unsupported("patch partition curve budget"));
+            }
             let (lo, hi) = curve.range_tuple();
+            if !lo.is_finite() || !hi.is_finite() || hi <= lo {
+                return Err(unsupported("invalid patch partition range"));
+            }
             for i in 0..512 {
                 let p = from_p3(curve.subs(lo + (hi - lo) * i as f64 / 512.0));
+                if !p.is_finite() {
+                    return Err(unsupported("invalid patch boundary point"));
+                }
                 polygon.push((p.dot(x), p.dot(y)));
             }
             if let Some(forward) = directions.get(&edge.id()) {
@@ -160,42 +175,72 @@ pub(crate) fn check(wires: &[Vec<mt::Edge>], direction: Vec3, size: f64) -> Resu
                 continue;
             }
             directions.insert(edge.id(), edge.orientation());
-            let controls: Vec<mt::Vector4> = match edge.curve() {
-                mt::Curve::Line(line) => [line.0, line.1].into_iter().map(|p| mt::Vector4::new(p.x, p.y, p.z, 1.0)).collect(),
-                mt::Curve::BSplineCurve(c) if c.control_points().len() == c.degree() + 1 => {
-                    c.control_points().iter().map(|p| mt::Vector4::new(p.x, p.y, p.z, 1.0)).collect()
+            let (knots, controls): (mt::KnotVec, Vec<mt::Vector4>) = match edge.curve() {
+                mt::Curve::Line(line) => {
+                    (mt::KnotVec::bezier_knot(1), [line.0, line.1].into_iter().map(|p| mt::Vector4::new(p.x, p.y, p.z, 1.0)).collect())
                 }
-                mt::Curve::NurbsCurve(c) if c.control_points().len() == c.degree() + 1 => c.control_points().clone(),
-                _ => return Err(unsupported("non-Bezier patch partition boundary")),
+                mt::Curve::BSplineCurve(c) => {
+                    (c.knot_vec().clone(), c.control_points().iter().map(|p| mt::Vector4::new(p.x, p.y, p.z, 1.0)).collect())
+                }
+                mt::Curve::NurbsCurve(c) => (c.knot_vec().clone(), c.control_points().clone()),
+                _ => return Err(unsupported("unsupported patch partition boundary")),
             };
-            let mut projected = Vec::new();
-            for p in controls {
-                if !p.w.is_finite() || p.w <= 0.0 {
-                    return Err(unsupported("invalid patch partition weight"));
-                }
-                let q = Vec3::new(p.x, p.y, p.z);
-                if !q.is_finite() {
-                    return Err(unsupported("invalid patch partition point"));
-                }
-                let h = H::new(q.dot(x), q.dot(y), p.w);
-                let (u, v) = point(h);
-                if !u.is_finite() || !v.is_finite() {
-                    return Err(unsupported("invalid projected patch point"));
-                }
-                projected.push(h);
+            let degree = knots.len().checked_sub(controls.len() + 1).ok_or_else(|| unsupported("patch boundary degree"))?;
+            if controls.len() > 256
+                || !(1..=7).contains(&degree)
+                || knots.iter().any(|k| !k.is_finite())
+                || knots.windows(2).any(|w| matches!(w,[a,b] if a>b))
+                || controls.iter().any(|p| !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() || !p.w.is_finite() || p.w <= 0.0)
+            {
+                return Err(unsupported("invalid patch partition curve"));
             }
-            simple(projected.clone(), tol, &mut budget)?;
-            arcs.push((edge.clone(), projected));
+            let spline = mt::BSplineCurve::try_new(knots, controls).map_err(|e| KernelError::Failed(format!("partition spline: {e}")))?;
+            for (span, bezier) in spline.bezier_decomposition().into_iter().enumerate() {
+                if bezier.control_points().len() != degree + 1 || arcs.len() >= 4096 {
+                    return Err(unsupported("patch partition span budget"));
+                }
+                let mut projected = Vec::new();
+                for p in bezier.control_points() {
+                    if !p.w.is_finite() || p.w <= 0.0 {
+                        return Err(unsupported("invalid patch partition weight"));
+                    }
+                    let q = Vec3::new(p.x, p.y, p.z);
+                    if !q.is_finite() {
+                        return Err(unsupported("invalid patch partition point"));
+                    }
+                    let h = H::new(q.dot(x), q.dot(y), p.w);
+                    let (u, v) = point(h);
+                    if !u.is_finite() || !v.is_finite() {
+                        return Err(unsupported("invalid projected patch point"));
+                    }
+                    projected.push(h);
+                }
+                simple(projected.clone(), tol, &mut budget)?;
+                arcs.push((edge.clone(), span, projected));
+            }
         }
         polygons.push(polygon);
     }
-    for (i, (a, ac)) in arcs.iter().enumerate() {
-        for (b, bc) in arcs.iter().skip(i + 1) {
+    for (i, (a, ai, ac)) in arcs.iter().enumerate() {
+        for (b, bi, bc) in arcs.iter().skip(i + 1) {
             let mut shared = Vec::new();
-            for v in [a.front(), a.back()] {
-                if v == b.front() || v == b.back() {
-                    let p = crate::blend::vtx(v);
-                    shared.push((p.dot(x), p.dot(y)));
+            if a.id() == b.id() {
+                // Adjacent spans share a virtual knot vertex. Nonadjacent spans
+                // of the same edge must still be checked for self-intersection.
+                if ai + 1 == *bi {
+                    let p = point(*ac.last().ok_or_else(|| unsupported("empty partition span"))?);
+                    let q = point(*bc.first().ok_or_else(|| unsupported("empty partition span"))?);
+                    if (p.0 - q.0).hypot(p.1 - q.1) > tol * 0.1 {
+                        return Err(unsupported("discontinuous patch partition boundary"));
+                    }
+                    shared.push(p);
+                }
+            } else {
+                for v in [a.front(), a.back()] {
+                    if v == b.front() || v == b.back() {
+                        let p = crate::blend::vtx(v);
+                        shared.push((p.dot(x), p.dot(y)));
+                    }
                 }
             }
             separate(ac.clone(), bc.clone(), &shared, tol, &mut budget)?;
@@ -260,6 +305,25 @@ mod tests {
         assert!(check(&[square, nested], Vec3::Z, 4.0).is_err());
         assert!(check(&[polygon(&[(0.0, 0.0), (2.0, 2.0), (0.0, 2.0), (2.0, 0.0)])], Vec3::Z, 4.0).is_err());
     }
+    #[test]
+    fn spline_spans_are_checked_against_each_other_and_the_other_edges() {
+        let with_spline = |points: &[(f64, f64)]| {
+            let mut wire = polygon(&[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)]);
+            let mut knots = vec![0.0, 0.0];
+            knots.extend((1..points.len() - 1).map(|i| i as f64 / (points.len() - 1) as f64));
+            knots.extend([1.0, 1.0]);
+            let curve = mt::Curve::BSplineCurve(mt::BSplineCurve::new(
+                mt::KnotVec::from(knots),
+                points.iter().map(|(x, y)| p3(Vec3::new(*x, *y, 0.0))).collect(),
+            ));
+            wire[0] = mt::Edge::try_new(wire[0].front(), wire[0].back(), curve).unwrap();
+            wire
+        };
+        check(&[with_spline(&[(0.0, 0.0), (0.5, 0.0), (1.5, 0.0), (2.0, 0.0)])], Vec3::Z, 4.0).unwrap();
+        assert!(check(&[with_spline(&[(0.0, 0.0), (1.0, 3.0), (1.0, -1.0), (2.0, 0.0)])], Vec3::Z, 4.0).is_err());
+        assert!(check(&[with_spline(&[(0.0, 0.0), (1.0, 1.0), (0.0, 1.0), (1.0, 0.0), (2.0, 0.0)])], Vec3::Z, 4.0).is_err());
+    }
+
     #[test]
     fn adjacent_domains_share_only_their_common_edge() {
         let left = polygon(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]);
