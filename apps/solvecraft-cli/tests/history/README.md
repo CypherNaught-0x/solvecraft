@@ -1,0 +1,43 @@
+# Small editable history fixtures
+
+These nine designs and their JSON command recipes are original SolveCraft test
+data. They were authored through SolveCraft commands; no Fusion-produced file is
+included. Each `.solvecraft` can be opened normally. Each `.json` contains its
+recipe, independent expectations and optional edits.
+
+| Fixture | Features checked | Analytic volume (mm³) |
+|---|---|---:|
+| circle-extrude | Driving diameter, height expression | 5040π |
+| negative-extrude | Signed height, downward bounds | 5040π |
+| placed-circle | Offset local center, explicit XZ placement | 324π |
+| suppressed-extrude | Suppression and unsuppression | 0 → 5040π |
+| new_body-extrude | Two independent bodies | 5340π |
+| join-extrude | Contained cylinder joined into base | 5040π |
+| cut-extrude | Blind circular pocket | 4740π |
+| intersect-extrude | Intersection with smaller cylinder | 300π |
+| reordered-sketch | Feature order differs from object ID order | 5340π |
+
+The base cylinder has radius 12 mm and height 35 mm. The second cylinder has
+radius 5 mm and height 12 mm. Expectations use πr²h and sum/difference, not output
+recorded from the implementation. The placed cylinder has radius 6 mm, height
+9 mm and local center (7, -4); its local Y axis points toward world -Z.
+
+`editable_history.rs` replays each recipe, compares the saved document, opens it
+through `doc.open`, checks feature order, body count, aggregate world bounds and
+volume, then checks edits, serialization/reopening and undo. Curved-volume checks
+use the existing oracle tolerance of 0.1% because `inspect.measure` integrates
+tessellated faces; world bounds use 0.00001 mm.
+
+```sh
+cargo test --profile ci -p solvecraft-cli --test editable_history
+```
+
+To deliberately regenerate these contemporary fixtures after changing a recipe:
+
+```sh
+cargo test --profile ci -p solvecraft-cli --test editable_history write_original_history_fixtures -- --ignored
+```
+
+These are native SolveCraft history regression tests. The separate F3D tests
+check native record decoding against local Fusion API controls. Passing these
+fixtures does **not** establish that F3D editable-history import is implemented.

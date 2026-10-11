@@ -25,7 +25,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("path: .3mf or .stl file (its meshes join the design as mesh bodies); name?"),
     CommandSpec::new("file.inspect_f3d", "Inspect F3D Archive", inspect_f3d)
         .noundo()
-        .params("path: native .f3d archive → index, supported parameter and sketch-circle records; does not import editable history"),
+        .params("path: native .f3d archive → supported index, parameter, timeline, placement, circle, profile and constraint records; does not import editable history"),
     CommandSpec::new("file.save", "Save", save).icon("save").key("Ctrl+S").noundo().params("path? (default: current file)"),
     CommandSpec::new("file.save_as", "Save As", save_as).icon("save").noundo().params("path"),
     CommandSpec::new("doc.recovery_list", "Recoverable Designs", recovery_list)
@@ -173,16 +173,37 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
             let circles = match d.sketch_circles() {
-                Ok(circles) => json!({"coordinate_frame":"sketch_local","length_unit":"cm","records":circles.iter().map(|c| json!({"id":c.id,"sketch":c.sketch,"center_point":c.center_point,"center":c.center,"normal":c.normal,"x_axis":c.x_axis,"radius":c.radius})).collect::<Vec<_>>()}),
+                Ok(circles) => json!({"coordinate_frame":"sketch_local","length_unit":"cm","records":circles.iter().map(|c| json!({"id":c.id,"sketch":c.sketch,"center_point":c.center_point,"center":c.center,"normal":c.normal,"x_axis":c.x_axis,"radius":c.radius,"construction":c.construction,"profile_id":c.profile_id})).collect::<Vec<_>>()}),
+                Err(e) => json!({"unsupported":e.to_string()}),
+            };
+            let history = match d.history() {
+                Ok(features) => json!({"records":features.iter().map(|f| {
+                    let kind = match &f.kind {
+                        solvecraft_io::f3d::HistoryKind::Sketch { geometry, placement } => json!({"type":"sketch","geometry":geometry,"transform":placement.matrix,"transform_length_unit":"cm","placement_owner":placement.owner,"entities":placement.entities}),
+                        solvecraft_io::f3d::HistoryKind::Extrude { operation, profile_containers } => json!({"type":"extrude","operation":operation,"profile_containers":profile_containers}),
+                    };
+                    json!({"id":f.id,"name":f.name,"suppressed":f.suppressed,"dependencies":f.dependencies,"kind":kind})
+                }).collect::<Vec<_>>()}),
+                Err(e) => json!({"unsupported":e.to_string()}),
+            };
+            let profiles = match d.circle_profiles() {
+                Ok(profiles) => json!({"records":profiles.iter().map(|p|json!({"id":p.id,"feature":p.feature,"geometry":p.geometry,"circle":p.circle})).collect::<Vec<_>>()}),
+                Err(e) => json!({"unsupported":e.to_string()}),
+            };
+            let constraints = match d.sketch_constraints() {
+                Ok(sketches) => json!({"records":sketches.iter().map(|s|json!({"geometry":s.geometry,"feature":s.feature,"constraints":s.constraints.iter().map(|c|match c {
+                    solvecraft_io::f3d::SketchConstraint::Coincident {id,points} => json!({"type":"coincident","id":id,"points":points}),
+                    solvecraft_io::f3d::SketchConstraint::Diameter {id,circle,binding} => json!({"type":"diameter","id":id,"circle":circle,"binding":binding}),
+                }).collect::<Vec<_>>()})).collect::<Vec<_>>()}),
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
             json!({"path": d.path, "build": d.build, "layout": d.layout, "classes": d.classes.len(),
             "objects": d.records.len(), "secondary_records": d.records.iter().filter(|r| r.secondary_offset.is_some()).count(),
-            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_circles":circles})
+            "roots": d.roots, "object_groups": groups, "metadata_bytes": d.metadata.len(), "bulk_bytes": d.bulk.len(), "parameters":parameters,"sketch_circles":circles,"history":history,"circle_profiles":profiles,"sketch_constraints":constraints})
         })
         .collect();
     Ok(json!({"path": path, "editable_history_imported": false, "designs": summaries,
-        "warnings": ["Archive indexes validated; supported parameter and circle records inspected. Editable feature reconstruction, sketch placement and native B-reps are not yet decoded."]}))
+        "warnings": ["Supported history relationships inspected. Editable feature reconstruction, complete extent and constraint semantics, and native B-reps are not yet decoded."]}))
 }
 
 fn write(s: &mut Session, path: &str) -> Result<Value> {

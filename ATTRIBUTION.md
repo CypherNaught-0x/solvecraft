@@ -17,6 +17,15 @@ Generated-in-code assets are original and have no file to list:
 
 | File | Author | Source | Licence |
 |---|---|---|---|
+| apps/solvecraft-cli/tests/history/circle-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/negative-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/placed-circle.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/suppressed-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/new_body-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/join-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/cut-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/intersect-extrude.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/reordered-sketch.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | docs/screenshots/sample-plate.png | SolveCraft contributors | screenshot of SolveCraft itself (`solvecraft --sample`) | MIT OR Apache-2.0 |
 | docs/screenshots/demo.gif | SolveCraft contributors | screen recording of SolveCraft itself driven by examples/demo (3x speed) | MIT OR Apache-2.0 |
 | docs/book/src/generated/sample-plate.png | SolveCraft contributors | copy of docs/screenshots/sample-plate.png made by `cargo xtask book` (gitignored) | MIT OR Apache-2.0 |

@@ -1,6 +1,6 @@
-//! Native F3D archive/index investigation. This reads the observed object index,
-//! not feature semantics. Opaque streams are retained, never converted to a
-//! flattened body or presented as an editable SolveCraft document.
+//! Native F3D archive and selected history-record inspection. Opaque streams
+//! are retained alongside decoded relationships, never converted to a flattened
+//! body or presented as an editable SolveCraft document.
 //! See docs/f3d.md for the evidence, supported layouts and remaining work.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,9 +10,15 @@ use crate::{IoError, Result};
 
 mod archive;
 mod circles;
+mod constraints;
+mod history;
 mod parameters;
+mod profiles;
 pub use circles::SketchCircle;
+pub use constraints::{SketchConstraint, SketchConstraints};
+pub use history::{HistoryFeature, HistoryKind, SketchPlacement};
 pub use parameters::Parameter;
+pub use profiles::CircleProfile;
 
 pub const MAX_F3D_BYTES: usize = 256 << 20;
 const MAX_STREAM: usize = 128 << 20;
@@ -72,13 +78,22 @@ impl<'a> Records<'a> {
 
     fn primary(&self, id: u64) -> Result<&'a [u8]> {
         let rec = self.by_id.get(&id).ok_or_else(|| invalid("missing object record"))?;
+        self.at(rec.offset)
+    }
+
+    fn secondary(&self, id: u64) -> Result<&'a [u8]> {
+        let offset = self.by_id.get(&id).and_then(|r| r.secondary_offset).ok_or_else(|| invalid("missing secondary object record"))?;
+        self.at(offset)
+    }
+
+    fn at(&self, offset: usize) -> Result<&'a [u8]> {
         let end = self
             .offsets
-            .range((std::ops::Bound::Excluded(rec.offset), std::ops::Bound::Unbounded))
+            .range((std::ops::Bound::Excluded(offset), std::ops::Bound::Unbounded))
             .next()
             .copied()
             .ok_or_else(|| invalid("missing record boundary"))?;
-        self.design.bulk.get(rec.offset..end).ok_or_else(|| invalid("invalid object range"))
+        self.design.bulk.get(offset..end).ok_or_else(|| invalid("invalid object range"))
     }
 }
 
@@ -257,7 +272,8 @@ fn index(path: String, metadata: Vec<u8>, bulk: Vec<u8>) -> Result<Design> {
 }
 
 /// Inspect native object indexes without extracting files or evaluating geometry.
-/// Does not import editable features: class payload semantics remain opaque.
+/// Does not import editable features. Selected records can be inspected through
+/// Design's decoding methods; unknown payload semantics remain opaque.
 pub fn read_f3d(bytes: &[u8]) -> Result<Vec<Design>> {
     if bytes.len() > MAX_F3D_BYTES {
         return Err(invalid("archive exceeds 256 MiB"));
@@ -295,5 +311,7 @@ pub fn read_f3d(bytes: &[u8]) -> Result<Vec<Design>> {
     Ok(designs)
 }
 
+#[cfg(test)]
+mod relationship_tests;
 #[cfg(test)]
 mod tests;

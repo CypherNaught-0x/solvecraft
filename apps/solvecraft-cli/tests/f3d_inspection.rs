@@ -86,6 +86,78 @@ fn controlled_parameter_edits_match_fusion_api() {
             assert_eq!(circles.len(), 1);
             assert_eq!(circles[0]["center"], measurement["circle"]["center"]);
             assert_eq!(circles[0]["radius"], measurement["circle"]["radius"]);
+            let features =
+                result["designs"][0]["history"]["records"].as_array().unwrap_or_else(|| panic!("{name}: {}", result["designs"][0]["history"]));
+            for (f, api) in features.iter().zip(measurement["timeline"].as_array().unwrap()) {
+                assert_eq!(f["name"], api["name"], "{name}");
+            }
+            assert_eq!(features[0]["kind"]["transform"], measurement["transform"], "{name}");
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to local controlled Fusion exports"]
+fn controlled_history_matches_fusion_api() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let measurements: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-history-measurements.json")).unwrap()).unwrap();
+    let mut s = Session::default();
+    for (name, measurement) in measurements.as_object().unwrap() {
+        let result = s.execute("file.inspect_f3d", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap();
+        let history = &result["designs"][0]["history"];
+        let d = &result["designs"][0];
+        let constraints = d["sketch_constraints"]["records"].as_array().unwrap_or_else(|| panic!("{name}: {}", d["sketch_constraints"]));
+        let profiles = d["circle_profiles"]["records"].as_array().unwrap_or_else(|| panic!("{name}: {}", d["circle_profiles"]));
+        let records = history["records"].as_array().unwrap_or_else(|| panic!("{name}: {history}"));
+        let timeline = measurement["timeline"].as_array().unwrap();
+        assert_eq!(records.len(), timeline.len(), "{name}");
+        for (f, api) in records.iter().zip(timeline) {
+            assert_eq!(f["name"], api["name"], "{name}");
+            assert_eq!(f["suppressed"], api["suppressed"], "{name}");
+            if f["kind"]["type"] == "sketch" {
+                let sketch = measurement["sketches"].as_array().unwrap().iter().find(|x| x["name"] == api["name"]).unwrap();
+                assert_eq!(f["kind"]["transform"], sketch["transform"], "{name}");
+                let decoded = constraints.iter().find(|s| s["geometry"] == f["kind"]["geometry"]).unwrap()["constraints"].as_array().unwrap();
+                assert_eq!(decoded.iter().filter(|c| c["type"] == "coincident").count(), sketch["constraints"].as_array().unwrap().len());
+                assert_eq!(decoded.iter().filter(|c| c["type"] == "diameter").count(), sketch["dimensions"].as_array().unwrap().len());
+            } else {
+                let extrude = measurement["extrudes"].as_array().unwrap().iter().find(|x| x["name"] == api["name"]).unwrap();
+                let operation = ["join", "cut", "intersect", "new_body"][extrude["operation"].as_u64().unwrap() as usize];
+                assert_eq!(f["kind"]["operation"], operation, "{name}");
+                let profile = profiles.iter().find(|p| p["feature"] == f["id"]).unwrap();
+                let circle = d["sketch_circles"]["records"].as_array().unwrap().iter().find(|c| c["id"] == profile["circle"]).unwrap();
+                assert_eq!(circle["sketch"], profile["geometry"]);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to local controlled Fusion exports"]
+fn controlled_construction_and_constraint_removal() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
+    let measurements: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-extent-measurements.json")).unwrap()).unwrap();
+    for (name, measurement) in measurements.as_object().unwrap() {
+        let designs = solvecraft_engine::io::f3d::read_f3d(&std::fs::read(dir.join(format!("{name}.f3d"))).unwrap()).unwrap();
+        let d = &designs[0];
+        assert_eq!(d.sketch_circles().unwrap()[0].construction, measurement["construction"].as_bool().unwrap(), "{name}");
+        let constraints = d.sketch_constraints().unwrap_or_else(|e| panic!("{name}: {e}"));
+        let want = if name == "circle-unconstrained" {
+            0
+        } else if name == "circle-undimensioned" {
+            1
+        } else {
+            2
+        };
+        assert_eq!(constraints[0].constraints.len(), want, "{name}");
+        if name == "extent-two-sided" {
+            assert!(d.history().unwrap_err().to_string().contains("unsupported extrusion extent layout"));
+        } else {
+            for f in d.history().unwrap() {
+                if let solvecraft_engine::io::f3d::HistoryKind::Extrude { profile_containers, .. } = f.kind {
+                    assert_eq!(d.selected_circle_profiles(f.id, &profile_containers).unwrap().len(), 1, "{name}");
+                }
+            }
         }
     }
 }

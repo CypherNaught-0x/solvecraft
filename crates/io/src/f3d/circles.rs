@@ -1,5 +1,5 @@
 //! Observed full-circle geometry. Coordinates are sketch-local centimetres;
-//! placement, construction flags and constraints are deliberately not inferred.
+//! placement and constraints are decoded separately from curve geometry.
 use super::*;
 
 #[derive(Debug, PartialEq)]
@@ -11,6 +11,8 @@ pub struct SketchCircle {
     pub normal: [f64; 3],
     pub x_axis: [f64; 3],
     pub radius: f64,
+    pub construction: bool,
+    pub profile_id: Option<(u64, u64)>,
 }
 
 impl Design {
@@ -51,12 +53,15 @@ fn decode(bytes: &[u8]) -> Result<SketchCircle> {
     if !r.string()?.is_empty() || r.take(2)? != [0, 1] {
         return Err(invalid("unsupported circle attributes"));
     }
+    let mut attributes = BTreeMap::new();
     for _ in 0..r.count(16)? {
-        r.string()?;
+        let key = r.string()?;
         if r.string()? != "IntrinsicMetaTypeuint64" {
             return Err(invalid("unsupported circle attribute type"));
         }
-        r.u64()?;
+        if attributes.insert(key, r.u64()?).is_some() {
+            return Err(invalid("duplicate circle attribute"));
+        }
     }
     let mut number = || -> Result<f64> {
         let x = f64::from_bits(r.u64()?);
@@ -82,12 +87,23 @@ fn decode(bytes: &[u8]) -> Result<SketchCircle> {
         return Err(invalid("unsupported full-circle geometry"));
     }
     let center_point = r.reference()?;
-    r.take(44)?; // Uninterpreted flags and presentation fields, retained in bulk.
+    r.take(9)?;
+    let construction = match r.take(1)? {
+        [0] => false,
+        [1] => true,
+        _ => return Err(invalid("unsupported circle construction flag")),
+    };
+    r.take(34)?; // Other flags and presentation fields remain uninterpreted.
     let sketch = r.reference()?;
     if r.at != bytes.len() {
         return Err(invalid("unsupported circle payload tail"));
     }
-    Ok(SketchCircle { id, sketch, center_point, center, normal, x_axis, radius })
+    let profile_id = match (attributes.get("crv_primary_id"), attributes.get("crv_secondary_id")) {
+        (Some(a), Some(b)) => Some((*a, *b)),
+        (None, None) => None,
+        _ => return Err(invalid("incomplete circle profile identity")),
+    };
+    Ok(SketchCircle { id, sketch, center_point, center, normal, x_axis, radius, construction, profile_id })
 }
 
 #[cfg(test)]

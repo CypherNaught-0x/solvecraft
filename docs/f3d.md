@@ -1,6 +1,7 @@
 # Native F3D investigation
 
-Status: archive/index, parameter and local circle inspection, **not editable-history import**.
+Status: archive/index, parameter, timeline, placement, circle, selected circular
+profile and limited constraint inspection, **not editable-history import**.
 The project owner authorized clean-room investigation on 2026-10-11 as an
 exception to AGENTS.md's public-specification requirement. Only the supplied
 files and locally generated controlled variants were observed through Fusion's
@@ -89,22 +90,61 @@ Full-circle class `F0130424-8B7E-4092-93C9-1CA807482534`, version 0, stores
 center, normal, x-axis, radius and angle limits after counted integer attributes.
 Its center-point and owning sketch references are validated by class/version.
 The inspector reports **sketch-local centimetres**, not world coordinates.
-Presentation/construction flags remain opaque; these records alone are not a
-constraint-preserving sketch. Partial arcs and unsupported payloads fail explicitly.
+The construction flag is verified by toggling it independently. Native profile
+tags are retained separately from object IDs. Remaining presentation flags stay
+opaque; these records alone are not a constraint-preserving sketch. Partial arcs
+and unsupported payloads fail explicitly.
 
-The original input plus eight API-exported cases cover these observations. The
+The original input plus eight API-exported cases cover these initial observations. The
 local probe imports a temporary copy, exports locally, records API measurements,
 and closes without saving the source cloud document. No Fusion installation is
 needed to run the Rust inspector. Probe outputs remain outside Git.
 
+## Timeline, placement and relationship controls
+
+Nine further exports independently vary suppression, a second sketch/extrusion,
+sketch reordering and new-body/join/cut/intersect operations. Another eight exports
+cover two-sided and tapered extents, construction circles, and deletion of the
+diameter and coincidence constraints. All 25 controls remain local.
+
+* Timeline class `2F4C1849-1A5A-4F6C-A086-8DD445CBF94B`, version 3, contains the
+  ordered feature references. The reorder control changes this list while leaving
+  the registration order and evaluation dependency graph unchanged. Duplicate,
+  missing or unsupported timeline entries fail; they are never silently dropped.
+* Sketch feature class `8DA771B7-52ED-42FC-94E2-2353FE141373`, version 5, links to
+  geometry and placement. Extrude class `DD405BC2-D673-44F0-8833-5CB2A1C186C7`,
+  version 8, identifies body operations and profile containers. Native operation
+  values 1/2/3/4 correspond to join/cut/intersect/new body. Four separate reference
+  lists after the profile containers vary with boolean operations; their roles
+  are still opaque. Two-sided extent layouts are explicitly unsupported.
+* Shared feature metadata supplies names, dependencies and two independently
+  checked suppression flags. Sketch custom names live in the geometry's secondary
+  record. Cached evaluation counters do not establish feature order or suppression.
+* Transform class `F47A46FB-DA27-4AFA-8A72-1B38FA596E23`, version 0, has compact
+  identity and explicit 16-double encodings. The reported row-major local-to-world
+  matrix matches the public API, including the offset-circle XZ example. Translation
+  units remain centimetres. Assembly placement is not reconstructed.
+* Selected circular profiles follow container → profile → tracking record →
+  `(primary, secondary)` curve tags, scoped to the referenced sketch. A curve's
+  object ID is not its profile tag. The verified schema is a single loop containing
+  one full circle; other topologies fail explicitly. Ownership and back-references
+  are checked, rather than selecting the first circle in a sketch.
+* Coincidence class `60403D47-0C49-49B0-BDE8-1679608164A2`, version 3, connects two
+  points. Diameter class `664AD49F-207F-4CD5-8555-DD269E9F09EA`, version 0, connects
+  a circle to a parameter binding. The decoder checks owning sketches and repeated
+  references. Constraint-removal controls independently verify both lists.
+
+The inspector reports `history`, `circle_profiles` and `sketch_constraints`, each
+with either supported records or an explicit unsupported error. Unknown fields
+remain retained in the raw streams, not interpreted as defaults.
+
 ## Remaining history work
 
-Feature payload schemas, timeline ordering, expression dependencies, other sketch
-geometry and constraints, profile references, placements, suppression and native
-B-reps remain undecoded. Finding feature-name strings does not establish those
-semantics. The next stage is to decode these relationships and reconstruct native
-SolveCraft sketch/extrusion features, then edit and regenerate them and compare
-volumes/bounds against Fusion. General history preservation is not implemented.
+Full extent/start/direction schemas, sketch point fixation, expression dependencies,
+other sketch geometry and constraints, non-circular profiles, assemblies and native
+B-reps remain unresolved. The next stage is to reconstruct supported native
+SolveCraft sketch/extrusion features without discarding those semantics, then edit
+and regenerate them and compare volumes/bounds against Fusion. General history preservation is not implemented.
 Opaque-byte retention alone must not be called editable import.
 
 Autodesk's public [ImportManager](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/core_ImportManager.htm)
@@ -116,7 +156,8 @@ stream specifications; the inspector itself does not require Fusion.
 
 Original synthetic tests cover all three layouts, opaque-byte retention, secondary
 records, truncated/malformed indexes, unsafe packages, Zstandard CRC/size limits,
-UTF-16 parameter fields and invalid circle geometry. The engine test checks
+UTF-16 parameter fields, invalid circle geometry, actual timeline ordering,
+construction, profile selection, constraint links and truncated relationship records. The engine test checks
 that failed opening preserves the current model and undo history. The local
 corpus test checks all four files, expected counts, a five-second budget, and
 unchanged document state:
@@ -124,6 +165,8 @@ unchanged document state:
 ```sh
 SOLVECRAFT_F3D_CORPUS=/path/to/test_files cargo test --profile ci -p solvecraft-cli --test f3d_inspection supplied_f3d_indexes -- --ignored --nocapture
 SOLVECRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solvecraft-cli --test f3d_inspection controlled_parameter_edits_match_fusion_api -- --ignored
+SOLVECRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solvecraft-cli --test f3d_inspection controlled_history_matches_fusion_api -- --ignored
+SOLVECRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solvecraft-cli --test f3d_inspection controlled_construction_and_constraint_removal -- --ignored
 ```
 
 Observed inspection times were under 8 ms per archive. The controlled-variant
@@ -131,6 +174,14 @@ test compares expressions, units, values, circle centers and radii directly to
 the separately recorded Fusion API measurements. Actual Fusion files remain
 outside the repository; ordinary CI uses original synthetic records.
 
-Full `cargo xtask ci` passed on upstream `463441a`, including all 23 test binaries
-and the ten-crate WASM check. Both local evidence tests passed again after that
-upstream integration. This validates inspection, not editable-history import.
+Nine [small editable SolveCraft fixtures](../apps/solvecraft-cli/tests/history/README.md)
+provide command recipes, saved documents and independent analytic volume/bounds
+checks. They exercise parameter edits, signed heights, placement, all four body
+operations, reordering, suppression, reopening and undo. These native fixtures run
+in ordinary CI without Fusion; they do not claim successful F3D reconstruction.
+
+Full `cargo xtask ci` passed with upstream `a094fa4` integrated, including all 24
+test binaries, the opening-performance guard and the ten-crate WASM check. All
+four local evidence tests passed on that same build: four supplied archives and
+25 controlled exports. This validates inspection and the separate native history
+fixtures, not editable F3D import.
