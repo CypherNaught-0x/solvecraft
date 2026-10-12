@@ -145,6 +145,7 @@ mod component_frames;
 mod mirror_planes;
 mod primitive_points;
 mod robustness;
+mod xz_plane;
 
 /// Plan area a round of radius `r` fills at the concave corner `x` where circles (c1, r1) and
 /// (c2, r2) cross: the triangle of its contacts and the corner, less the three circular segments.
@@ -1677,8 +1678,10 @@ fn cached_evaluation_matches_from_scratch() {
         let before = hits(&s);
         run(&mut s, id, p.clone());
         same(&s, &format!("step {step}: {id} {p}"));
-        if step == 1 {
-            assert!(hits(&s) > before, "setting the width back reuses the earlier results");
+        // Setting the width back solves the sketch again from its current state; the
+        // features after it see the same geometry and reuse their results. So does undo.
+        if step == 1 || step == 3 {
+            assert!(hits(&s) > before, "step {step} reuses the earlier results");
         }
     }
 }

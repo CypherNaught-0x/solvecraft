@@ -143,7 +143,7 @@ fn simple_history_files_replay_reopen_edit_and_undo() {
         let mut rebuilt = replay(&recipe);
         let mut s = Session::default();
         s.execute("doc.open", &json!({"path":native})).unwrap();
-        assert_eq!(recipe_structure(&s), recipe_structure(&rebuilt), "{label}: authored recipe differs from saved fixture");
+        assert_recipe_equal(&recipe_structure(&s), &recipe_structure(&rebuilt), &label);
         let expected = &recipe["expected"];
         let original_volume = expected_volume(expected);
         bounds(&volume(&mut rebuilt, original_volume, &format!("{label}: fresh recipe")), expected, &label);
@@ -169,6 +169,32 @@ fn simple_history_files_replay_reopen_edit_and_undo() {
             s.execute("edit.undo", &json!({})).unwrap();
             bounds(&volume(&mut s, original_volume, &label), expected, &label);
         }
+    }
+}
+
+fn assert_recipe_equal(saved: &Value, rebuilt: &Value, path: &str) {
+    match (saved, rebuilt) {
+        (Value::Object(a), Value::Object(b)) => {
+            assert_eq!(a.keys().collect::<Vec<_>>(), b.keys().collect::<Vec<_>>(), "{path}: recipe fields");
+            for (key, value) in a {
+                assert_recipe_equal(value, &b[key], &format!("{path}/{key}"));
+            }
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            assert_eq!(a.len(), b.len(), "{path}: recipe length");
+            for (i, (a, b)) in a.iter().zip(b).enumerate() {
+                assert_recipe_equal(a, b, &format!("{path}/{i}"));
+            }
+        }
+        (Value::Number(a), Value::Number(b)) if a.is_f64() && b.is_f64() => {
+            let (a, b) = (a.as_f64().unwrap(), b.as_f64().unwrap());
+            // Constructive and numerical solving can differ by a few ULPs in
+            // saved coordinates (e.g. sqrt(800)). Keep IDs and expressions exact;
+            // this only accommodates floating-point roundoff, not solver drift.
+            let tolerance = 32. * f64::EPSILON * a.abs().max(b.abs()).max(1.);
+            assert!((a - b).abs() <= tolerance, "{path}: authored recipe differs: {a} != {b}");
+        }
+        _ => assert_eq!(saved, rebuilt, "{path}: authored recipe differs"),
     }
 }
 

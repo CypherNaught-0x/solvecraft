@@ -1819,3 +1819,12 @@ Validation passed all 33 CI binaries, including 135 I/O tests, 619 engine tests,
 80 editable fixture histories and WASM, plus all 39 local native-import groups
 and 16 inspection tests. HardEdgeBasin's opening guard passed in 0.85 seconds
 at the end of CI (3.26 seconds during concurrent suite execution).
+
+Integration with upstream `d15869a` adds its constructive solver and geometry
+updates without changing the saved examples. The recipe comparison now allows
+32 floating-point rounding units for numeric values, while preserving exact
+identity, expression and structural comparisons. All 80 examples still pass
+their independent geometry and edit checks. The integrated gate passed all 33
+CI binaries (664 engine tests, 361 UI tests, 298 kernel tests and 164 sketch
+tests), WASM, 39 native-import groups and 16 inspection tests. HardEdgeBasin's
+opening guard passed in 1.96 seconds during the final gate.
