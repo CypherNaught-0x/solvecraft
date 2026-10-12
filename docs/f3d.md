@@ -1776,3 +1776,16 @@ permission), including 590 engine tests, 340 UI tests and the 74 editable
 fixtures. All 38 native-import groups and 16 inspection tests passed again.
 The new public reference suite gives 75 passes and its one documented known
 failure. HardEdgeBasin's opening regression passed in 1.09 seconds.
+
+Integration with upstream `fc8a5b2` retains exact kernel face history alongside
+the imported extrusion and loft source certificates. Format 23 preserves legacy
+projected-edge identities from earlier development formats; the saved examples
+remain at their original versions so CI exercises their migrations. Recipe
+comparisons resolve old edge names to their exact current identity and treat
+circular edge selections as sets, while checking both freshly rebuilt and saved
+geometry against analytic expectations.
+
+The integrated CI gate passed, including 619 engine tests, 351 UI tests, 294
+kernel tests, 132 I/O tests, all 74 editable histories and WASM. All 38 local
+native-import groups and 16 inspection tests passed. The public reference suite
+still has 75 passes and its one documented known failure.

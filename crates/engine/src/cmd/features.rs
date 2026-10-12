@@ -23,10 +23,10 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("sweep")
         .params("sketch: profile sketch; profiles?; path_sketch: sketch; path: [curve ids in order]; operation?, targets?, name?, body_name?"),
     CommandSpec::new("solid.loft", "Loft", loft).at("SOLID", "CREATE").icon("loft").params("sections: [{sketch, profiles?} | {sketch, point: id} (an apex) | {face: [x,y,z], body?, index?}] (2..50, in order); interpolation?: uniform | circular_chord (three coaxial circles); operation?, targets?, name?, body_name?"),
-    CommandSpec::new("solid.box", "Box", prim_box).at("SOLID", "CREATE").icon("box").params("length, width, height: expr; corner?: [x,y,z] | center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?, name?, body_name?"),
-    CommandSpec::new("solid.cylinder", "Cylinder", prim_cylinder).at("SOLID", "CREATE").icon("cylinder").params("radius | diameter, height: expr; base?: [x,y,z] (centre of the bottom: numbers in mm or length expressions; default: the origin); axis?: X|Y|Z|[x,y,z] (default Z); operation?, name?, body_name?"),
-    CommandSpec::new("solid.sphere", "Sphere", prim_sphere).at("SOLID", "CREATE").icon("sphere").params("radius | diameter: expr; center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?, name?, body_name?"),
-    CommandSpec::new("solid.torus", "Torus", prim_torus).at("SOLID", "CREATE").icon("torus").params("major, minor: expr (radii); center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?, name?, body_name?"),
+    CommandSpec::new("solid.box", "Box", prim_box).at("SOLID", "CREATE").icon("box").params("length, width, height: expr; corner?: [x,y,z] | center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?, targets?: [body], name?, body_name?"),
+    CommandSpec::new("solid.cylinder", "Cylinder", prim_cylinder).at("SOLID", "CREATE").icon("cylinder").params("radius | diameter, height: expr; base?: [x,y,z] (centre of the bottom: numbers in mm or length expressions; default: the origin); axis?: X|Y|Z|[x,y,z] (default Z); operation?, targets?: [body], name?, body_name?"),
+    CommandSpec::new("solid.sphere", "Sphere", prim_sphere).at("SOLID", "CREATE").icon("sphere").params("radius | diameter: expr; center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?, targets?: [body], name?, body_name?"),
+    CommandSpec::new("solid.torus", "Torus", prim_torus).at("SOLID", "CREATE").icon("torus").params("major, minor: expr (radii); center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?, targets?: [body], name?, body_name?"),
     CommandSpec::new("solid.fillet", "Fillet", fillet)
         .at("SOLID", "MODIFY")
         .icon("fillet")
@@ -419,9 +419,19 @@ fn add_feature_in(s: &mut Session, p: &Value, kind: FeatureKind, world: bool) ->
             solvecraft_doc::naming::face_names_at(&s.model.state(), &pts)
         }
     };
-    let participants = string_list(p, "participants");
+    // Primitives have no `targets` of their own: their `targets` are the bodies taking part (#259).
+    let primitive = matches!(kind, FeatureKind::Box { .. } | FeatureKind::Cylinder { .. } | FeatureKind::Sphere { .. } | FeatureKind::Torus { .. });
+    let (participants, key) = match string_list(p, "participants") {
+        v if v.is_empty() && primitive => (string_list(p, "targets"), "targets"),
+        v => (v, "participants"),
+    };
     if participants.len() > 10_000 || participants.iter().any(|b| b != "*" && s.model.state().body(b).is_none()) {
-        return Err(EngineError::Other("`participants` must list existing bodies".into()));
+        return Err(EngineError::Other(format!("`{key}` must list existing bodies")));
+    }
+    if matches!(kind, FeatureKind::ConstructionPlane { .. })
+        && let Some(n) = name
+    {
+        check_plane_name(n, "construct.plane")?;
     }
     let id = s.doc_mut().add_feature(kind, name)?;
     if let Some(f) = s.doc_mut().feature_mut(id) {
@@ -444,10 +454,33 @@ fn add_feature_in(s: &mut Session, p: &Value, kind: FeatureKind, world: bool) ->
     if !names.is_empty()
         && let Some(f) = s.doc_mut().feature_mut(id)
     {
-        f.body_names = names;
+        f.body_names = names.clone();
     }
     s.active_sketch = None;
     s.refresh();
+    // A feature that makes more bodies than it was given names (a multi-profile extrude with one
+    // `body_name`) names the rest after the first: `Ribs`, `Ribs (2)`, `Ribs (3)`… (#266). The
+    // names are stored on the feature, so recomputes and saved designs keep them.
+    if let Some(base) = names.first().map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
+        let st = s.model.state();
+        let made = st.bodies.iter().filter(|b| b.feature == id).count();
+        if made > names.len() {
+            let mut taken: std::collections::BTreeSet<String> = st.bodies.iter().map(|b| b.name.clone()).collect();
+            taken.extend(names.iter().cloned());
+            let mut i = 1usize;
+            while names.len() < made {
+                i += 1;
+                let n = format!("{base} ({i})");
+                if taken.insert(n.clone()) {
+                    names.push(n);
+                }
+            }
+            if let Some(f) = s.doc_mut().feature_mut(id) {
+                f.body_names = names;
+            }
+            s.refresh();
+        }
+    }
     let r = s.model.result(id).cloned();
     if let Some(e) = r.as_ref().and_then(|r| r.error.clone()) {
         return Err(EngineError::Other(e));
@@ -999,6 +1032,31 @@ fn mirror(s: &mut Session, p: &Value) -> Result<Value> {
     add_feature(s, p, FeatureKind::Mirror { features, plane, bodies, combine })
 }
 
+/// The other name of an origin plane (`Top` for `XY`, `XY` for `Top`...), if `name` is one.
+pub(super) fn origin_plane_alias(name: &str) -> Option<&'static str> {
+    match name.trim().to_ascii_uppercase().as_str() {
+        "XY" => Some("Top"),
+        "TOP" => Some("XY"),
+        "XZ" => Some("Front"),
+        "FRONT" => Some("XZ"),
+        "YZ" => Some("Right"),
+        "RIGHT" => Some("YZ"),
+        _ => None,
+    }
+}
+
+/// A construction plane may not take an origin plane's name (`XY`, `Top`...): a plane
+/// parameter could then mean either.
+pub(super) fn check_plane_name(name: &str, cmd: &str) -> Result<()> {
+    if solvecraft_geom::Plane::named(name.trim()).is_some() {
+        return Err(bad(
+            cmd,
+            format!("`{}` is reserved for an origin plane (XY, XZ, YZ, Top, Front, Right); give the construction plane another name", name.trim()),
+        ));
+    }
+    Ok(())
+}
+
 /// A plane reference from a parameter: an origin plane, a construction plane (by name or
 /// feature id; kept by name, so the feature follows the plane when it changes), or an
 /// explicit plane `{origin, x_dir, y_dir}` / `{origin, normal}`. Every command that takes a
@@ -1012,7 +1070,22 @@ pub(super) fn plane_param(s: &Session, v: Option<&Value>, cmd: &str) -> Result<s
         None => Err(bad(cmd, format!("no plane `{r}` (a plane is {WANT})"))),
     };
     match v {
-        Some(Value::String(n)) if solvecraft_geom::Plane::named(n.trim()).is_some() => Ok(PlaneRef::Origin { name: n.trim().to_ascii_uppercase() }),
+        Some(Value::String(n)) if solvecraft_geom::Plane::named(n.trim()).is_some() => {
+            if let Some(f) = s.doc.find_feature(n.trim())
+                && matches!(f.kind, FeatureKind::ConstructionPlane { .. })
+            {
+                return Err(bad(
+                    cmd,
+                    format!(
+                        "plane `{}` is ambiguous: an origin-plane alias and a construction plane; use `{}` for the origin plane, construction plane feature id {}, or an explicit {{origin, normal}} plane",
+                        n.trim(),
+                        origin_plane_alias(n).unwrap_or("XY"),
+                        f.id
+                    ),
+                ));
+            }
+            Ok(PlaneRef::Origin { name: n.trim().to_ascii_uppercase() })
+        }
         Some(Value::String(n)) => construction(n.trim()),
         Some(Value::Number(id)) => match id.as_u64() {
             Some(id) => construction(&id.to_string()),

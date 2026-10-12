@@ -84,6 +84,7 @@ mod tests {
         let mut old: serde_json::Value = serde_json::from_str(&doc.to_json()).unwrap();
         assert!(old["features"][0].get("interpolation").is_none());
         old["format"] = serde_json::json!("solvecraft/18");
+        doc.features[0].shell_piece_order = true;
         assert_eq!(Document::from_json(&old.to_string()).unwrap(), doc);
         old["format"] = serde_json::json!("solvecraft/19");
         old["features"][0]["interpolation"] = serde_json::json!("circular_chord");

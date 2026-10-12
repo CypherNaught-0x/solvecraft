@@ -59,19 +59,94 @@ fn bounds(measure: &Value, expected: &Value, label: &str) {
     }
 }
 
+// Old fixtures retain legacy name lookup and shell ordering after migration.
+// Compare the recipe inputs independently of those compatibility markers, then
+// evaluate the saved fixture itself through every edit, reopen and undo below.
+fn recipe_structure(session: &Session) -> Value {
+    fn unmark(value: &mut Value) {
+        match value {
+            Value::String(s) if s.starts_with('?') => {
+                s.remove(0);
+            }
+            Value::Array(values) => values.iter_mut().for_each(unmark),
+            _ => {}
+        }
+    }
+    fn references(value: &mut Value) {
+        match value {
+            Value::Object(o) => {
+                if matches!(o.get("type").and_then(Value::as_str), Some("face" | "edge"))
+                    && o.contains_key("at")
+                    && let Some(name) = o.get_mut("name")
+                {
+                    unmark(name);
+                }
+                o.values_mut().for_each(references);
+            }
+            Value::Array(values) => values.iter_mut().for_each(references),
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(&session.doc).unwrap();
+    for feature in value["features"].as_array_mut().unwrap() {
+        let id = feature["id"].as_u64().unwrap();
+        feature.as_object_mut().unwrap().remove("shell_piece_order");
+        for key in ["face_names", "edge_names"] {
+            if let Some(names) = feature.get_mut(key) {
+                unmark(names);
+            }
+        }
+        if let Some(links) = feature.get_mut("sketch").and_then(|s| s.get_mut("links")).and_then(Value::as_array_mut) {
+            let before = session.model.state_before(id);
+            let sketch = session.model.results.iter().find(|r| r.id == id).unwrap().state.sketch(id).unwrap();
+            for link in links {
+                let source = session.doc.sketch(id).unwrap().links.iter().find(|l| l.id == link["id"].as_str().unwrap()).unwrap();
+                // Old and current numeric face pieces may have different names.
+                // Resolve the explicit legacy edge through its exact name table,
+                // then compare that edge's current identity; never repick by point.
+                let canonical = |value: &mut Value| {
+                    let Some(name) = value.as_str().filter(|n| n.starts_with('?')) else { return };
+                    let resolved =
+                        solvecraft_engine::doc::project::resolve_named_edge(&before, &sketch.plane, source.kind, &source.source, name).unwrap();
+                    let solvecraft_engine::sketch::LinkSource::Edge { body, .. } = &source.source else { panic!("edge source") };
+                    let names = solvecraft_engine::doc::naming::edge_names(before.body(body).unwrap());
+                    *value = json!(names[resolved.edge_index.unwrap()]);
+                };
+                if let Some(name) = link.get_mut("edge_name") {
+                    canonical(name);
+                }
+                if let Some(names) = link.get_mut("edge_circle").and_then(Value::as_array_mut) {
+                    names.iter_mut().for_each(canonical);
+                }
+                for key in ["face_name", "edge_name", "edge_circle"] {
+                    if let Some(names) = link.get_mut(key) {
+                        unmark(names);
+                    }
+                }
+                // Circular edges form a set; incidence determines chain order.
+                if let Some(edges) = link.get_mut("edge_circle").and_then(Value::as_array_mut) {
+                    edges.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+                }
+            }
+        }
+        references(feature);
+    }
+    value
+}
+
 #[test]
 fn simple_history_files_replay_reopen_edit_and_undo() {
     for path in recipes() {
         let label = path.display().to_string();
         let recipe = recipe(&path);
         let native = path.with_extension("solvecraft");
-        let doc = solvecraft_engine::io::read_design(&std::fs::read(&native).unwrap()).unwrap();
-        let rebuilt = replay(&recipe);
-        assert_eq!(doc, *rebuilt.doc, "{label}: authored recipe differs from saved fixture");
+        let mut rebuilt = replay(&recipe);
         let mut s = Session::default();
         s.execute("doc.open", &json!({"path":native})).unwrap();
+        assert_eq!(recipe_structure(&s), recipe_structure(&rebuilt), "{label}: authored recipe differs from saved fixture");
         let expected = &recipe["expected"];
         let original_volume = expected_volume(expected);
+        bounds(&volume(&mut rebuilt, original_volume, &format!("{label}: fresh recipe")), expected, &label);
         let measure = volume(&mut s, original_volume, &label);
         assert_eq!(json!(s.doc.features.iter().map(|f| &f.name).collect::<Vec<_>>()), expected["features"], "{label}");
         if let Some(sketches) = expected["sketches"].as_array() {

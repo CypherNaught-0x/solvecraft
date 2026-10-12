@@ -10,7 +10,6 @@
 pub mod cmd;
 pub mod frames;
 pub mod fuzz;
-pub mod legacy_ids;
 pub mod licences;
 pub mod occurrences;
 pub mod params;
@@ -677,6 +676,8 @@ mod extent_tests;
 mod loft_face_tests;
 #[cfg(test)]
 mod loft_union_tests;
+#[cfg(test)]
+mod naming_history_tests;
 #[cfg(test)]
 mod pattern_suppress_tests;
 #[cfg(test)]

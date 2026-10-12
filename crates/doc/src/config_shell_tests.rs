@@ -178,7 +178,8 @@ fn shell_planar_format13_keeps_v12_documents_and_refuses_future() {
     let mut current: serde_json::Value = serde_json::from_str(&loaded.to_json()).unwrap();
     assert_eq!(current["format"], crate::format::format_string(crate::format::FORMAT));
     current["format"] = json!("solvecraft/12");
-    assert_eq!(legacy, current, "identity migration must preserve every prior field");
+    crate::format::pieces_in_shell_order(&mut legacy["features"]);
+    assert_eq!(legacy, current, "the migration preserves every prior field");
     legacy["format"] = json!(crate::format::format_string(crate::format::FORMAT + 1));
     assert!(crate::format::read(&legacy.to_string()).is_err());
 }
@@ -253,8 +254,10 @@ fn saved_former_strip_projection_reports_lost_without_expanding_healthy_material
         depth: 1,
         mats: vec![],
     })));
-    let former = crate::naming::face_name_at_body(&old_body, Vec3::new(20., 6., 1.)).unwrap();
-    assert_eq!(former, format!("{stem}#1"), "historical actual strip capture records full piece name");
+    let captured = crate::naming::face_name_at_body(&old_body, Vec3::new(20., 6., 1.)).unwrap();
+    assert_eq!(crate::naming::parent_piece(&captured), Some(stem.as_str()), "actual strip capture records a piece name");
+    // What the builds before format 14 saved for that piece: its number by centroid order.
+    let former = format!("{stem}#1");
     let mut sketch = solvecraft_sketch::Sketch::new();
     let corners = [Vec2::new(0., 0.), Vec2::new(12., 0.), Vec2::new(12., 2.), Vec2::new(0., 2.)];
     let geometry: Vec<_> = (0..4).map(|i| solvecraft_sketch::LinkGeom::Line(corners[i], corners[(i + 1) % 4])).collect();

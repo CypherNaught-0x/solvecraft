@@ -292,7 +292,10 @@ pub fn resolve_named_edge(st: &ModelState, plane: &Plane, kind: LinkKind, src: &
     if name.is_empty() || mesh.edges.len() > 2_000_000 || mesh.triangles.len() > 2_000_000 {
         return Err(DocError::Invalid("invalid named edge projection or work limit exceeded".into()));
     }
-    let names = crate::naming::edge_names(target);
+    let (names, name) = match crate::naming::legacy_name(name) {
+        Some(old) => (crate::naming::legacy_edge_names(target), old),
+        None => (crate::naming::edge_names(target), name),
+    };
     let mut matches = names.iter().enumerate().filter(|(_, candidate)| candidate.as_str() == name);
     let index = matches.next().map(|(i, _)| i).ok_or_else(|| lost("named projection edge"))?;
     if matches.next().is_some() {
@@ -327,17 +330,25 @@ pub fn resolve_edge_circle(st: &ModelState, plane: &Plane, body: &str, selected:
         return Err(DocError::Invalid("circular edge projection work limit exceeded".into()));
     }
     let names = crate::naming::edge_names(target);
+    let legacy = selected.iter().any(|name| crate::naming::legacy_name(name).is_some()).then(|| crate::naming::legacy_edge_names(target));
     let mut seen = std::collections::BTreeSet::new();
     let mut edges = Vec::new();
     let mut points = 0_usize;
     for name in selected {
-        if name.is_empty() || !seen.insert(name) {
-            return Err(DocError::Invalid("empty or duplicate circular edge identity".into()));
+        let (candidates, name) = match crate::naming::legacy_name(name) {
+            Some(old) => (legacy.as_deref().unwrap_or_default(), old),
+            None => (names.as_slice(), name.as_str()),
+        };
+        if name.is_empty() {
+            return Err(DocError::Invalid("empty circular edge identity".into()));
         }
-        let mut matching = names.iter().enumerate().filter(|(_, n)| *n == name);
+        let mut matching = candidates.iter().enumerate().filter(|(_, n)| n.as_str() == name);
         let index = matching.next().map(|(i, _)| i).ok_or_else(|| lost("circular projection edge"))?;
         if matching.next().is_some() {
             return Err(DocError::Invalid("ambiguous circular projection edge".into()));
+        }
+        if !seen.insert(index) {
+            return Err(DocError::Invalid("duplicate circular edge identity".into()));
         }
         let edge = mesh.edges.get(index).filter(|p| p.len() >= 2).ok_or_else(|| lost("circular projection edge geometry"))?;
         points = points.saturating_add(edge.len());
@@ -596,7 +607,7 @@ fn refresh_links_in(
                     && name != stem
                     && st.body(body).is_some_and(|target| {
                         (certified_planar_construction(target, index) || target.body.face_was_coalesced(index))
-                            && crate::naming::face_names(target).get(index).is_some_and(|current| current == stem)
+                            && crate::naming::face_has_name(target, index, stem)
                     });
                 if removed_piece {
                     sk.set_link_lost(&l.id, true);
