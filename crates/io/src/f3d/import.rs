@@ -143,6 +143,48 @@ impl Design {
                 face.anchor(&doc, &projection_model.state(), id, &contributions)
             };
             let kind = match f.kind {
+                HistoryKind::Mirror { plane, source_container, output_count } => {
+                    let (plane, _) = plane_base(&records, &classes, &planes, plane, root)?;
+                    let objects = super::loft_faces::objects(&records, &classes, source_container, f.id)?;
+                    if objects.len() != output_count {
+                        return Err(invalid("mirror output count disagrees with its sources"));
+                    }
+                    if operation_owners.is_none() {
+                        operation_owners = Some(self.operation_owners()?);
+                    }
+                    let owners = operation_owners.as_ref().ok_or_else(|| invalid("missing mirror source operations"))?;
+                    let mut bodies = Vec::new();
+                    let mut outputs = Vec::new();
+                    for object in objects {
+                        let target = super::loft_faces::target_object(&records, &classes, object, f.id)?;
+                        let [operation] = target.operations.as_slice() else {
+                            return Err(invalid("mirror sources modified by later operations are not supported yet"));
+                        };
+                        if owners.get(&operation.operation) != Some(&target.feature) {
+                            return Err(invalid("mirror source recipe disagrees with its body producer"));
+                        }
+                        super::body_labels::validate(&records, &classes, target.feature, operation.operation, u64::from(operation.label))?;
+                        let source = feature_ids
+                            .get(&target.feature)
+                            .and_then(|id| doc.feature(*id))
+                            .filter(|f| !f.suppressed)
+                            .ok_or_else(|| invalid("mirror source follows its selector or is suppressed"))?;
+                        let [body] = source.body_names.as_slice() else {
+                            return Err(invalid("mirror source must identify one produced body"));
+                        };
+                        if !active_bodies.contains(body) || bodies.contains(body) {
+                            return Err(invalid("missing or duplicate mirror source body"));
+                        }
+                        bodies.push(body.clone());
+                        body_number += 1;
+                        outputs.push(format!("Body{body_number}"));
+                    }
+                    if !f.suppressed {
+                        active_bodies.extend(outputs.iter().cloned());
+                    }
+                    new_body = Some(outputs);
+                    FeatureKind::Mirror { features: vec![], plane, bodies, combine: false }
+                }
                 HistoryKind::OffsetPlane { geometry, definition, extra_offset } => {
                     let definition = super::planes::definition(&records, &classes, definition, f.id)?;
                     if definition.extra != extra_offset {

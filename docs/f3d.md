@@ -1696,3 +1696,36 @@ Validation passed all 30 CI test binaries, the 68 original editable-history
 fixtures, 68 local native endpoint controls and all 14 local inspection tests.
 The HardEdgeBasin opening regression passed in 0.87 seconds. The additional
 decoded adapter entries do not imply that its complete geometry imports yet.
+
+### Separate body mirrors
+
+Controlled circle/extrusion histories identify the version-0 mirror feature,
+its version-1 helper, explicit body source relationships and a tracked plane.
+Separate body mirrors now become editable `Mirror` features. Independent
+extrusion bodies are resolved through their persistent handles, operation owners
+and whole-body label tables. The source list must agree with the helper's list;
+output ownership, count, instance roles and suppression must also agree.
+No cached transform or nearest-body search chooses the source or plane.
+
+Origin planes and already imported offset construction planes stay live. Local
+controls cover source diameter/height edits, plane movement, multiple sources,
+XZ reflection, suppression and unsuppression, saving/reopening and undo. Damaged
+references, unsupported flags and truncated interpreted records fail explicitly.
+Three original SolidCraft fixtures independently check 6000π mm³ for two 20 mm
+diameter, 30 mm tall cylinders, plus changed dimensions and exact bounds; the
+editable fixture suite now contains 71 designs.
+
+The [public mirror API](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/fusion_MirrorFeatureInput.htm)
+distinguishes body combination and feature computation modes. This first native
+mirror path accepts separate bodies only. Combined mirrors, feature/face mirrors,
+face support planes, assemblies and sources modified after their creating
+extrusion still fail before replacing the current document. The large supplied
+designs still require additional native history schemas and are not claimed to
+import completely. The Fusion exports and measurements remain local.
+
+Validation passed all 30 CI binaries, 129 IO tests, 577 engine tests and 71
+editable fixture histories, plus all 37 local native-import groups and all 14
+local inspection tests. The native mirror group covers 11 supported exports and
+atomic rejection of the two unsupported modes; the offset-plane result was
+rendered and visually checked. HardEdgeBasin's opening regression passed in
+0.87 seconds.

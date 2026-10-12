@@ -431,8 +431,12 @@ pub(super) fn target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, con
     let [id] = objects.as_slice() else {
         return Err(invalid("loft target requires one body"));
     };
-    require_class(classes, *id, "9716F783-676D-42E0-93F9-EBF273E7C035", 1)?;
-    let mut r = payload(records.primary(*id)?, *id)?;
+    target_object(records, classes, *id, owner)
+}
+
+pub(super) fn target_object(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<Target> {
+    require_class(classes, id, "9716F783-676D-42E0-93F9-EBF273E7C035", 1)?;
+    let mut r = payload(records.primary(id)?, id)?;
     zeros(&mut r, 6)?;
     let count = r.count(12)?;
     if !(1..=64).contains(&count) {

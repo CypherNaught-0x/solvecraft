@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These sixty-six designs and their JSON command recipes are original SolveCraft test
+These seventy-one designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -212,3 +212,11 @@ logical end rather than its initial low/high cap. Reversing the parent height
 from 30 to -40 mm moves the pocket to the opposite side of XY. Both models check
 44500 mm³ after reversal, plus independent width and endpoint-offset edits,
 world bounds, reopening and undo.
+
+`mirror-body-origin`, `mirror-body-plane` and `mirror-body-xz` reflect a cylinder
+of radius 10 mm and height 30 mm as a separate body. Their total volume is
+2πr²h = 6000π mm³; diameter and height edits give 13500π and 8000π respectively.
+The offset plane moves from Z = 50 to -20 mm, moving the reflected cylinder from
+Z = 70..100 to -70..-40 without changing volume. The XZ case reflects a source
+centered at Y = 20 to Y = -20. Suppression retains only the original cylinder.
+Every case checks exact bounds, body count, volume, reopening and undo.

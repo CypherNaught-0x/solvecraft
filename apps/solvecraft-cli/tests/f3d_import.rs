@@ -79,6 +79,37 @@ fn to_object_endpoints_preserve_target_source_and_offset_edits() {
 }
 
 fn check_endpoint_histories(files: &[&str]) {
+    check_selected_histories(files, |_| true);
+}
+
+#[test]
+#[ignore = "requires local public API body mirror controls"]
+fn body_mirrors_preserve_sources_planes_suppression_and_edits() {
+    check_selected_histories(&["fusion-mirror-measurements.json", "fusion-mirror-modes-measurements.json"], |name| {
+        !name.contains("feature-plane") && !name.ends_with("-combine")
+    });
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    for name in ["mirror-feature-plane-baseline", "mirror-mode-combine"] {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length":5,"width":7,"height":9})).unwrap();
+        let before = s.doc.clone();
+        assert!(s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).is_err(), "{name}");
+        assert_eq!(s.doc, before);
+    }
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-mirror-modes-measurements.json")).unwrap()).unwrap();
+    let mut s = Session::default();
+    s.execute("doc.open", &json!({"path":dir.join("mirror-mode-suppressed.f3d")})).unwrap();
+    let original = s.doc.clone();
+    s.execute("timeline.suppress", &json!({"feature":"Mirror1","suppressed":false})).unwrap();
+    let measure = volume(&mut s, api["mirror-mode-separate"]["volume"].as_f64().unwrap(), "unsuppressed mirror");
+    assert_eq!(measure["body_count"], 2);
+    let reopened = solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap();
+    volume(&mut Session::new(reopened), api["mirror-mode-separate"]["volume"].as_f64().unwrap(), "reopened mirror");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc, original);
+}
+
+fn check_selected_histories(files: &[&str], include: impl Fn(&str) -> bool) {
     let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
     for file in files {
         let api: Value = serde_json::from_slice(&std::fs::read(dir.join(file)).unwrap()).unwrap();
@@ -103,6 +134,9 @@ fn check_endpoint_histories(files: &[&str]) {
             }
         };
         for (name, row) in api.as_object().unwrap() {
+            if !include(name) {
+                continue;
+            }
             let mut s = Session::default();
             s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
             verify(&mut s, row, name);

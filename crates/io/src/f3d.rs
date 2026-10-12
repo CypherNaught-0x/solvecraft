@@ -28,6 +28,7 @@ mod legacy_geometry_tests;
 mod lines;
 mod loft_faces;
 mod lofts;
+mod mirrors;
 mod offset_import;
 mod operations;
 mod parameters;

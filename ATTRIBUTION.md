@@ -137,3 +137,6 @@ Vulkan, DirectX 12, Metal and WebGPU retain their requested multisampling.
 | apps/solvecraft-cli/tests/history/extrusion-to-bottom.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/extrusion-travel-cap.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/extrusion-travel-negative-cap.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/mirror-body-origin.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/mirror-body-plane.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/mirror-body-xz.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
