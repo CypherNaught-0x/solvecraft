@@ -14,6 +14,75 @@ fn volume(s: &mut Session, want_cm3: f64, label: &str) -> Value {
 }
 
 #[test]
+#[ignore = "requires local loft public API controls"]
+fn loft_sections_follow_source_and_plane_edits() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-loft-measurements.json")).unwrap()).unwrap();
+    let verify = |s: &mut Session, row: &Value, label: &str| {
+        let measured = volume(s, row["volume"].as_f64().unwrap(), label);
+        assert_eq!(measured["body_count"], row["body_count"], "{label}");
+        for (end, key) in [(0, "min"), (1, "max")] {
+            for axis in 0..3 {
+                // Curved spline bounds are tessellated; use the same 0.01 mm
+                // geometric resolution as the native comparison controls.
+                assert!(
+                    (measured["bodies"][0]["bbox"][key][axis].as_f64().unwrap() - row["bounds"][0][end][axis].as_f64().unwrap() * 10.).abs() < 0.01,
+                    "{label}: bounds {key}/{axis}"
+                );
+            }
+        }
+        assert_eq!(s.doc.features.len(), row["timeline"].as_array().unwrap().len());
+        for (f, t) in s.doc.features.iter().zip(row["timeline"].as_array().unwrap()) {
+            assert_eq!(f.name, t["name"].as_str().unwrap());
+        }
+    };
+    for (name, row) in api.as_object().unwrap() {
+        let mut s = Session::default();
+        if name.starts_with("loft-3-") {
+            // Similar volume is insufficient: the current uniform interpolation
+            // differs from the independent control's outer surface and bounds.
+            let before = s.doc.clone();
+            let error = s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_err();
+            assert!(error.to_string().contains("multi-section loft interpolation"));
+            assert_eq!(s.doc, before);
+            continue;
+        }
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        verify(&mut s, row, name);
+        verify(&mut Session::new(solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap()), row, name);
+        if name.ends_with("-baseline") {
+            let original = s.doc.clone();
+            for (suffix, parameter, expression) in [("source-changed", "source_parameter", "30 mm"), ("plane-changed", "height_parameter", "40 mm")] {
+                s.execute("parameters.change", &json!({"name":row[parameter],"expression":expression})).unwrap();
+                let expected = &api[name.replace("baseline", suffix)];
+                verify(&mut s, expected, suffix);
+                verify(
+                    &mut Session::new(solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap()),
+                    expected,
+                    suffix,
+                );
+            }
+            for _ in 0..2 {
+                s.execute("edit.undo", &json!({})).unwrap();
+            }
+            assert_eq!(s.doc, original);
+            verify(&mut s, row, name);
+        }
+    }
+    for mode in ["baseline", "reversed", "suppressed", "surface", "unmerged"] {
+        let mut s = Session::default();
+        let result = s.execute("doc.open", &json!({"path":dir.join(format!("loft-flags-{mode}.f3d"))}));
+        if matches!(mode, "surface" | "unmerged") {
+            assert!(result.is_err());
+            assert!(s.doc.features.is_empty());
+        } else {
+            result.unwrap();
+            volume(&mut s, if mode == "suppressed" { 0. } else { 7. * std::f64::consts::PI }, mode);
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires SOLVECRAFT_F3D_PROBES pointing to controlled local Fusion exports"]
 fn native_import_reconstructs_and_regenerates_controlled_history() {
     let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));

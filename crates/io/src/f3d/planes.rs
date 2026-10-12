@@ -83,10 +83,16 @@ pub(super) fn definition(records: &Records<'_>, classes: &BTreeMap<u64, &Class>,
             _ => return Err(invalid("unsupported plane extra offset")),
         }
     };
-    zeros(&mut r, 8)?;
-    let mut matrix = [0.; 16];
-    for n in &mut matrix {
-        *n = f64::from_bits(r.u64()?);
+    zeros(&mut r, 7)?;
+    let mut matrix = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    match r.take(1)? {
+        [1] => {}
+        [0] => {
+            for n in &mut matrix {
+                *n = f64::from_bits(r.u64()?);
+            }
+        }
+        _ => return Err(invalid("unsupported plane transform encoding")),
     }
     let plane = super::import::plane(&matrix)?;
     zeros(&mut r, 35)?;

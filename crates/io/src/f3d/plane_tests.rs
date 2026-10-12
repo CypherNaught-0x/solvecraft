@@ -127,6 +127,27 @@ fn bounds(doc: &Document, z: f64) {
     volume(doc, std::f64::consts::PI * 30. * 30. * 17.);
 }
 
+#[test]
+fn compact_identity_plane_transform_matches_explicit_matrix() {
+    for compact in [false, true] {
+        let mut f = planes_fixture();
+        definition(&mut f, 3000, 8, 1000, None, None, 0.);
+        let b = &mut f.0.get_mut(&3000).unwrap().2;
+        if compact {
+            b[50] = 1;
+            b.drain(51..179);
+        }
+        let d = f.design();
+        let records = Records::new(&d);
+        let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+        let definition = planes::definition(&records, &classes, 3000, 8).unwrap();
+        assert_eq!(definition.plane, solvecraft_geom::Plane::XY);
+    }
+    let mut f = planes_fixture();
+    f.0.get_mut(&3000).unwrap().2[50] = 2;
+    assert!(f.design().to_document("Unknown transform encoding").is_err());
+}
+
 fn absent_extra_offsets(legacy: bool) -> Fixture {
     let mut f = planes_fixture();
     for (owner, base, total, name) in [(2000, 1000, 2., "parent"), (2100, 2001, 3., "child")] {

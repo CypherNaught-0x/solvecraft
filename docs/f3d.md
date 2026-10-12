@@ -1213,3 +1213,39 @@ All 32 local native import groups and 13 inspection groups passed. Upstream
 `07e263d` remains integrated and current. Opening Gridfinity now gets past both
 plane entries and reports its next unsupported timeline class, FilletFeature
 at object 46870; this is not yet a full-document import.
+
+
+## Ordered two-section lofts
+
+Version-9 loft features now reconstruct two free sketch-profile sections as an
+editable NewBody loft. The ordered section wrappers are version 1 of class
+`2F3200BA-FDFB-48C6-97D4-71A4A0D86190`; each explicitly names its owning feature
+and profile container. Sketch-profile ownership accepts either an extrusion or
+loft. Section IDs are never sorted to infer order. Suppression and section
+sketch/plane dependencies survive saving and reopening.
+
+Independent local controls distinguish solid/surface and merged/unmerged flags,
+reverse the section order, suppress the feature, and change source diameter and
+section-plane height. Reconstruction requires the observed solid, merged,
+free-condition schema and a single region without holes in each section. Surface,
+face/point, boolean, guided and other unverified modes fail explicitly. Compact
+identity plane transforms now decode alongside explicit 4×4 matrices; mixing an
+origin sketch with an offset-plane sketch exercises this representation.
+
+Three-section lofts remain rejected during reconstruction. The existing kernel's
+uniform interpolation gives approximately 59,057.5 mm³ for the baseline control,
+close to Fusion's measured 59,038.4 mm³, but its maximum radius differs by about
+0.044 mm. The volume tolerance alone would conceal that discrepancy. Body-face
+sections and their persistent parent dependencies are also still required by the
+supplied adapter, so this does not yet enable importing that complete file.
+
+Three original circular/reversed/rectangular loft recipes and `.solvecraft`
+fixtures bring the ordinary editable-history suite to 46 designs. Tests use
+analytic frustum volumes and check dimension/plane edits, reopening and undo.
+The native decoder tests use original field-authored records, owner/section
+corruption and truncated prefixes; no Fusion-produced archive is committed.
+
+Validation: full `cargo xtask ci` passed, including all 46 original fixtures,
+108 I/O tests and ten-crate WebAssembly checking. All 33 local native import
+regression groups passed separately. The rectangular loft fixture was rendered
+and visually checked. Upstream `07e263d` remains integrated and unchanged.

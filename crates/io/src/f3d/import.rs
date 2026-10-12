@@ -487,6 +487,36 @@ impl Design {
                     sketches.insert(geometry, (doc.next_id, plane));
                     FeatureKind::Sketch { plane: plane_ref, sketch }
                 }
+                HistoryKind::Loft { operation, section_containers } => {
+                    if section_containers.len() != 2 {
+                        return Err(invalid("multi-section loft interpolation is not supported yet"));
+                    }
+                    if operation != Operation::NewBody {
+                        return Err(invalid("loft boolean history is not supported yet"));
+                    }
+                    let mut sections = Vec::new();
+                    for container in section_containers {
+                        let chosen = selected(&records, &profiles, f.id, &[container])?;
+                        let [profile] = chosen.as_slice() else {
+                            return Err(invalid("loft section requires one selected sketch profile"));
+                        };
+                        let [loops] = profile.regions.as_slice() else {
+                            return Err(invalid("loft section requires one region"));
+                        };
+                        if loops.len() != 1 {
+                            return Err(invalid("loft sections with holes are not supported yet"));
+                        }
+                        let (sketch, _) = sketches.get(&profile.geometry).ok_or_else(|| invalid("loft section must precede its feature"))?;
+                        sections.push(solvecraft_doc::LoftSection { sketch: *sketch, profiles: profile_selection(profile, &circles)?, point: None });
+                    }
+                    body_number += 1;
+                    let name = format!("Body{body_number}");
+                    if !f.suppressed {
+                        active_bodies.push(name.clone());
+                    }
+                    new_body = Some(vec![name]);
+                    FeatureKind::Loft { sections, operation, targets: vec![] }
+                }
                 HistoryKind::Extrude { operation, profile_containers } => {
                     let selected = selected(&records, &profiles, f.id, &profile_containers)?;
                     let [profile] = selected.as_slice() else {

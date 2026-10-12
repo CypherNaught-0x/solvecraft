@@ -162,6 +162,10 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   offset surfaces and pcurve-only edges are not read yet,
   and assembly components are flattened into bodies. Closed periodic faces (torus, B-spline
   bands) are split in two for meshing; measure() uses a finer tolerance for small radii.
+- Two-section native F3D NewBody lofts preserve ordered sketch profiles, source
+  dimensions, plane dependencies and suppression. Three original loft recipes
+  extend the editable-history suite to 46 files. Multi-section interpolation,
+  body-face sections and the larger supplied designs remain incomplete.
 - Native F3D investigation: bounded archive/index inspection via `file.inspect_f3d`
   validates four supplied local files without changing the current design. Layout 8
   supports Zstandard archives and inspection of parameter expressions, values,

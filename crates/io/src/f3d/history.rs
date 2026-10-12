@@ -23,6 +23,7 @@ pub enum HistoryKind {
     Sketch { geometry: u64, placement: SketchPlacement },
     OffsetPlane { geometry: u64, definition: u64, extra_offset: Option<u64> },
     Extrude { operation: Operation, profile_containers: Vec<u64> },
+    Loft { operation: Operation, section_containers: Vec<u64> },
 }
 
 #[derive(Debug, PartialEq)]
@@ -174,6 +175,11 @@ impl Design {
                             }
                             (HistoryKind::OffsetPlane { geometry, definition, extra_offset }, String::new())
                         }
+                        (super::lofts::CLASS, 9) => {
+                            let (operation, section_containers) = super::lofts::inputs(&mut r, &records, &classes, id)?;
+                            body_roles(&mut r, &classes, body_feature_version)?;
+                            (HistoryKind::Loft { operation, section_containers }, String::new())
+                        }
                         (EXTRUDE, 8) => {
                             let input = extrude_inputs(&mut r, &classes)?;
                             let operation = input.operation;
@@ -183,14 +189,7 @@ impl Design {
                             }
                             // Versioned role-specific object lists: the populated list
                             // changes for booleans. Their roles remain uninterpreted.
-                            let role_count = match body_feature_version {
-                                1 => 3,
-                                2 => 4,
-                                _ => return Err(invalid("unsupported inherited extrusion schema")),
-                            };
-                            for _ in 0..role_count {
-                                validate_refs(&classes, &references(&mut r)?)?;
-                            }
+                            body_roles(&mut r, &classes, body_feature_version)?;
                             (HistoryKind::Extrude { operation, profile_containers }, String::new())
                         }
                         _ => return Err(invalid(&format!("unsupported timeline feature {id}: class {} version {}", class.id, class.version))),
@@ -292,7 +291,7 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
     Ok(ExtrudeInputs { operation, axis, distance, taper, start_offset })
 }
 
-fn operation(value: u32) -> Result<Operation> {
+pub(super) fn operation(value: u32) -> Result<Operation> {
     match value {
         1 => Ok(Operation::Join),
         2 => Ok(Operation::Cut),
@@ -300,6 +299,18 @@ fn operation(value: u32) -> Result<Operation> {
         4 => Ok(Operation::NewBody),
         _ => Err(invalid("unsupported extrusion operation")),
     }
+}
+
+fn body_roles(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>, version: u32) -> Result<()> {
+    let count = match version {
+        1 => 3,
+        2 => 4,
+        _ => return Err(invalid("unsupported inherited body feature schema")),
+    };
+    for _ in 0..count {
+        validate_refs(classes, &references(r)?)?;
+    }
+    Ok(())
 }
 
 fn placement(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, geometry: u64, version: u32) -> Result<(SketchPlacement, String)> {

@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These forty-three designs and their JSON command recipes are original SolveCraft test
+These forty-six designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -122,3 +122,9 @@ semicircle (including a rotated source arc). Their source radius/diameter and
 height edits survive reopening and undo. Quarter areas are πr²/4. The smaller
 semicircle region has area `(r² acos(x/r) − x sqrt(r² − x²))/2`, with divider
 x = 10 mm; the larger region is the semicircle area minus that value.
+
+Three `loft-*` fixtures add circular and rectangular transitions between two
+sketches, including reversed section order. Source dimensions and section-plane
+height stay editable through reopening and undo. The circular frustum uses
+πh(r₀² + r₀r₁ + r₁²)/3. The rectangular transition uses
+h(2w₀d₀ + w₀d₁ + w₁d₀ + 2w₁d₁)/6; both formulas are independent of the kernel.

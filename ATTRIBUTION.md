@@ -111,3 +111,7 @@ Vulkan, DirectX 12, Metal and WebGPU retain their requested multisampling.
 | apps/solvecraft-cli/tests/history/pieces-arc-right.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 
 | apps/solvecraft-cli/tests/history/plane-yz.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+
+| apps/solvecraft-cli/tests/history/loft-circle.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/loft-circle-reversed.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/loft-rectangle.solvecraft | SolveCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
