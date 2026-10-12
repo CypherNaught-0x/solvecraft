@@ -22,7 +22,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "CREATE")
         .icon("sweep")
         .params("sketch: profile sketch; profiles?; path_sketch: sketch; path: [curve ids in order]; operation?"),
-    CommandSpec::new("solid.loft", "Loft", loft).at("SOLID", "CREATE").icon("loft").params("sections: [{sketch, profiles?} | {sketch, point: id} (an apex)] (2 or more, in order); operation?"),
+    CommandSpec::new("solid.loft", "Loft", loft).at("SOLID", "CREATE").icon("loft").params("sections: [{sketch, profiles?} | {sketch, point: id} (an apex) | {face: [x,y,z], body?, index?}] (2..50, in order); operation?, targets?"),
     CommandSpec::new("solid.box", "Box", prim_box).at("SOLID", "CREATE").icon("box").params("length, width, height: expr; corner?: [x,y,z] | center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?"),
     CommandSpec::new("solid.cylinder", "Cylinder", prim_cylinder).at("SOLID", "CREATE").icon("cylinder").params("radius | diameter, height: expr; base?: [x,y,z] (centre of the bottom: numbers in mm or length expressions; default: the origin); axis?: X|Y|Z|[x,y,z] (default Z); operation?"),
     CommandSpec::new("solid.sphere", "Sphere", prim_sphere).at("SOLID", "CREATE").icon("sphere").params("radius | diameter: expr; center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?"),
@@ -1315,6 +1315,17 @@ fn loft(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut sections = Vec::new();
     for sec in list {
+        if sec.get("face").is_some() {
+            if sec.get("sketch").is_some() || sec.get("point").is_some() || sec.get("profiles").is_some() {
+                return Err(bad(cmd, "face section cannot also select a sketch, point or profiles"));
+            }
+            let plane = super::sketch::face::capture(s, sec, cmd)?;
+            let solvecraft_doc::PlaneRef::Face { anchor: Some(anchor), .. } = plane else {
+                return Err(bad(cmd, "loft face requires a persistent planar attachment"));
+            };
+            sections.push(solvecraft_doc::LoftSection { sketch: 0, profiles: solvecraft_doc::ProfileSel::All, point: None, face: Some(anchor) });
+            continue;
+        }
         let sketch = sketch_id(s, sec.get("sketch"), cmd, "sections[].sketch")?;
         // A sketch point closes the loft to an apex.
         if let Some(pt) = str_(sec, "point") {
@@ -1322,10 +1333,10 @@ fn loft(s: &mut Session, p: &Value) -> Result<Value> {
             if !st.sketch(sketch).is_some_and(|ss| ss.sketch.points.iter().any(|q| q.id == pt)) {
                 return Err(bad(cmd, format!("no point `{pt}` in the section's sketch")));
             }
-            sections.push(solvecraft_doc::LoftSection { sketch, profiles: solvecraft_doc::ProfileSel::All, point: Some(pt.to_string()) });
+            sections.push(solvecraft_doc::LoftSection { sketch, profiles: solvecraft_doc::ProfileSel::All, point: Some(pt.to_string()), face: None });
             continue;
         }
-        sections.push(solvecraft_doc::LoftSection { sketch, profiles: profiles(sec, cmd)?, point: None });
+        sections.push(solvecraft_doc::LoftSection { sketch, profiles: profiles(sec, cmd)?, point: None, face: None });
     }
     add_feature(s, p, FeatureKind::Loft { sections, operation: operation(p, cmd)?, targets: string_list(p, "targets") })
 }

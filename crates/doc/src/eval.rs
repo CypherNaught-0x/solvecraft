@@ -1915,13 +1915,14 @@ fn feature_tools_with_constructor(
             // A profile lofted to a sketch point (an apex).
             let [a, b] = &sections[..] else { return Err(DocError::Invalid("not supported yet: a point section in a loft of more than two".into())) };
             let (prof, pt) = if a.point.is_some() { (b, a) } else { (a, b) };
-            let ss = st.sketch(prof.sketch).ok_or_else(|| DocError::Unknown(format!("sketch {}", prof.sketch)))?;
-            let regions = solvecraft_sketch::merge_regions(&select_profiles(ss, &prof.profiles)?);
-            let [r] = &regions[..] else { return Err(DocError::Invalid("each loft section must be one profile".into())) };
+            let (plane, r) = prof.region(doc, st, f.component)?;
+            if pt.face.is_some() {
+                return Err(DocError::Invalid("face section cannot be a loft point".into()));
+            }
             let ps = st.sketch(pt.sketch).ok_or_else(|| DocError::Unknown(format!("sketch {}", pt.sketch)))?;
             let id = pt.point.as_deref().unwrap_or_default();
             let q = ps.sketch.points.iter().find(|p| p.id == id).ok_or_else(|| DocError::Unknown(format!("point `{id}` in {}", ps.name)))?;
-            Ok(vec![kernel::loft_to_point(&ss.plane, &r.outer, ps.plane.to_world(q.pos))?])
+            Ok(vec![kernel::loft_to_point(&plane, &r.outer, ps.plane.to_world(q.pos))?])
         }
         FeatureKind::Coil { base, axis, diameter, pitch, turns, section_size, section, position, start_angle, clockwise, .. } => {
             let base = &point(vals, base)?;
@@ -1965,12 +1966,8 @@ fn feature_tools_with_constructor(
         FeatureKind::Loft { sections, .. } => {
             let mut secs = Vec::new();
             for sec in sections {
-                let ss = st
-                    .sketch(sec.sketch)
-                    .ok_or_else(|| DocError::Unknown(format!("sketch {} (it must come earlier in the timeline)", sec.sketch)))?;
-                let regions = solvecraft_sketch::merge_regions(&select_profiles(ss, &sec.profiles)?);
-                let [r] = &regions[..] else { return Err(DocError::Invalid("each loft section must be one profile".into())) };
-                secs.push((ss.plane, r.outer.clone()));
+                let (plane, region) = sec.region(doc, st, f.component)?;
+                secs.push((plane, region.outer));
             }
             Ok(vec![kernel::loft(&secs)?])
         }

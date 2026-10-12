@@ -1249,3 +1249,45 @@ Validation: full `cargo xtask ci` passed, including all 46 original fixtures,
 108 I/O tests and ten-crate WebAssembly checking. All 33 local native import
 regression groups passed separately. The rectangular loft fixture was rendered
 and visually checked. Upstream `07e263d` remains integrated and unchanged.
+
+## Persistent extrusion-cap loft sections
+
+Two-section solid lofts now also accept the verified circular extrusion-cap
+recipe. Section kind 3 selects a version-3 face selector whose bounded incidence
+recipe identifies the producing operation and top/bottom cap. The producer's
+body handle and output role must agree, and the operation index must identify
+the same preceding feature. Repeated labels alone, cached coordinates and nearby
+faces never establish identity. Unknown incidence trees and noncircular cap
+recipes remain explicit unsupported errors.
+
+Join mode resolves its version-1 body selector through a separate body recipe,
+producer handle and operation index. It requires one explicit active target;
+NewBody requires none. Cut and intersection modes remain unsupported.
+
+SolidCraft format 18 stores these sections as certified face anchors. The same
+anchor resolver used for attached sketches follows source geometry and parent
+height edits. A zero-valued taper expression is equivalent to an absent taper
+for certification; a later nonzero taper revokes this supported identity. Face
+sections reject holes and ambiguous mixed sketch/face inputs. Component copies
+remap internal producer certificates and occurrence paths.
+
+Sixteen independent local API controls cover top and bottom caps, Join/NewBody,
+overlapping independent bodies, and cumulative source-diameter, parent-height
+and section-plane edits. Tests compare each body's bounds, total volume, timeline,
+reopening and undo. These controls exposed a shared kernel bug: circular
+resampling discarded the winding chosen for an opposing section plane, twisting
+the loft. Resampling now preserves that winding, with a separate analytic
+frustum regression for both section orders and positive/negative heights.
+
+Three additional original face-loft recipes and `.solvecraft` files bring the
+regular editable-history suite to 49 designs. The decoder suite authors its own
+records and tests cap roles, producer identities, Join targets, corrupted fields
+and truncated prefixes. Fusion exports and measurements remain local only.
+General native face recipes and multi-section interpolation are still required
+before the supplied adapter can be imported completely.
+
+Validation: `cargo xtask ci` passed all 30 binaries, 110 I/O tests, 569 engine
+tests, 205 enabled kernel tests, 49 original history fixtures and the ten-crate
+WebAssembly check. All 34 local native-import regression groups passed. The
+bottom-face fixture was rendered and checked visually. The HardEdgeBasin opening
+regression passed in the same gate; upstream `07e263d` remains integrated.

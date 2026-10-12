@@ -415,6 +415,18 @@ pub(super) fn paste(
             anchor.author_path = cloned_path(&source, &original.author_path, component, &clone_path, &occurrences)?;
         }
         if let Some(slot) = scratch.doc_mut().feature_mut(f.id) {
+            if let (FeatureKind::Loft { sections, .. }, FeatureKind::Loft { sections: originals, .. }) = (&mut f.kind, &old.kind) {
+                for (section, original) in sections.iter_mut().zip(originals) {
+                    if let (Some(anchor), Some(original)) = (&mut section.face, &original.face) {
+                        if bodies.contains_key(&original.target.body) {
+                            anchor.component =
+                                *components.get(&original.component).ok_or_else(|| bad(CMD, "loft source component is outside copied graph"))?;
+                            anchor.path = cloned_path(&source, &original.path, component, &clone_path, &occurrences)?;
+                        }
+                        anchor.author_path = cloned_path(&source, &original.author_path, component, &clone_path, &occurrences)?;
+                    }
+                }
+            }
             *slot = f;
         }
     }
@@ -549,6 +561,14 @@ pub(super) fn paste(
                 "{} retains external exact face attachment to {} (producer {})",
                 feature.name, anchor.target.body, anchor.target.origin_feature
             ));
+        }
+        if let FeatureKind::Loft { sections, .. } = &feature.kind {
+            for anchor in sections.iter().filter_map(|s| s.face.as_ref()).filter(|a| !bodies.contains_key(&a.target.body)) {
+                notices.push(format!(
+                    "{} retains external exact loft face attachment to {} (producer {})",
+                    feature.name, anchor.target.body, anchor.target.origin_feature
+                ));
+            }
         }
         for id in feature.kind.input_sketches() {
             if !features.contains_key(&id) {

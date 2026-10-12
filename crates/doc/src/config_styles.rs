@@ -109,9 +109,9 @@ impl Document {
         let Some(feature) = self.feature(producer) else { return false };
         match (certificate, &feature.kind) {
             (FaceCertificate::Box { .. }, FeatureKind::Box { operation: crate::Operation::NewBody, .. }) => true,
-            (FaceCertificate::ExtrudeCap { sketch, .. }, FeatureKind::Extrude { sketch: current, extent, operation: crate::Operation::NewBody, .. }) => sketch == current && extent.taper.is_none(),
+            (FaceCertificate::ExtrudeCap { sketch, .. }, FeatureKind::Extrude { sketch: current, extent, operation: crate::Operation::NewBody, .. }) => sketch == current && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.)),
             (FaceCertificate::ExtrudeSide { sketch, curve }, FeatureKind::Extrude { sketch: current, extent, operation: crate::Operation::NewBody, .. }) => {
-                sketch == current && extent.taper.is_none()
+                sketch == current && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.))
                     && self.feature(*sketch).is_some_and(|feature| matches!(&feature.kind, FeatureKind::Sketch { sketch, .. } if sketch.curves.iter().any(|candidate| candidate.id == *curve && !candidate.construction && matches!(candidate.kind, solvecraft_sketch::CurveKind::Line { .. } | solvecraft_sketch::CurveKind::Circle { .. } | solvecraft_sketch::CurveKind::Arc { .. }))))
             }
             (FaceCertificate::Imported { .. }, FeatureKind::Import { .. }) => true,
@@ -133,11 +133,11 @@ impl Document {
                     ["x", "y", "z"].get(*axis as usize).is_some_and(|axis| role == format!("{}{axis}", if *high { "+" } else { "-" }))
                 }
                 (super::FaceCertificate::ExtrudeCap { sketch, high, outer, holes }, FeatureKind::Extrude { sketch: producer_sketch, extent, operation: crate::Operation::NewBody, .. }) => {
-                    sketch == producer_sketch && extent.taper.is_none()
+                    sketch == producer_sketch && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.))
                         && role == format!("cap:{}:{}", if *high { "high" } else { "low" }, super::cap_key(outer, holes))
                 }
                 (super::FaceCertificate::ExtrudeSide { sketch, curve }, FeatureKind::Extrude { sketch: producer_sketch, extent, operation: crate::Operation::NewBody, .. }) => {
-                    sketch == producer_sketch && extent.taper.is_none() && role == format!("side:{curve}")
+                    sketch == producer_sketch && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.)) && role == format!("side:{curve}")
                         && self.feature(*sketch).is_some_and(|feature| matches!(&feature.kind, FeatureKind::Sketch { sketch, .. } if sketch.curves.iter().any(|candidate| candidate.id == *curve && !candidate.construction && matches!(candidate.kind, solvecraft_sketch::CurveKind::Line { .. } | solvecraft_sketch::CurveKind::Circle { .. } | solvecraft_sketch::CurveKind::Arc { .. }))))
                 }
                 (super::FaceCertificate::Imported { .. }, FeatureKind::Import { .. }) => role.strip_prefix("face:").is_some_and(|index| index.parse::<usize>().is_ok()),

@@ -25,6 +25,7 @@ mod import_tests;
 #[cfg(test)]
 mod legacy_geometry_tests;
 mod lines;
+mod loft_faces;
 mod lofts;
 mod offset_import;
 mod operations;

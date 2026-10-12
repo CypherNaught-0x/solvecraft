@@ -64,8 +64,15 @@ pub(super) fn inputs(
         }
         let container = s.reference()?;
         require_class(classes, container, "2CA5A1CD-C99B-4C9B-91AF-57989148E841", 1)?;
-        if s.u32()? != 2 {
-            return Err(invalid("loft face/point sections are not supported yet"));
+        let kind = s.u32()?;
+        let objects = super::loft_faces::objects(records, classes, container, feature)?;
+        let [object] = objects.as_slice() else {
+            return Err(invalid("loft section requires one source"));
+        };
+        match kind {
+            2 => require_class(classes, *object, "4BD53E5A-0B3E-45E5-AE8B-02044306485A", 0)?,
+            3 => require_class(classes, *object, super::body_projections::SELECTOR, 3)?,
+            _ => return Err(invalid("loft point sections are not supported yet")),
         }
         finish(&s)?;
         containers.push(container);

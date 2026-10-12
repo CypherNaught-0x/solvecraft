@@ -59,7 +59,7 @@ impl FeatureKind {
             }
             FeatureKind::Pipe { path_sketch, .. } => sk(path_sketch),
             FeatureKind::SheetFold { sketch: Some(s), .. } => sk(s),
-            FeatureKind::Loft { sections, .. } => sections.iter_mut().for_each(|s| sk(&mut s.sketch)),
+            FeatureKind::Loft { sections, .. } => sections.iter_mut().filter(|s| s.face.is_none()).for_each(|s| sk(&mut s.sketch)),
             FeatureKind::Hole { points: Some(p), .. } => sk(&mut p.sketch),
             FeatureKind::Pattern { features, pattern, .. } => {
                 feats(features);
@@ -270,6 +270,11 @@ impl crate::Feature {
             _ => {}
         }
         self.kind.remap_refs(ids, names);
+        if let K::Loft { sections, .. } = &mut self.kind {
+            for anchor in sections.iter_mut().filter_map(|s| s.face.as_mut()) {
+                anchor.remap_target(ids, bodies)?;
+            }
+        }
         for n in &mut self.body_names {
             mapped_name(n, bodies);
         }

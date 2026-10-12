@@ -14,6 +14,63 @@ fn volume(s: &mut Session, want_cm3: f64, label: &str) -> Value {
 }
 
 #[test]
+#[ignore = "requires local face-section loft public API controls"]
+fn loft_face_sections_preserve_cap_body_and_parent_dependencies() {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    for file in ["fusion-face-loft-measurements.json", "fusion-face-loft-extra-measurements.json"] {
+        let api: Value = serde_json::from_slice(&std::fs::read(dir.join(file)).unwrap()).unwrap();
+        let verify = |s: &mut Session, row: &Value, label: &str| {
+            let measured = volume(s, row["volume"].as_f64().unwrap(), label);
+            assert_eq!(measured["body_count"], row["body_count"], "{label}");
+            let mut bounds = measured["bodies"].as_array().unwrap().iter().map(|b| &b["bbox"]).collect::<Vec<_>>();
+            for expected in row["bounds"].as_array().unwrap() {
+                let i = bounds
+                    .iter()
+                    .position(|b| {
+                        [(0, "min"), (1, "max")].into_iter().all(|(end, key)| {
+                            (0..3).all(|axis| (b[key][axis].as_f64().unwrap() - expected[end][axis].as_f64().unwrap() * 10.).abs() < 0.01)
+                        })
+                    })
+                    .unwrap_or_else(|| panic!("{label}: missing body bounds {expected}, got {bounds:?}"));
+                bounds.remove(i);
+            }
+            assert_eq!(s.doc.features.len(), row["timeline"].as_array().unwrap().len());
+            for (f, t) in s.doc.features.iter().zip(row["timeline"].as_array().unwrap()) {
+                assert_eq!(f.name, t["name"].as_str().unwrap());
+            }
+        };
+        for (name, row) in api.as_object().unwrap() {
+            let mut s = Session::default();
+            s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+            verify(&mut s, row, name);
+            verify(&mut Session::new(solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap()), row, name);
+            if name.ends_with("-baseline") {
+                let original = s.doc.clone();
+                for (suffix, parameter, expr) in [
+                    ("source-changed", "source_parameter", "30 mm"),
+                    ("parent-changed", "parent_parameter", "15 mm"),
+                    ("plane-changed", "plane_parameter", if name.contains("bottom") { "-40 mm" } else { "50 mm" }),
+                ] {
+                    s.execute("parameters.change", &json!({"name":row[parameter],"expression":expr})).unwrap();
+                    let expected = &api[name.replace("baseline", suffix)];
+                    verify(&mut s, expected, suffix);
+                    verify(
+                        &mut Session::new(solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap()),
+                        expected,
+                        suffix,
+                    );
+                }
+                for _ in 0..3 {
+                    s.execute("edit.undo", &json!({})).unwrap();
+                }
+                assert_eq!(s.doc, original);
+                verify(&mut s, row, name);
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires local loft public API controls"]
 fn loft_sections_follow_source_and_plane_edits() {
     let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());

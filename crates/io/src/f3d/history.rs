@@ -23,7 +23,7 @@ pub enum HistoryKind {
     Sketch { geometry: u64, placement: SketchPlacement },
     OffsetPlane { geometry: u64, definition: u64, extra_offset: Option<u64> },
     Extrude { operation: Operation, profile_containers: Vec<u64> },
-    Loft { operation: Operation, section_containers: Vec<u64> },
+    Loft { operation: Operation, section_containers: Vec<u64>, target_containers: Vec<u64> },
 }
 
 #[derive(Debug, PartialEq)]
@@ -177,8 +177,9 @@ impl Design {
                         }
                         (super::lofts::CLASS, 9) => {
                             let (operation, section_containers) = super::lofts::inputs(&mut r, &records, &classes, id)?;
-                            body_roles(&mut r, &classes, body_feature_version)?;
-                            (HistoryKind::Loft { operation, section_containers }, String::new())
+                            let roles = body_roles(&mut r, &classes, body_feature_version)?;
+                            let target_containers = roles.last().cloned().unwrap_or_default();
+                            (HistoryKind::Loft { operation, section_containers, target_containers }, String::new())
                         }
                         (EXTRUDE, 8) => {
                             let input = extrude_inputs(&mut r, &classes)?;
@@ -301,16 +302,19 @@ pub(super) fn operation(value: u32) -> Result<Operation> {
     }
 }
 
-fn body_roles(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>, version: u32) -> Result<()> {
+fn body_roles(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>, version: u32) -> Result<Vec<Vec<u64>>> {
     let count = match version {
         1 => 3,
         2 => 4,
         _ => return Err(invalid("unsupported inherited body feature schema")),
     };
+    let mut roles = Vec::new();
     for _ in 0..count {
-        validate_refs(classes, &references(r)?)?;
+        let ids = references(r)?;
+        validate_refs(classes, &ids)?;
+        roles.push(ids);
     }
-    Ok(())
+    Ok(roles)
 }
 
 fn placement(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, geometry: u64, version: u32) -> Result<(SketchPlacement, String)> {

@@ -128,3 +128,11 @@ sketches, including reversed section order. Source dimensions and section-plane
 height stay editable through reopening and undo. The circular frustum uses
 πh(r₀² + r₀r₁ + r₁²)/3. The rectangular transition uses
 h(2w₀d₀ + w₀d₁ + w₁d₀ + 2w₁d₁)/6; both formulas are independent of the kernel.
+
+Three `loft-face-*` fixtures use the top or bottom cap of a 20 mm diameter,
+10 mm tall extrusion as a persistent section. The other section is a 40 mm
+diameter circle 30 mm away. NewBody and Join controls have the same analytic
+volume, 8000π mm³, with different body counts. Independent source diameter,
+parent height and section-plane edits check that the loft follows the original
+face after regeneration, saving and undo. The bottom-face control also guards
+against circular loft winding being lost between oppositely oriented planes.

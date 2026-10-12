@@ -24,6 +24,7 @@ pub mod format;
 mod format_offsets;
 pub use format_offsets::whole_profile_selection_from_value;
 pub mod joints;
+mod loft;
 pub mod motion;
 pub mod naming;
 mod params;

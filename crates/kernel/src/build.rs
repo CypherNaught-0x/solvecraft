@@ -759,7 +759,13 @@ fn resample(lp: &Loop2, n: usize, angles: &[f64]) -> Loop2 {
         });
     if circle && let Some(Seg2::Arc { center, radius, .. }) = lp.segs.first().copied() {
         let mut a: Vec<f64> = if angles.len() == n { angles.to_vec() } else { (0..n).map(|i| std::f64::consts::TAU * i as f64 / n as f64).collect() };
-        // Keep the given order but make them increase.
+        // Preserve the oriented loop's winding. Opposing section planes need
+        // opposite local sweeps to keep their world-space boundaries aligned.
+        let direction = if lp.signed_area() < 0.0 { -1.0 } else { 1.0 };
+        for angle in &mut a {
+            *angle *= direction;
+        }
+        // Unwrap in the winding direction without changing the vertex order.
         for i in 1..a.len() {
             while a[i] <= a[i - 1] {
                 a[i] += std::f64::consts::TAU;
@@ -769,7 +775,7 @@ fn resample(lp: &Loop2, n: usize, angles: &[f64]) -> Loop2 {
             .map(|i| {
                 let s = a[i];
                 let e = if i + 1 < n { a[i + 1] } else { a[0] + std::f64::consts::TAU };
-                Seg2::Arc { center, radius, start: s, sweep: e - s }
+                Seg2::Arc { center, radius, start: direction * s, sweep: direction * (e - s) }
             })
             .collect();
         return Loop2 { segs };

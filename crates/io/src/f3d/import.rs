@@ -487,15 +487,55 @@ impl Design {
                     sketches.insert(geometry, (doc.next_id, plane));
                     FeatureKind::Sketch { plane: plane_ref, sketch }
                 }
-                HistoryKind::Loft { operation, section_containers } => {
+                HistoryKind::Loft { operation, section_containers, target_containers } => {
                     if section_containers.len() != 2 {
                         return Err(invalid("multi-section loft interpolation is not supported yet"));
                     }
-                    if operation != Operation::NewBody {
-                        return Err(invalid("loft boolean history is not supported yet"));
+                    if !matches!(operation, Operation::NewBody | Operation::Join) {
+                        return Err(invalid("loft cut/intersect history is not supported yet"));
                     }
                     let mut sections = Vec::new();
                     for container in section_containers {
+                        let objects = super::loft_faces::objects(&records, &classes, container, f.id)?;
+                        let [object] = objects.as_slice() else {
+                            return Err(invalid("loft section requires one source"));
+                        };
+                        if classes.get(object).is_some_and(|c| c.id == super::body_projections::SELECTOR) {
+                            let face = super::loft_faces::face(&records, &classes, *object, f.id)?;
+                            if operation_owners.is_none() {
+                                operation_owners = Some(self.operation_owners()?);
+                            }
+                            if operation_owners.as_ref().and_then(|o| o.get(&face.operation)) != Some(&face.feature) {
+                                return Err(invalid("loft face operation disagrees with its producer"));
+                            }
+                            let profile: &&SketchProfile =
+                                source_profiles.get(&face.feature).ok_or_else(|| invalid("loft face precedes its producer"))?;
+                            let [loops] = profile.regions.as_slice() else {
+                                return Err(invalid("unsupported loft face producer regions"));
+                            };
+                            let [boundary] = loops.as_slice() else {
+                                return Err(invalid("unsupported loft face producer holes"));
+                            };
+                            let [circle] = boundary.curves.as_slice() else {
+                                return Err(invalid("loft face recipe requires a circular producer"));
+                            };
+                            if !boundary.outer || boundary.pieces != [(1, 1)] || !circles.contains_key(circle) {
+                                return Err(invalid("unsupported loft cap boundary recipe"));
+                            }
+                            projection_model.evaluate(&doc);
+                            if projection_model.results.iter().any(|r| r.error.is_some()) {
+                                return Err(invalid("cannot regenerate loft face dependencies"));
+                            }
+                            let id = *feature_ids.get(&face.feature).ok_or_else(|| invalid("missing imported loft face producer"))?;
+                            let anchor = face.anchor(&doc, &projection_model.state(), id)?;
+                            sections.push(solvecraft_doc::LoftSection {
+                                sketch: 0,
+                                profiles: ProfileSel::All,
+                                point: None,
+                                face: Some(Box::new(anchor)),
+                            });
+                            continue;
+                        }
                         let chosen = selected(&records, &profiles, f.id, &[container])?;
                         let [profile] = chosen.as_slice() else {
                             return Err(invalid("loft section requires one selected sketch profile"));
@@ -507,15 +547,46 @@ impl Design {
                             return Err(invalid("loft sections with holes are not supported yet"));
                         }
                         let (sketch, _) = sketches.get(&profile.geometry).ok_or_else(|| invalid("loft section must precede its feature"))?;
-                        sections.push(solvecraft_doc::LoftSection { sketch: *sketch, profiles: profile_selection(profile, &circles)?, point: None });
+                        sections.push(solvecraft_doc::LoftSection {
+                            sketch: *sketch,
+                            profiles: profile_selection(profile, &circles)?,
+                            point: None,
+                            face: None,
+                        });
                     }
-                    body_number += 1;
-                    let name = format!("Body{body_number}");
-                    if !f.suppressed {
-                        active_bodies.push(name.clone());
-                    }
-                    new_body = Some(vec![name]);
-                    FeatureKind::Loft { sections, operation, targets: vec![] }
+                    let targets = if operation == Operation::NewBody {
+                        if !target_containers.is_empty() {
+                            return Err(invalid("new-body loft cannot have boolean targets"));
+                        }
+                        body_number += 1;
+                        let name = format!("Body{body_number}");
+                        if !f.suppressed {
+                            active_bodies.push(name.clone());
+                        }
+                        new_body = Some(vec![name]);
+                        vec![]
+                    } else {
+                        let [container] = target_containers.as_slice() else {
+                            return Err(invalid("loft join requires one explicit target"));
+                        };
+                        let (producer, operation) = super::loft_faces::target(&records, &classes, *container, f.id)?;
+                        if operation_owners.is_none() {
+                            operation_owners = Some(self.operation_owners()?);
+                        }
+                        if operation_owners.as_ref().and_then(|o| o.get(&operation)) != Some(&producer) {
+                            return Err(invalid("loft target operation disagrees with its producer"));
+                        }
+                        let source =
+                            feature_ids.get(&producer).and_then(|id| doc.feature(*id)).ok_or_else(|| invalid("loft target precedes its producer"))?;
+                        let [body] = source.body_names.as_slice() else {
+                            return Err(invalid("loft target must identify one body"));
+                        };
+                        if !active_bodies.contains(body) {
+                            return Err(invalid("loft target body is no longer active"));
+                        }
+                        vec![body.clone()]
+                    };
+                    FeatureKind::Loft { sections, operation, targets }
                 }
                 HistoryKind::Extrude { operation, profile_containers } => {
                     let selected = selected(&records, &profiles, f.id, &profile_containers)?;

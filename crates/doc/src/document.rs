@@ -89,10 +89,11 @@ pub struct PieceProfileBoundary {
 }
 
 /// Which closed profiles of a sketch a feature uses.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProfileSel {
     /// Every profile.
+    #[default]
     All,
     /// Profiles by index in the solved sketch's profile list.
     Indices { indices: Vec<usize> },
@@ -970,14 +971,18 @@ pub struct Component {
     pub parent: u64,
 }
 
-/// One loft section: profiles of a sketch.
+/// One loft section: a sketch profile/point or an exact planar body face.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LoftSection {
+    #[serde(default)]
     pub sketch: u64,
+    #[serde(default)]
     pub profiles: ProfileSel,
     /// A sketch point instead of a profile (the loft closes to it, as a pyramid's apex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub point: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<Box<crate::FaceAnchor>>,
 }
 
 /// Coil cross-sections.
@@ -1133,7 +1138,7 @@ impl FeatureKind {
             | K::SheetContour { sketch, .. } => vec![*sketch],
             K::Sweep { sketch, path_sketch, .. } => vec![*sketch, *path_sketch],
             K::Pipe { path_sketch, .. } | K::Pattern { pattern: PatternKind::Path { path_sketch, .. }, .. } => vec![*path_sketch],
-            K::Loft { sections, .. } => sections.iter().map(|s| s.sketch).collect(),
+            K::Loft { sections, .. } => sections.iter().filter(|s| s.face.is_none()).map(|s| s.sketch).collect(),
             K::SheetFold { sketch, .. } | K::SplitFace { sketch, .. } | K::Patch { sketch, .. } => sketch.iter().copied().collect(),
             K::Hole { points, .. } => points.iter().map(|p| p.sketch).collect(),
             K::Sketch { .. }
@@ -1341,7 +1346,9 @@ impl FeatureKind {
             | FeatureKind::Emboss { sketch, profiles, .. }
             | FeatureKind::SheetBase { sketch, profiles, .. } => vec![(*sketch, profiles)],
             FeatureKind::Patch { sketch: Some(sk), profiles, .. } => vec![(*sk, profiles)],
-            FeatureKind::Loft { sections, .. } => sections.iter_mut().filter(|s| s.point.is_none()).map(|s| (s.sketch, &mut s.profiles)).collect(),
+            FeatureKind::Loft { sections, .. } => {
+                sections.iter_mut().filter(|s| s.point.is_none() && s.face.is_none()).map(|s| (s.sketch, &mut s.profiles)).collect()
+            }
             _ => Vec::new(),
         }
     }
@@ -1355,9 +1362,11 @@ impl FeatureKind {
             | FeatureKind::Emboss { sketch, profiles, .. }
             | FeatureKind::SheetBase { sketch, profiles, .. } => vec![(*sketch, profiles)],
             FeatureKind::Patch { sketch: Some(sketch), profiles, .. } => vec![(*sketch, profiles)],
-            FeatureKind::Loft { sections, .. } => {
-                sections.iter().filter(|section| section.point.is_none()).map(|section| (section.sketch, &section.profiles)).collect()
-            }
+            FeatureKind::Loft { sections, .. } => sections
+                .iter()
+                .filter(|section| section.point.is_none() && section.face.is_none())
+                .map(|section| (section.sketch, &section.profiles))
+                .collect(),
             _ => Vec::new(),
         }
     }
