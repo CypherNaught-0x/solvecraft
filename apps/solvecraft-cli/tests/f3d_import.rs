@@ -61,6 +61,8 @@ fn loft_face_sections_preserve_cap_body_and_parent_dependencies() {
         "fusion-compound-cap-measurements.json",
         "fusion-face-loft-compound-sides-measurements.json",
         "fusion-compound-polygons-measurements.json",
+        "fusion-serial-join-measurements.json",
+        "fusion-triple-join-measurements.json",
     ] {
         let api: Value = serde_json::from_slice(&std::fs::read(dir.join(file)).unwrap()).unwrap();
         let verify = |s: &mut Session, row: &Value, label: &str| {

@@ -166,8 +166,8 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   circular/rectangular extrusion-cap sections, including explicit Join targets. Source
   dimensions, parent heights, plane dependencies and suppression remain editable.
   Three coaxial circular sections also retain editable chord-length interpolation.
-  Seventeen original loft recipes and a rotated-plane prism extend the
-  editable-history suite to 61 files.
+  Nineteen original loft recipes and a rotated-plane prism extend the
+  editable-history suite to 63 files.
   Finite planar Join certificates retain contributing extrusion identities for
   editable side-face loft attachments. Native rectangular side selectors now
   validate a closed four-edge incidence graph and resolve explicit sketch-curve
@@ -175,9 +175,10 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   Legacy operation maps and retired tags preserve live producer ownership.
   Legacy loft selector prefixes, inherited tails and body-role positions now
   retain the same four adapter face identities as an unchanged modern resave;
-  compound targets from a creating extrusion and subsequent extrusion Joins now
-  retain each operation and validate explicit whole-body labels and ownership. Targets
-  modified by later lofts and the rest of the adapter remain incomplete.
+  compound targets from a creating extrusion and subsequent extrusion or loft Joins
+  retain each operation and validate explicit whole-body labels and ownership. Serial
+  loft targets check prior/current operation roles. Retired target entries and the
+  rest of the adapter remain incomplete.
   Rotated sketch bases retain live offset-plane dependencies.
   Other composite selector roles remain incomplete.
   General multi-section interpolation, other native face recipes and the larger supplied

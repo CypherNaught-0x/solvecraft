@@ -1561,3 +1561,38 @@ including 125 IO tests, 61 saved editable fixtures and WASM. The HardEdgeBasin
 opening regression passed in 0.88 seconds. Both local adapter identity checks
 (original versus unchanged resave) passed. The joined polygon fixture was rendered
 and visually inspected; its image remains local.
+
+
+### Serial loft Join targets
+
+Compound targets now retain prior loft Joins as well as extrusion Joins. Eight
+additional local controls cover two and three serial lofts and source-width,
+parent-height and chained destination-plane edits. Across the 100 face-loft
+controls, imported and edited models agree with independent API volume, bounds,
+body count and timeline measurements, including reopening and undo.
+
+The first creating-extrusion flag changes from 33 to 32 when the target includes
+a loft. Earlier loft entries have flag 128 and the last loft has 129; extrusion
+Join entries keep flag 4. The decoder requires this exact sequence of roles,
+rejects unknown flags and multiple current lofts, and retains the flags alongside
+operation IDs and body labels. Reconstruction resolves every live entry to its
+prior, unsuppressed feature, verifies the feature kind and same-body Join target,
+and validates its explicit whole-body label. A local original/resaved adapter
+check now covers both its extrusion-only and first serial-loft target.
+
+Two original saved recipes exercise serial rectangular transitions with volumes
+calculated from the section dimensions. Ordinary CI now includes 63 editable
+models, with volume, bounds, body-count, parameter-edit, reopen and undo checks.
+Fusion-produced archives and measurements remain local.
+
+Later adapter targets also include retired operation tags. Their relationship to
+live contributors has not yet been established; they remain rejected rather than
+being assigned to another feature. This and other unsupported profiles, extent
+modes and features still prevent complete import of the larger supplied corpus.
+
+Validation after merging upstream `113ded5`: full CI passed all 30 binaries,
+including 126 IO tests, 63 saved editable models, WASM and the HardEdgeBasin opening
+regression. All 35 local native-import groups also passed. The three-loft original
+model was rendered and visually inspected; its image remains local. Public-API
+inspection identifies the adapter's ten rejected extrusion extents as ToEntity
+cuts, which still require editable target-reference reconstruction.

@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These sixty-one designs and their JSON command recipes are original SolveCraft test
+These sixty-three designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -187,3 +187,12 @@ calculated dimensions and volumes as their two-body counterparts, but fuse the
 transition into the existing body. They must remain one body after width, parent
 height and destination-plane edits, reopening and undo. The suite contains 61
 original saved designs.
+
+
+`loft-serial-join` and `loft-triple-join` extend the rectangular joined pedestal
+with one or two additional transitions, each 20 mm tall. The successive sections
+are 20 x 40, 30 x 50 and 40 x 60 mm. Their added analytic volumes are 22666⅔ and
+38666⅔ mm³, giving totals 38666⅔ and 77333⅓ mm³. The chained planes follow edits
+to the first destination height. Source width, pedestal height and destination
+height edits check volume, exact bounds and one body through reopen and undo.
+The suite contains 63 original saved designs.

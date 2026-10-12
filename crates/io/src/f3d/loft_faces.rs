@@ -405,6 +405,7 @@ pub(super) fn face(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u
 pub(super) struct TargetOperation {
     pub operation: u64,
     pub label: u32,
+    pub flags: u32,
 }
 
 #[derive(Debug, PartialEq)]
@@ -429,10 +430,24 @@ pub(super) fn target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, con
     let mut seen = BTreeSet::new();
     for i in 0..count {
         let operation = r.u64()?;
-        if operation == 0 || !seen.insert(operation) || r.u32()? != if i == 0 { 33 } else { 4 } {
+        let flags = r.u32()?;
+        if operation == 0 || !seen.insert(operation) || if i == 0 { !matches!(flags, 32 | 33) } else { !matches!(flags, 4 | 128 | 129) } {
             return Err(invalid("unsupported or duplicate loft target operation"));
         }
-        operations.push(TargetOperation { operation, label: 0 });
+        operations.push(TargetOperation { operation, label: 0, flags });
+    }
+    let last_loft = operations.iter().rposition(|operation| matches!(operation.flags, 128 | 129));
+    for (i, operation) in operations.iter().enumerate() {
+        let expected = if i == 0 {
+            if last_loft.is_some() { 32 } else { 33 }
+        } else if matches!(operation.flags, 128 | 129) {
+            if last_loft == Some(i) { 129 } else { 128 }
+        } else {
+            4
+        };
+        if operation.flags != expected {
+            return Err(invalid("inconsistent loft target current-body ownership"));
+        }
     }
     let identity = r.reference()?;
     require_class(classes, identity, IDENTITY, 3)?;
@@ -742,7 +757,7 @@ mod tests {
             assert_eq!((selected.feature, selected.contributions[0], selected.high), (9, 8001, high));
             assert_eq!(
                 target(&records, &classes, 192, 19).unwrap(),
-                Target { feature: 9, operations: vec![TargetOperation { operation: 8001, label: 7 }] }
+                Target { feature: 9, operations: vec![TargetOperation { operation: 8001, label: 7, flags: 33 }] }
             );
             for keep in 0..authored_rectangle(high).0[&181].2.len() {
                 let mut f = authored_rectangle(high);
@@ -841,7 +856,10 @@ mod tests {
         let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
         assert_eq!(
             target(&Records::new(&d), &classes, 192, 19).unwrap(),
-            Target { feature: 9, operations: vec![TargetOperation { operation: 8001, label: 7 }, TargetOperation { operation: 9013, label: 11 }] }
+            Target {
+                feature: 9,
+                operations: vec![TargetOperation { operation: 8001, label: 7, flags: 33 }, TargetOperation { operation: 9013, label: 11, flags: 4 }]
+            }
         );
         for operations in [
             vec![],
@@ -867,6 +885,27 @@ mod tests {
         let mut f = compound_target(&[(8001, 33, 7), (9013, 4, 11)]);
         f.0.get_mut(&191).unwrap().2[26] = b'9';
         assert!(decode(f, true).is_err(), "recipe and selector must name the same operations");
+    }
+
+    #[test]
+    fn serial_loft_targets_keep_one_current_owner_and_prior_loft_roles() {
+        for operations in [vec![(8001, 32, 7), (9001, 129, 61)], vec![(8001, 32, 7), (9001, 4, 11), (9101, 128, 61), (9201, 129, 208)]] {
+            let d = compound_target(&operations).design();
+            let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+            let target = target(&Records::new(&d), &classes, 192, 19).unwrap();
+            assert_eq!(target.feature, 9);
+            assert_eq!(target.operations.iter().map(|o| (o.operation, o.flags, o.label)).collect::<Vec<_>>(), operations);
+        }
+        for operations in [
+            vec![(8001, 32, 7)],
+            vec![(8001, 33, 7), (9001, 129, 61)],
+            vec![(8001, 32, 7), (9001, 128, 61)],
+            vec![(8001, 32, 7), (9001, 129, 61), (9101, 128, 208)],
+            vec![(8001, 32, 7), (9001, 129, 61), (9101, 129, 208)],
+            vec![(8001, 32, 7), (9001, 130, 61)],
+        ] {
+            assert!(decode(compound_target(&operations), true).is_err(), "{operations:?}");
+        }
     }
 
     fn legacy(mut f: Fixture) -> Design {

@@ -620,7 +620,13 @@ impl Design {
                             if !producers.insert(producer)
                                 || (i == 0 && producer != target.feature)
                                 || (i != 0
-                                    && !matches!(&feature.kind, FeatureKind::Extrude { operation: Operation::Join, targets, .. } if targets.as_slice() == [body.clone()]))
+                                    && !match (&feature.kind, operation.flags) {
+                                        (FeatureKind::Extrude { operation: Operation::Join, targets, .. }, 4)
+                                        | (FeatureKind::Loft { operation: Operation::Join, targets, .. }, 128 | 129) => {
+                                            targets.as_slice() == [body.clone()]
+                                        }
+                                        _ => false,
+                                    })
                             {
                                 return Err(invalid("loft target operations disagree with their body ownership"));
                             }

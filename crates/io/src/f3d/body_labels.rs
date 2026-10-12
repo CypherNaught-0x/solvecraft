@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires local original adapter and unchanged public API resave"]
-    fn original_adapter_first_compound_target_owns_each_body_label() {
+    fn original_adapter_extrusion_and_loft_targets_own_each_body_label() {
         let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
         let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
         let mut results = Vec::new();
@@ -201,14 +201,18 @@ mod tests {
             let d = &designs[0];
             let records = Records::new(d);
             let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
-            let target = super::super::loft_faces::target(&records, &classes, 627, 626).unwrap();
-            assert_eq!(target.feature, 506);
-            assert_eq!(target.operations.len(), 2);
             let owners = d.operation_owners().unwrap();
-            for operation in &target.operations {
-                validate(&records, &classes, owners[&operation.operation], operation.operation, u64::from(operation.label)).unwrap();
+            let mut targets = Vec::new();
+            for (container, owner, count) in [(627, 626, 2), (696, 695, 3)] {
+                let target = super::super::loft_faces::target(&records, &classes, container, owner).unwrap();
+                assert_eq!(target.feature, 506);
+                assert_eq!(target.operations.len(), count);
+                for operation in &target.operations {
+                    validate(&records, &classes, owners[&operation.operation], operation.operation, u64::from(operation.label)).unwrap();
+                }
+                targets.push(target);
             }
-            results.push(target);
+            results.push(targets);
         }
         assert_eq!(results[0], results[1]);
     }
