@@ -13,6 +13,7 @@ pub use body_transfer::{valid_transfer_matrix, validate_body_transfer};
 pub mod canvas;
 mod clipboard;
 pub use clipboard::{clone_expression, remap_topology};
+mod cap_target;
 pub mod config;
 pub mod construct;
 mod document;

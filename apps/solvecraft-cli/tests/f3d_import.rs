@@ -73,6 +73,7 @@ fn to_object_endpoints_preserve_target_source_and_offset_edits() {
         "fusion-to-entity-hint-measurements.json",
         "fusion-to-entity-opposite-hint-measurements.json",
         "fusion-to-entity-maximum-measurements.json",
+        "fusion-to-entity-flip-measurements.json",
     ]);
 }
 

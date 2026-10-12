@@ -56,13 +56,15 @@
 //!   Older face identities are preserved without inferred union contributions.
 //! - 21: extrusion endpoints may retain exact construction-plane or face references.
 //!   Legacy point endpoints keep their existing positional behavior.
+//! - 22: extrusion start/end cap certificates follow signed travel on recompute.
+//!   Existing low/high cap identities retain their geometric meaning.
 
 use serde_json::Value;
 
 use crate::{DocError, Document, Result};
 
 /// The format this build writes.
-pub const FORMAT: u32 = 21;
+pub const FORMAT: u32 = 22;
 
 pub fn format_string(n: u32) -> String {
     format!("solvecraft/{n}")
@@ -75,12 +77,13 @@ pub fn version_of(s: &str) -> Option<u32> {
 
 /// JSON-level upgrades: entry `i` turns format `i + 1` into `i + 2`.
 type JsonStep = fn(&mut Value) -> Result<()>;
-const JSON_STEPS: [JsonStep; 20] = [
+const JSON_STEPS: [JsonStep; 21] = [
     |_| Ok(()),
     v2_to_v3,
     v3_to_v4,
     v4_to_v5,
     v5_to_v6,
+    |_| Ok(()),
     |_| Ok(()),
     |_| Ok(()),
     |_| Ok(()),

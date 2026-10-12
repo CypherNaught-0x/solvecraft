@@ -1654,3 +1654,27 @@ passed all 48 controls. The adapter still decodes 29 of 49 timeline entries: its
 ten ToEntity records use an older solution-mode value 0, which remains rejected
 pending controlled evidence. Parent extrusions changing the sign of their height
 also need logical end-cap tracking; currently such an edit can lose the endpoint.
+
+
+### Logical extrusion caps across travel reversals
+
+Format 22 adds an exact start/end extrusion-cap certificate. It retains the
+producer, sketch and full profile boundary identity while resolving the current
+low/high cap from the producer's signed one-sided distance. Existing geometric
+low/high references keep their original behavior. Suppressed or missing producers,
+zero travel, two-sided/symmetric/tapered extents and mismatched requested roles
+fail explicitly. Copying remaps both the producer and sketch identities.
+
+Native cap selectors now retain these logical roles for endpoint and loft-face
+references. The command form is `to_plane: {face: [x,y,z], cap: "start" | "end"}`;
+the selected face must already match the requested role. Eight local Fusion
+controls reverse positive and negative parent heights and preserve the endpoint
+through source-diameter and offset edits. Two original saved rectangular models
+add analytic volume, bounds, parameter editing, reopening and undo checks, bringing
+the suite to 68 histories. No Fusion-generated files enter the repository.
+
+Validation on upstream `ed102b5` passed all 30 CI binaries, 577 engine tests,
+68 saved histories, WASM and the HardEdgeBasin opening regression (0.88 seconds).
+All 36 local native-import groups passed, including 56 endpoint controls and the
+existing face-loft controls. The reversed rectangular model was rendered and
+visually checked; the image stays local. The larger corpus remains incomplete.

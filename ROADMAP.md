@@ -167,7 +167,8 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   dimensions, parent heights, plane dependencies and suppression remain editable.
   Three coaxial circular sections also retain editable chord-length interpolation.
   Nineteen original loft recipes and a rotated-plane prism extend the
-  editable-history suite to 66 files, including three exact extrusion-endpoint controls.
+  editable-history suite to 68 files, including exact extrusion endpoints and logical
+  start/end cap identities that follow signed travel reversals.
   Finite planar Join certificates retain contributing extrusion identities for
   editable side-face loft attachments. Native rectangular side selectors now
   validate a closed four-edge incidence graph and resolve explicit sketch-curve

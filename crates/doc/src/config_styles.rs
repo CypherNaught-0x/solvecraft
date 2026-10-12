@@ -151,6 +151,10 @@ impl Document {
                     sketch == producer_sketch && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.))
                         && role == format!("cap:{}:{}", if *high { "high" } else { "low" }, super::cap_key(outer, holes))
                 }
+                (super::FaceCertificate::ExtrudeTravelCap { sketch, end, outer, holes }, FeatureKind::Extrude { sketch: producer_sketch, operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {
+                    sketch == producer_sketch && self.extrusion_cap_high(target.origin_feature, *end).is_ok()
+                        && role == format!("cap:{}:{}", if *end { "end" } else { "start" }, super::cap_key(outer, holes))
+                }
                 (super::FaceCertificate::ExtrudeSide { sketch, curve }, FeatureKind::Extrude { sketch: producer_sketch, extent, operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {
                     sketch == producer_sketch && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.)) && role == format!("side:{curve}")
                         && self.feature(*sketch).is_some_and(|feature| matches!(&feature.kind, FeatureKind::Sketch { sketch, .. } if sketch.curves.iter().any(|candidate| candidate.id == *curve && !candidate.construction && matches!(candidate.kind, solvecraft_sketch::CurveKind::Line { .. } | solvecraft_sketch::CurveKind::Circle { .. } | solvecraft_sketch::CurveKind::Arc { .. }))))
@@ -195,6 +199,9 @@ impl Document {
     /// Verify the current named pieces describe one surface, not ambiguous generated roles.
     pub fn configuration_face_indices(&self, body: &crate::ModelBody, target: &ConfigFaceTarget) -> Result<Vec<usize>> {
         self.certify_config_face(target)?;
+        if let Some(resolved) = self.resolve_travel_cap_target(target)? {
+            return self.configuration_face_indices(body, &resolved);
+        }
         if body.body.is_mesh() || body.definition_name() != target.body {
             return Err(DocError::Invalid("configured face definition does not match".into()));
         }

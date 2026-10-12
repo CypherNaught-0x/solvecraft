@@ -159,6 +159,7 @@ pub struct FaceContribution {
 pub enum FaceCertificate {
     Box { axis: u8, high: bool },
     ExtrudeCap { sketch: u64, high: bool, outer: Vec<String>, holes: Vec<Vec<String>> },
+    ExtrudeTravelCap { sketch: u64, end: bool, outer: Vec<String>, holes: Vec<Vec<String>> },
     ExtrudeSide { sketch: u64, curve: String },
     Imported { payload_sha256: String, item: u64, face: u64 },
     ShellPlanar { source_producer: u64, source: Box<FaceCertificate>, inner: bool },
@@ -198,11 +199,11 @@ impl FaceCertificate {
             if let Some(mapped) = features.get(source_producer) {
                 *source_producer = *mapped;
             }
-            if !matches!(source.as_ref(), Self::ShellPlanar { .. } | Self::PlanarUnion { .. }) {
+            if !matches!(source.as_ref(), Self::ShellPlanar { .. } | Self::PlanarUnion { .. } | Self::ExtrudeTravelCap { .. }) {
                 source.remap_features(features);
             }
         }
-        if let Self::ExtrudeSide { sketch, .. } | Self::ExtrudeCap { sketch, .. } = self
+        if let Self::ExtrudeSide { sketch, .. } | Self::ExtrudeCap { sketch, .. } | Self::ExtrudeTravelCap { sketch, .. } = self
             && let Some(mapped) = features.get(sketch)
         {
             *sketch = *mapped;
@@ -211,7 +212,9 @@ impl FaceCertificate {
     pub fn validate(&self) -> Result<()> {
         let valid = match self {
             Self::Box { axis, .. } => *axis <= 2,
-            Self::ExtrudeCap { sketch, outer, holes, .. } => *sketch != 0 && valid_signature(outer, holes),
+            Self::ExtrudeCap { sketch, outer, holes, .. } | Self::ExtrudeTravelCap { sketch, outer, holes, .. } => {
+                *sketch != 0 && valid_signature(outer, holes)
+            }
             Self::ExtrudeSide { sketch, curve } => *sketch != 0 && !curve.is_empty() && curve.len() <= 128,
             Self::Imported { payload_sha256, item, face } => {
                 *item != 0
@@ -220,7 +223,9 @@ impl FaceCertificate {
                     && payload_sha256.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             }
             Self::ShellPlanar { source_producer, source, .. } => {
-                *source_producer != 0 && !matches!(source.as_ref(), Self::ShellPlanar { .. } | Self::PlanarUnion { .. }) && source.validate().is_ok()
+                *source_producer != 0
+                    && !matches!(source.as_ref(), Self::ShellPlanar { .. } | Self::PlanarUnion { .. } | Self::ExtrudeTravelCap { .. })
+                    && source.validate().is_ok()
             }
             Self::PlanarUnion { sources } => {
                 (2..=64).contains(&sources.len())
@@ -253,6 +258,13 @@ pub(crate) fn validate_certificate_json(value: &serde_json::Value) -> Result<()>
                 && fields.get("high").and_then(serde_json::Value::as_bool).is_some()
                 && valid_signature_json(fields.get("outer"), fields.get("holes"))
         }
+        Some("extrude_travel_cap") => {
+            fields.len() == 5
+                && fields.keys().all(|key| ["kind", "sketch", "end", "outer", "holes"].contains(&key.as_str()))
+                && nonzero("sketch")
+                && fields.get("end").and_then(serde_json::Value::as_bool).is_some()
+                && valid_signature_json(fields.get("outer"), fields.get("holes"))
+        }
         Some("extrude_side") => {
             fields.len() == 3
                 && fields.keys().all(|key| ["kind", "sketch", "curve"].contains(&key.as_str()))
@@ -276,7 +288,10 @@ pub(crate) fn validate_certificate_json(value: &serde_json::Value) -> Result<()>
                 && fields.get("inner").and_then(serde_json::Value::as_bool).is_some()
                 && fields.get("source").is_some_and(|source| {
                     source.as_object().is_some_and(|source| {
-                        !matches!(source.get("kind").and_then(serde_json::Value::as_str), Some("shell_planar" | "planar_union"))
+                        !matches!(
+                            source.get("kind").and_then(serde_json::Value::as_str),
+                            Some("shell_planar" | "planar_union" | "extrude_travel_cap")
+                        )
                     }) && validate_certificate_json(source).is_ok()
                 })
         }
@@ -315,7 +330,7 @@ pub(crate) fn shell_certificate_role(source: &FaceCertificate, inner: bool) -> R
         FaceCertificate::ExtrudeSide { curve, .. } => format!("side:{curve}"),
         FaceCertificate::ExtrudeCap { high, outer, holes, .. } => format!("cap:{}:{}", if *high { "high" } else { "low" }, cap_key(outer, holes)),
         FaceCertificate::Imported { payload_sha256, item, face } => format!("import:{payload_sha256}:{item}:{face}"),
-        FaceCertificate::ShellPlanar { .. } | FaceCertificate::PlanarUnion { .. } => {
+        FaceCertificate::ShellPlanar { .. } | FaceCertificate::PlanarUnion { .. } | FaceCertificate::ExtrudeTravelCap { .. } => {
             return Err(DocError::Invalid("nested shell source certificates are unsupported".into()));
         }
     };

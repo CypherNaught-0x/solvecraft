@@ -203,6 +203,12 @@ pocket into a 40 x 30 x 30 mm block, ending 5 mm short of an exact face or a liv
 construction plane. Cap/bottom volumes are 33500 mm³; the plane lies 10 mm before
 the cap and gives 34500 mm³. Height, pocket-width and endpoint-offset edits use
 `1200 * height - 10 * width * (height - plane_gap + offset)` and exact bounds.
-All cases retain one body through reopen and undo. There are 66 original models.
+All cases retain one body through reopen and undo. There are 68 original models.
 The `to_plane` command input accepts a construction-plane name or `{face:[x,y,z]}`;
 face selection is saved as a certified attachment, not a frozen point.
+
+`extrusion-travel-cap` and `extrusion-travel-negative-cap` retain the extrusion's
+logical end rather than its initial low/high cap. Reversing the parent height
+from 30 to -40 mm moves the pocket to the opposite side of XY. Both models check
+44500 mm³ after reversal, plus independent width and endpoint-offset edits,
+world bounds, reopening and undo.

@@ -97,14 +97,7 @@ impl Face {
         // kernel certificates name the geometrically low/high profile planes.
         let cap_high = if self.side.is_none() {
             let [(producer, None)] = contributions else { return Err(invalid("unsupported cap contributors")) };
-            let Some(solvecraft_doc::FeatureKind::Extrude { extent, .. }) = doc.feature(*producer).map(|f| &f.kind) else {
-                return Err(invalid("cap selector requires an extrusion producer"));
-            };
-            if extent.to.is_some() || extent.to_plane.is_some() || extent.through_all || extent.distance2.is_some() {
-                return Err(invalid("cap selector requires an observed one-sided distance producer"));
-            }
-            let distance = doc.eval(&extent.distance, solvecraft_doc::expr::Kind::Length)?;
-            self.high ^ (distance < 0.) ^ (extent.direction == solvecraft_doc::Direction::Negative)
+            doc.extrusion_cap_high(*producer, self.high).map_err(|e| invalid(&e.to_string()))?
         } else {
             self.high
         };
@@ -133,7 +126,11 @@ impl Face {
             return Err(invalid("native loft face is missing or ambiguous"));
         };
         let plane = body.body.face_plane(*index).ok_or_else(|| invalid("loft face has no exact plane"))?;
-        doc.capture_face_anchor(body, *index, &plane, &[], 0, &[]).map_err(|e| invalid(&e.to_string()))
+        let mut anchor = doc.capture_face_anchor(body, *index, &plane, &[], 0, &[]).map_err(|e| invalid(&e.to_string()))?;
+        if self.side.is_none() {
+            anchor.target = doc.track_extrusion_cap(&anchor.target, self.high).map_err(|e| invalid(&e.to_string()))?;
+        }
+        Ok(anchor)
     }
 }
 

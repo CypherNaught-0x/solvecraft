@@ -93,3 +93,63 @@ fn endpoint_plane_copy_names_are_mapped_once() {
     let solvecraft_doc::PlaneRef::Construction { name } = *extent.to_plane.unwrap() else { panic!("plane") };
     assert_eq!(name, "Stop copy");
 }
+
+#[test]
+fn logical_caps_follow_signed_height_and_keep_exact_producer_identity() {
+    for negative in [false, true] {
+        let mut s = Session::default();
+        let end_z = if negative { -30. } else { 30. };
+        for (cmd, args) in [
+            ("parameters.add", json!({"name":"height","expression":"30 mm","unit":"mm"})),
+            ("sketch.create", json!({"plane":"XY","name":"Base sketch"})),
+            ("sketch.rectangle.two_point", json!({"p0":[0,0],"p1":[40,30]})),
+            ("sketch.finish", json!({})),
+            ("solid.extrude", json!({"distance":"height","direction":if negative {"negative"} else {"positive"},"name":"Base","body_name":"Base"})),
+            ("sketch.create", json!({"plane":"XY","name":"Pocket sketch"})),
+            ("sketch.rectangle.two_point", json!({"p0":[5,5],"p1":[15,15]})),
+            ("sketch.finish", json!({})),
+        ] {
+            s.execute(cmd, &args).unwrap();
+        }
+        // The logical start remains at the source plane while the travel reverses.
+        s.execute("solid.extrude", &json!({"to_plane":{"face":[20,15,0],"cap":"start"},"start_offset":if negative {"-height / 6"} else {"height / 6"},"operation":"cut","targets":["Base"]})).unwrap();
+        volume(&mut s, 35500.);
+        s.execute("parameters.change", &json!({"name":"height","expression":"-40 mm"})).unwrap();
+        volume(&mut s, 48000. - 4000. / 6.);
+        volume(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), 48000. - 4000. / 6.);
+        s.execute("edit.undo", &json!({})).unwrap();
+        s.execute("edit.undo", &json!({})).unwrap();
+        let before = s.doc.clone();
+        for cap in ["start", "invalid"] {
+            assert!(s.execute("solid.extrude", &json!({"to_plane":{"face":[20,15,end_z],"cap":cap},"operation":"cut"})).is_err());
+            assert_eq!(s.doc, before);
+        }
+        s.execute(
+            "solid.extrude",
+            &json!({"to_plane":{"face":[20,15,end_z],"cap":"end"},"to_offset":"-5 mm","operation":"cut","targets":["Base"],"name":"Pocket"}),
+        )
+        .unwrap();
+        volume(&mut s, 33500.);
+        s.execute("parameters.change", &json!({"name":"height","expression":"-40 mm"})).unwrap();
+        volume(&mut s, 44500.);
+        volume(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), 44500.);
+        s.execute("edit.undo", &json!({})).unwrap();
+        volume(&mut s, 33500.);
+
+        let mut raw: serde_json::Value = serde_json::from_str(&s.doc.to_json()).unwrap();
+        let pocket = raw["features"].as_array_mut().unwrap().iter_mut().find(|f| f["name"] == "Pocket").unwrap();
+        pocket["extent"]["to_plane"]["anchor"]["target"]["certificate"]["end"] = json!(1);
+        assert!(Document::from_json(&raw.to_string()).is_err());
+        let mut copy = s.doc.find_feature("Pocket").unwrap().clone();
+        let source = s.doc.find_feature("Base").unwrap().id;
+        let sketch = s.doc.find_feature("Base sketch").unwrap().id;
+        copy.remap_clone(&[(source, 123), (sketch, 124)].into(), &Default::default(), &[("Base".into(), "Copy".into())].into(), &Default::default())
+            .unwrap();
+        let FeatureKind::Extrude { extent, .. } = copy.kind else { panic!("extrude") };
+        let solvecraft_doc::PlaneRef::Face { anchor: Some(anchor), .. } = *extent.to_plane.unwrap() else { panic!("face") };
+        assert_eq!(anchor.target.origin_feature, 123);
+        assert_eq!(anchor.target.body, "Copy");
+        assert!(matches!(anchor.target.certificate, Some(solvecraft_doc::config::FaceCertificate::ExtrudeTravelCap { sketch: 124, end: true, .. })));
+        assert!(anchor.target.name.starts_with("F123:cap:end:"));
+    }
+}
