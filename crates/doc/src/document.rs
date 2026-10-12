@@ -904,8 +904,12 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         components: Vec<solvecraft_kernel::StepNode>,
     },
-    /// A non-parametric base feature: mesh bodies imported from a 3MF or STL file (kept in the
-    /// design). Mesh bodies render, measure, move and export; solid features cannot use them.
+    /// Rebuild an upstream constant-section mesh with analytic planar/cylindrical faces.
+    MeshConvert {
+        body: String,
+        tolerance: String,
+    },
+    /// Mesh bodies imported from a 3MF or STL file, embedded in the design.
     MeshImport {
         /// Source file name (display only).
         file: String,
@@ -1203,6 +1207,7 @@ impl FeatureKind {
             | K::Move { .. }
             | K::Import { .. }
             | K::MeshImport { .. }
+            | K::MeshConvert { .. }
             | K::BodyTransfer { .. } => Vec::new(),
         }
     }
@@ -1288,6 +1293,7 @@ impl FeatureKind {
             FeatureKind::SurfaceExtend { .. } => "ExtendFeature",
             FeatureKind::Import { .. } => "BaseFeature",
             FeatureKind::MeshImport { .. } => "MeshFeature",
+            FeatureKind::MeshConvert { .. } => "MeshConvertFeature",
         }
     }
     /// Default name prefix (`Extrude` → `Extrude1`).
@@ -1353,6 +1359,7 @@ impl FeatureKind {
             FeatureKind::SurfaceExtend { .. } => "Extend",
             FeatureKind::Import { .. } => "Import",
             FeatureKind::MeshImport { .. } => "Mesh",
+            FeatureKind::MeshConvert { .. } => "ConvertMesh",
         }
     }
     /// Every expression the feature uses.
@@ -1568,6 +1575,7 @@ impl FeatureKind {
             FeatureKind::ReplaceFace { target, .. } => plane_exprs(target, &mut v),
             FeatureKind::Align { .. } | FeatureKind::Remove { .. } | FeatureKind::BoundaryFill { .. } | FeatureKind::DeleteFace { .. } => {}
             FeatureKind::Stitch { tolerance, .. } => v.push(tolerance),
+            FeatureKind::MeshConvert { tolerance, .. } => v.push(tolerance),
             FeatureKind::Thicken { thickness, .. } => v.push(thickness),
             FeatureKind::SurfaceTrim { plane, .. } => plane_exprs(plane, &mut v),
             FeatureKind::SurfaceExtend { distance, .. } => v.push(distance),

@@ -1768,3 +1768,11 @@ Validation against upstream `8c13914` passed all 30 CI binaries, including 132
 I/O tests, 577 engine tests and all 74 editable fixtures, plus WASM. All 38 local
 native-import groups and 16 inspection tests passed. The legacy origin-plane
 comparison also passed, and HardEdgeBasin's opening regression took 0.88 seconds.
+
+Integration with upstream `b45cae1` preserves its prepared extrusion-source
+matching, Boolean diagnostics and mirror-dialog changes. All 33 CI binaries
+passed (the new MCP socket test required a separate run with localhost
+permission), including 590 engine tests, 340 UI tests and the 74 editable
+fixtures. All 38 native-import groups and 16 inspection tests passed again.
+The new public reference suite gives 75 passes and its one documented known
+failure. HardEdgeBasin's opening regression passed in 1.09 seconds.
