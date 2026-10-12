@@ -447,6 +447,7 @@ mod tests {
                             through_all: false,
                             taper: None,
                             to: None,
+                            to_plane: None,
                             to_offset: None,
                             from: None,
                         },

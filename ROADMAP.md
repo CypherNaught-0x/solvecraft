@@ -167,7 +167,7 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   dimensions, parent heights, plane dependencies and suppression remain editable.
   Three coaxial circular sections also retain editable chord-length interpolation.
   Nineteen original loft recipes and a rotated-plane prism extend the
-  editable-history suite to 63 files.
+  editable-history suite to 66 files, including three exact extrusion-endpoint controls.
   Finite planar Join certificates retain contributing extrusion identities for
   editable side-face loft attachments. Native rectangular side selectors now
   validate a closed four-edge incidence graph and resolve explicit sketch-curve
@@ -180,7 +180,10 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   loft targets check prior/current operation roles. Retired target entries and the
   rest of the adapter remain incomplete.
   Rotated sketch bases retain live offset-plane dependencies.
-  Other composite selector roles remain incomplete.
+  One-sided native To Object cuts now retain verified parallel planar face and
+  construction-plane endpoints plus editable offsets. Signed cap labels resolve
+  negative extrusions correctly. Nonparallel endpoints and other composite selector
+  roles remain incomplete.
   General multi-section interpolation, other native face recipes and the larger supplied
   designs remain incomplete.
 - Native F3D investigation: bounded archive/index inspection via `file.inspect_f3d`

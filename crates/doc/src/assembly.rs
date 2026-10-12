@@ -206,6 +206,11 @@ impl FeatureKind {
             FeatureKind::Sketch { plane, .. } | FeatureKind::ConstructionPlane { plane } | FeatureKind::Mirror { plane, .. } => {
                 map_plane_ref(m, plane)
             }
+            FeatureKind::Extrude { extent, .. } => {
+                if let Some(plane) = &mut extent.to_plane {
+                    map_plane_ref(m, plane);
+                }
+            }
             FeatureKind::ConstructionAxis { def } => def.refs_mut().into_iter().for_each(|r| map_geo_ref(m, r)),
             FeatureKind::ConstructionPoint { def } => def.refs_mut().into_iter().for_each(|r| map_geo_ref(m, r)),
             FeatureKind::Split { plane, tool, .. } => {
@@ -316,7 +321,6 @@ impl FeatureKind {
                 }
             }
             FeatureKind::Revolve { .. }
-            | FeatureKind::Extrude { .. }
             | FeatureKind::Combine { .. }
             | FeatureKind::Loft { .. }
             | FeatureKind::Sweep { .. }

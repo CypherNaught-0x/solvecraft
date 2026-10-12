@@ -741,7 +741,7 @@ pub(super) fn sheet_cut(
             let (z0, z1) = (a.min(b).max(0.0), a.max(b).min(sh.t));
             // Sub-resolution layers must not be silently erased by endpoint snapping.
             let depth_resolved = ![z0, sh.t - z1, z1 - z0].into_iter().any(|d| d > 0.0 && d < 1e-6);
-            let mapped = if extent.to.is_some() && current_footprints.len() == tools.len() {
+            let mapped = if extent.has_to() && current_footprints.len() == tools.len() {
                 current_footprints.iter().map(|(plane, r)| sh.region_to_flat(pi, plane, r)).collect::<Result<Vec<_>>>()?
             } else {
                 regions.iter().map(|r| sh.region_to_flat(pi, &ss.plane, r)).collect::<Result<Vec<_>>>()?

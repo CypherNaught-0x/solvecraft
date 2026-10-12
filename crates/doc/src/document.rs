@@ -183,6 +183,9 @@ pub struct Extent {
     /// To Object: end at the face (or vertex/point) at this point, instead of `distance`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<Vec3>,
+    /// Exact planar endpoint: a live construction plane or certified body face.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_plane: Option<Box<PlaneRef>>,
     /// Offset past the To Object face (expression; negative stops short).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_offset: Option<String>,

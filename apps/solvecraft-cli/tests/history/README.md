@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These sixty-three designs and their JSON command recipes are original SolveCraft test
+These sixty-six designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -196,3 +196,13 @@ are 20 x 40, 30 x 50 and 40 x 60 mm. Their added analytic volumes are 22666⅔ a
 to the first destination height. Source width, pedestal height and destination
 height edits check volume, exact bounds and one body through reopen and undo.
 The suite contains 63 original saved designs.
+
+
+`extrusion-to-cap`, `extrusion-to-bottom` and `extrusion-to-plane` cut a 10 x 10 mm
+pocket into a 40 x 30 x 30 mm block, ending 5 mm short of an exact face or a live
+construction plane. Cap/bottom volumes are 33500 mm³; the plane lies 10 mm before
+the cap and gives 34500 mm³. Height, pocket-width and endpoint-offset edits use
+`1200 * height - 10 * width * (height - plane_gap + offset)` and exact bounds.
+All cases retain one body through reopen and undo. There are 66 original models.
+The `to_plane` command input accepts a construction-plane name or `{face:[x,y,z]}`;
+face selection is saved as a certified attachment, not a frozen point.

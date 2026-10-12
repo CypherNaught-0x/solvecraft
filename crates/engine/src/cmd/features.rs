@@ -13,7 +13,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "CREATE")
         .icon("extrude")
         .key("E")
-        .params("distance: expr (or through_all: true); taper?: angle expr; sketch?: id|name (default: active or last sketch); profiles?: all | [index] | [{curves: [ids]}] (the profile whose outer loop is made of exactly these curves, or pieces of them; found again on every recompute, so it follows parameter changes; islands inside are its holes; an error when no profile or several match) | [{point:[x,y]}] (index and point picks are stored by their curves when that finds the same profile); face?: [x,y,z] (extrude a planar body face instead of a sketch profile); direction?: positive|negative|symmetric; distance2?; start_offset?: expr (along the sketch normal, also with direction: negative); to?: [x,y,z] (To Object: a face, vertex or point; to_offset?: expr past it); from?: [x,y,z] (From Object: start at that face or point); operation?: new|join|cut|intersect|auto (cut into a body, otherwise join existing solids; new in an empty component); targets?: [body]; name?; body_name?"),
+        .params("distance: expr (or through_all: true); taper?: angle expr; sketch?: id|name (default: active or last sketch); profiles?: all | [index] | [{curves: [ids]}] (the profile whose outer loop is made of exactly these curves, or pieces of them; found again on every recompute, so it follows parameter changes; islands inside are its holes; an error when no profile or several match) | [{point:[x,y]}] (index and point picks are stored by their curves when that finds the same profile); face?: [x,y,z] (extrude a planar body face instead of a sketch profile); direction?: positive|negative|symmetric; distance2?; start_offset?: expr (along the sketch normal, also with direction: negative); to_plane?: construction plane name or {face:[x,y,z]} (persistent parallel planar endpoint); to?: [x,y,z] (To Object: a face, vertex or point; to_offset?: expr past it); from?: [x,y,z] (From Object: start at that face or point); operation?: new|join|cut|intersect|auto (cut into a body, otherwise join existing solids; new in an empty component); targets?: [body]; name?; body_name?"),
     CommandSpec::new("solid.revolve", "Revolve", revolve)
         .at("SOLID", "CREATE")
         .icon("revolve")
@@ -462,8 +462,12 @@ fn extrude(s: &mut Session, p: &Value) -> Result<Value> {
         None => (feature_sketch(s, p, cmd)?, None),
     };
     let through_all = bool_(p, "through_all").unwrap_or(false) || str_(p, "extent").is_some_and(|e| e.eq_ignore_ascii_case("through_all"));
-    let to_object = p.get("to").is_some();
-    if to_object && p.get("to").and_then(vec3).is_none() {
+    let to_plane = p.get("to_plane").map(|v| super::sketch::plane_ref(s, &json!({"plane":v}), cmd).map(Box::new)).transpose()?;
+    if to_plane.is_some() && (p.get("to").is_some() || through_all || p.get("distance2").is_some()) {
+        return Err(bad(cmd, "a planar endpoint cannot also use to, through_all or distance2"));
+    }
+    let to_object = p.get("to").is_some() || to_plane.is_some();
+    if p.get("to").is_some() && p.get("to").and_then(vec3).is_none() {
         return Err(bad(cmd, "`to` must be a point [x, y, z] on the face, vertex or point to extrude to"));
     }
     if p.get("from").is_some() && p.get("from").and_then(vec3).is_none() {
@@ -503,6 +507,7 @@ fn extrude(s: &mut Session, p: &Value) -> Result<Value> {
             through_all,
             taper,
             to: p.get("to").and_then(vec3),
+            to_plane,
             to_offset: expr(p, "to_offset"),
             from: p.get("from").and_then(vec3),
         },

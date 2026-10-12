@@ -231,10 +231,15 @@ impl Design {
     }
 }
 
+pub(super) enum ExtrudeLimit {
+    Distance(u64),
+    ToEntity { offset: u64, container: u64 },
+}
+
 pub(super) struct ExtrudeInputs {
     pub operation: Operation,
     pub axis: solvecraft_geom::Vec3,
-    pub distance: u64,
+    pub limit: ExtrudeLimit,
     pub taper: u64,
     pub start_offset: Option<u64>,
 }
@@ -252,8 +257,9 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
     if r.u32()? != 1 {
         return Err(invalid("unsupported extrusion extent layout (observed one-sided schema required)"));
     }
-    if r.u32()? != 2 {
-        return Err(invalid("unsupported extrusion distance extent"));
+    let extent_type = r.u32()?;
+    if !matches!(extent_type, 1 | 2) {
+        return Err(invalid("unsupported extrusion extent type"));
     }
     zeros(r, 1)?;
     if r.take(1)? != [1] {
@@ -278,6 +284,25 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
         zeros(r, 2)?;
         None
     };
+    if extent_type == 1 {
+        zeros(r, 1)?;
+        require_class(classes, r.reference()?, "0897AF07-EF1B-42E5-BDD9-1C746A085CBC", 0)?;
+        zeros(r, 1)?;
+        let taper = r.reference()?;
+        require_class(classes, taper, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
+        let container = r.reference()?;
+        require_class(classes, container, "2CA5A1CD-C99B-4C9B-91AF-57989148E841", 1)?;
+        if r.u32()? != 2 {
+            return Err(invalid("unsupported To Object extrusion flags"));
+        }
+        let offset = r.reference()?;
+        require_class(classes, offset, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
+        if r.u32()? != 1 {
+            return Err(invalid("unsupported To Object extrusion end flags"));
+        }
+        zeros(r, 31)?;
+        return Ok(ExtrudeInputs { operation, axis, limit: ExtrudeLimit::ToEntity { offset, container }, taper, start_offset });
+    }
     let distance = r.reference()?;
     require_class(classes, distance, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
     require_class(classes, r.reference()?, "0897AF07-EF1B-42E5-BDD9-1C746A085CBC", 0)?;
@@ -289,7 +314,7 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
         return Err(invalid("unsupported extrusion extent flags"));
     }
     zeros(r, 36)?;
-    Ok(ExtrudeInputs { operation, axis, distance, taper, start_offset })
+    Ok(ExtrudeInputs { operation, axis, limit: ExtrudeLimit::Distance(distance), taper, start_offset })
 }
 
 pub(super) fn operation(value: u32) -> Result<Operation> {
@@ -415,3 +440,50 @@ fn validate_refs(classes: &BTreeMap<u64, &Class>, ids: &[u64]) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+    use crate::f3d::import_tests::fixture;
+    use crate::f3d::relationship_tests::{reference, u32};
+
+    #[test]
+    fn to_entity_extent_keeps_explicit_offset_and_target_inputs() {
+        let mut f = fixture(false);
+        let old = f.0[&9].2.clone();
+        let mut b = old[..57].to_vec();
+        b[21..25].copy_from_slice(&1_u32.to_le_bytes());
+        b.push(0);
+        reference(&mut b, 67);
+        b.push(0);
+        reference(&mut b, 66);
+        reference(&mut b, 102);
+        u32(&mut b, 2);
+        reference(&mut b, 64);
+        u32(&mut b, 1);
+        b.extend([0; 31]);
+        let end = b.len();
+        b.extend_from_slice(&old[132..]);
+        f.0.get_mut(&9).unwrap().2 = b;
+        let d = crate::f3d::import_tests::Fixture(f.0.clone()).design();
+        let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+        let records = Records::new(&d);
+        let mut reader = payload(records.primary(9).unwrap(), 9).unwrap();
+        let start = reader.at;
+        let input = extrude_inputs(&mut reader, &classes).unwrap();
+        assert!(matches!(input.limit, ExtrudeLimit::ToEntity { offset: 64, container: 102 }));
+        assert_eq!(input.taper, 66);
+        assert_eq!(reader.at - start, end);
+        assert!(d.history().is_ok());
+        for keep in 0..end {
+            let mut f = crate::f3d::import_tests::Fixture(f.0.clone());
+            f.0.get_mut(&9).unwrap().2.truncate(keep);
+            assert!(f.design().history().is_err(), "truncated at {keep}");
+        }
+        for (at, value) in [(21, 3), (58, 0), (70, 0), (81, 0), (92, 3), (96, 0), (107, 2), (120, 1)] {
+            let mut f = crate::f3d::import_tests::Fixture(f.0.clone());
+            f.0.get_mut(&9).unwrap().2[at] = value;
+            assert!(f.design().history().is_err(), "invalid field {at}");
+        }
+    }
+}

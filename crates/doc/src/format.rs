@@ -54,13 +54,15 @@
 
 //! - 20: finite planar union face certificates retain all contributing producers.
 //!   Older face identities are preserved without inferred union contributions.
+//! - 21: extrusion endpoints may retain exact construction-plane or face references.
+//!   Legacy point endpoints keep their existing positional behavior.
 
 use serde_json::Value;
 
 use crate::{DocError, Document, Result};
 
 /// The format this build writes.
-pub const FORMAT: u32 = 20;
+pub const FORMAT: u32 = 21;
 
 pub fn format_string(n: u32) -> String {
     format!("solvecraft/{n}")
@@ -73,12 +75,13 @@ pub fn version_of(s: &str) -> Option<u32> {
 
 /// JSON-level upgrades: entry `i` turns format `i + 1` into `i + 2`.
 type JsonStep = fn(&mut Value) -> Result<()>;
-const JSON_STEPS: [JsonStep; 19] = [
+const JSON_STEPS: [JsonStep; 20] = [
     |_| Ok(()),
     v2_to_v3,
     v3_to_v4,
     v4_to_v5,
     v5_to_v6,
+    |_| Ok(()),
     |_| Ok(()),
     |_| Ok(()),
     |_| Ok(()),
@@ -189,6 +192,7 @@ pub fn read(s: &str) -> Result<Document> {
     crate::face_anchor::validate_face_anchors_json(&v)?;
     validate_versioned_geometry(&v)?;
     crate::loft::validate_sections_json(&v)?;
+    crate::extent_target::validate_json(&v)?;
     validate_emboss_targets(&v)?;
     validate_freeform_offsets(&v)?;
     validate_sketch_sizes(&v)?;
@@ -764,6 +768,7 @@ mod tests {
                         through_all: false,
                         taper: Some("0 deg".into()),
                         to: Some(solvecraft_geom::Vec3::new(0.0, 0.0, 10.0)),
+                        to_plane: None,
                         to_offset: Some("offset + 1 mm".into()),
                         from: Some(solvecraft_geom::Vec3::new(0.0, 0.0, 5.0)),
                     },

@@ -661,6 +661,8 @@ mod construct_tests;
 #[cfg(test)]
 mod delete_face_tests;
 #[cfg(test)]
+mod extent_target_tests;
+#[cfg(test)]
 mod extent_tests;
 #[cfg(test)]
 mod loft_face_tests;

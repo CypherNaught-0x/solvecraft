@@ -46,8 +46,13 @@ impl FeatureKind {
                     sk(s);
                 }
             }
-            FeatureKind::Extrude { sketch, .. }
-            | FeatureKind::Revolve { sketch, .. }
+            FeatureKind::Extrude { sketch, extent, .. } => {
+                sk(sketch);
+                if let Some(plane) = &mut extent.to_plane {
+                    plane_names(plane, names);
+                }
+            }
+            FeatureKind::Revolve { sketch, .. }
             | FeatureKind::Emboss { sketch, .. }
             | FeatureKind::SheetBase { sketch, .. }
             | FeatureKind::SheetContour { sketch, .. }
@@ -270,6 +275,14 @@ impl crate::Feature {
             _ => {}
         }
         self.kind.remap_refs(ids, names);
+        if let K::Extrude { extent, .. } = &mut self.kind
+            && let Some(plane) = &mut extent.to_plane
+        {
+            checked_plane(plane, 0)?;
+            // remap_refs already maps construction names. Exact endpoints support only
+            // construction, face, origin and custom planes, so only topology remains.
+            remap_plane(plane, ids, &BTreeMap::new(), bodies, 0)?;
+        }
         if let K::Loft { sections, .. } = &mut self.kind {
             for anchor in sections.iter_mut().filter_map(|s| s.face.as_mut()) {
                 anchor.remap_target(ids, bodies)?;

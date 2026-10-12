@@ -128,7 +128,7 @@ fn evaluation_tail(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>, owner: u
     finish(r)
 }
 
-fn tracked_plane(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<u64> {
+pub(super) fn tracked_plane(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<u64> {
     require_class(classes, id, "5A1BF548-241F-46FD-9FB5-E4B05126EB9D", 1)?;
     let mut r = payload(records.primary(id)?, id)?;
     empty(&mut r)?;

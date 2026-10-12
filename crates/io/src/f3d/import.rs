@@ -98,6 +98,50 @@ impl Design {
         for f in history {
             let mut new_body = None;
             let mut new_plane = None;
+            let mut import_face = |object| -> Result<solvecraft_doc::FaceAnchor> {
+                let face = super::loft_faces::face(&records, &classes, object, f.id)?;
+                if operation_owners.is_none() {
+                    operation_owners = Some(self.operation_owners()?);
+                }
+                let owners = operation_owners.as_ref().ok_or_else(|| invalid("missing loft face operations"))?;
+                let id = *feature_ids.get(&face.feature).ok_or_else(|| invalid("missing imported loft body creator"))?;
+                let creator = doc.feature(id).ok_or_else(|| invalid("missing imported loft body creator"))?;
+                let [body_name] = creator.body_names.as_slice() else { return Err(invalid("loft face requires one created body")) };
+                let mut contributions = Vec::new();
+                let mut producers = BTreeSet::new();
+                for operation in &face.all_operations {
+                    let native = *owners.get(operation).ok_or_else(|| invalid("missing loft face operation owner"))?;
+                    let imported = *feature_ids.get(&native).ok_or_else(|| invalid("loft face operation follows its selector"))?;
+                    let current = doc.feature(imported).filter(|f| !f.suppressed).ok_or_else(|| invalid("loft face operation is suppressed"))?;
+                    if native != face.feature
+                        && !matches!(&current.kind, FeatureKind::Extrude { operation: Operation::Join, targets, .. } if targets.as_slice() == [body_name.clone()])
+                    {
+                        return Err(invalid("loft face contributor belongs to another body or operation"));
+                    }
+                    let source = *source_profiles.get(&native).ok_or_else(|| invalid("missing loft face contributor profile"))?;
+                    if face.contributions.contains(operation) {
+                        face.validate_profile(source, &circles, &lines)?;
+                        if !producers.insert(imported) {
+                            return Err(invalid("duplicate loft face contribution producer"));
+                        }
+                        let curve = face
+                            .side_roles
+                            .get(operation)
+                            .copied()
+                            .map(|label| super::side_roles::curve(&records, &classes, native, label, source, &lines).map(|id| format!("c{id}")))
+                            .transpose()?;
+                        contributions.push((imported, curve));
+                    }
+                }
+                if face.side.is_none() && contributions.len() != 1 {
+                    return Err(invalid("composite cap sections are not supported yet"));
+                }
+                projection_model.evaluate(&doc);
+                if projection_model.results.iter().any(|r| r.error.is_some()) {
+                    return Err(invalid("cannot regenerate loft face dependencies"));
+                }
+                face.anchor(&doc, &projection_model.state(), id, &contributions)
+            };
             let kind = match f.kind {
                 HistoryKind::OffsetPlane { geometry, definition, extra_offset } => {
                     let definition = super::planes::definition(&records, &classes, definition, f.id)?;
@@ -498,51 +542,7 @@ impl Design {
                             return Err(invalid("loft section requires one source"));
                         };
                         if classes.get(object).is_some_and(|c| c.id == super::body_projections::SELECTOR) {
-                            let face = super::loft_faces::face(&records, &classes, *object, f.id)?;
-                            if operation_owners.is_none() {
-                                operation_owners = Some(self.operation_owners()?);
-                            }
-                            let owners = operation_owners.as_ref().ok_or_else(|| invalid("missing loft face operations"))?;
-                            let id = *feature_ids.get(&face.feature).ok_or_else(|| invalid("missing imported loft body creator"))?;
-                            let creator = doc.feature(id).ok_or_else(|| invalid("missing imported loft body creator"))?;
-                            let [body_name] = creator.body_names.as_slice() else { return Err(invalid("loft face requires one created body")) };
-                            let mut contributions = Vec::new();
-                            let mut producers = BTreeSet::new();
-                            for operation in &face.all_operations {
-                                let native = *owners.get(operation).ok_or_else(|| invalid("missing loft face operation owner"))?;
-                                let imported = *feature_ids.get(&native).ok_or_else(|| invalid("loft face operation follows its selector"))?;
-                                let current =
-                                    doc.feature(imported).filter(|f| !f.suppressed).ok_or_else(|| invalid("loft face operation is suppressed"))?;
-                                if native != face.feature
-                                    && !matches!(&current.kind, FeatureKind::Extrude { operation: Operation::Join, targets, .. } if targets.as_slice() == [body_name.clone()])
-                                {
-                                    return Err(invalid("loft face contributor belongs to another body or operation"));
-                                }
-                                let source = *source_profiles.get(&native).ok_or_else(|| invalid("missing loft face contributor profile"))?;
-                                if face.contributions.contains(operation) {
-                                    face.validate_profile(source, &circles, &lines)?;
-                                    if !producers.insert(imported) {
-                                        return Err(invalid("duplicate loft face contribution producer"));
-                                    }
-                                    let curve = face
-                                        .side_roles
-                                        .get(operation)
-                                        .copied()
-                                        .map(|label| {
-                                            super::side_roles::curve(&records, &classes, native, label, source, &lines).map(|id| format!("c{id}"))
-                                        })
-                                        .transpose()?;
-                                    contributions.push((imported, curve));
-                                }
-                            }
-                            if face.side.is_none() && contributions.len() != 1 {
-                                return Err(invalid("composite cap sections are not supported yet"));
-                            }
-                            projection_model.evaluate(&doc);
-                            if projection_model.results.iter().any(|r| r.error.is_some()) {
-                                return Err(invalid("cannot regenerate loft face dependencies"));
-                            }
-                            let anchor = face.anchor(&doc, &projection_model.state(), id, &contributions)?;
+                            let anchor = import_face(*object)?;
                             sections.push(solvecraft_doc::LoftSection {
                                 sketch: 0,
                                 profiles: ProfileSel::All,
@@ -652,7 +652,27 @@ impl Design {
                         return Err(invalid("multiple-profile extrusion reconstruction is not supported yet"));
                     };
                     let (sketch, plane) = sketches.get(&profile.geometry).copied().ok_or_else(|| invalid("extrusion precedes its source sketch"))?;
-                    let extent = extent(&records, &classes, &bindings, f.id, &plane)?;
+                    let (mut extent, endpoint) = extent(&records, &classes, &bindings, f.id, &plane)?;
+                    if let Some(container) = endpoint {
+                        let objects = super::loft_faces::objects(&records, &classes, container, f.id)?;
+                        let [object] = objects.as_slice() else {
+                            return Err(invalid("extrusion endpoint requires one entity"));
+                        };
+                        let target = if classes.get(object).is_some_and(|c| c.id == super::body_projections::SELECTOR) {
+                            let anchor = import_face(*object)?;
+                            let plane = doc.resolve_face_anchor(&anchor, 0, &projection_model.state())?;
+                            PlaneRef::Face { plane, at: plane.origin, name: None, anchor: Some(Box::new(anchor)) }
+                        } else {
+                            let geometry = super::planes::tracked_plane(&records, &classes, *object, f.id)?;
+                            if let Some((name, _)) = planes.get(&geometry) {
+                                PlaneRef::Construction { name: name.clone() }
+                            } else {
+                                let (name, _) = super::planes::origin(&records, &classes, geometry, root)?;
+                                PlaneRef::Origin { name }
+                            }
+                        };
+                        extent.to_plane = Some(Box::new(target));
+                    }
                     source_profiles.insert(f.id, *profile);
                     let targets = if operation == Operation::NewBody {
                         let bodies: Vec<_> = profile
@@ -930,7 +950,13 @@ fn selected<'a>(
     Ok(selected)
 }
 
-fn extent(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, parameters: &BTreeMap<u64, &Parameter>, id: u64, plane: &Plane) -> Result<Extent> {
+fn extent(
+    records: &Records<'_>,
+    classes: &BTreeMap<u64, &Class>,
+    parameters: &BTreeMap<u64, &Parameter>,
+    id: u64,
+    plane: &Plane,
+) -> Result<(Extent, Option<u64>)> {
     let mut r = payload(records.primary(id)?, id)?;
     let input = super::history::extrude_inputs(&mut r, classes)?;
     if (input.axis - plane.normal()).len() > 1e-9 {
@@ -949,10 +975,12 @@ fn extent(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, parameters: &B
             Ok(p.name.clone())
         })
         .transpose()?;
-    let distance = parameters
-        .get(&input.distance)
-        .filter(|p| p.owner == Some(id) && p.label == "AlongDistance")
-        .ok_or_else(|| invalid("missing extrusion distance binding"))?;
+    let (binding, label, target) = match input.limit {
+        super::history::ExtrudeLimit::Distance(binding) => (binding, "AlongDistance", None),
+        super::history::ExtrudeLimit::ToEntity { offset, container } => (offset, "Side1Offset", Some(container)),
+    };
+    let distance =
+        parameters.get(&binding).filter(|p| p.owner == Some(id) && p.label == label).ok_or_else(|| invalid("missing extrusion distance binding"))?;
     let taper = parameters
         .get(&input.taper)
         .filter(|p| p.owner == Some(id) && p.label == "TaperAngle")
@@ -963,17 +991,21 @@ fn extent(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, parameters: &B
         return Err(invalid("extrusion parameter units do not match their input roles"));
     }
     // Controlled volume measurements establish the same positive taper sign.
-    Ok(Extent {
-        distance: distance.name.clone(),
-        direction: Direction::Positive,
-        distance2: None,
-        start_offset,
-        through_all: false,
-        taper: Some(taper.name.clone()),
-        to: None,
-        to_offset: None,
-        from: None,
-    })
+    Ok((
+        Extent {
+            distance: if target.is_some() { "0 mm".into() } else { distance.name.clone() },
+            direction: Direction::Positive,
+            distance2: None,
+            start_offset,
+            through_all: false,
+            taper: Some(taper.name.clone()),
+            to: None,
+            to_plane: None,
+            to_offset: target.map(|_| distance.name.clone()),
+            from: None,
+        },
+        target,
+    ))
 }
 
 pub(super) fn symmetry(

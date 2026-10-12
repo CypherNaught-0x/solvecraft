@@ -93,8 +93,23 @@ impl Face {
         };
         let body = state.body(body).ok_or_else(|| invalid("loft face body no longer exists"))?;
         let sources = body.body.face_sources().ok_or_else(|| invalid("loft face has no construction identities"))?;
+        // Native cap labels name start/end along the extrusion's signed travel;
+        // kernel certificates name the geometrically low/high profile planes.
+        let cap_high = if self.side.is_none() {
+            let [(producer, None)] = contributions else { return Err(invalid("unsupported cap contributors")) };
+            let Some(solvecraft_doc::FeatureKind::Extrude { extent, .. }) = doc.feature(*producer).map(|f| &f.kind) else {
+                return Err(invalid("cap selector requires an extrusion producer"));
+            };
+            if extent.to.is_some() || extent.to_plane.is_some() || extent.through_all || extent.distance2.is_some() {
+                return Err(invalid("cap selector requires an observed one-sided distance producer"));
+            }
+            let distance = doc.eval(&extent.distance, solvecraft_doc::expr::Kind::Length)?;
+            self.high ^ (distance < 0.) ^ (extent.direction == solvecraft_doc::Direction::Negative)
+        } else {
+            self.high
+        };
         let matches = |source: &solvecraft_kernel::FaceSource, (id, curve): &(u64, Option<String>)| match (source, curve) {
-            (solvecraft_kernel::FaceSource::CertifiedExtrudeCap { producer, high, .. }, None) => producer == id && *high == self.high,
+            (solvecraft_kernel::FaceSource::CertifiedExtrudeCap { producer, high, .. }, None) => producer == id && *high == cap_high,
             (solvecraft_kernel::FaceSource::CertifiedExtrudeSide { producer, curve: current, plane: Some(_), .. }, Some(curve)) => {
                 producer == id && current == curve
             }

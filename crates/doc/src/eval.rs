@@ -1673,13 +1673,14 @@ fn feature_tools_with_constructor(
                 Some(p) => object_height(st, &ss.plane, centre, p),
                 None => 0.0,
             };
-            let d = match extent.to {
-                Some(p) => {
+            let target_height =
+                extent.target_height(doc, vals, f.component, st, &ss.plane)?.or_else(|| extent.to.map(|p| object_height(st, &ss.plane, centre, p)));
+            let d = match target_height {
+                Some(h) => {
                     let off = match &extent.to_offset {
                         Some(e) => val(vals, e, Kind::Length)?,
                         None => 0.0,
                     };
-                    let h = object_height(st, &ss.plane, centre, p);
                     let start = from + extent.start_offset.as_deref().map(|e| val(vals, e, Kind::Length)).transpose()?.unwrap_or(0.0);
                     // Past the face by the offset, in the direction travelled.
                     let to = h + if h >= start { off } else { -off };
@@ -1698,7 +1699,7 @@ fn feature_tools_with_constructor(
                 if extent.distance2.is_some() || extent.start_offset.is_some() || extent.direction == crate::Direction::Symmetric {
                     return Err(DocError::Invalid("not supported yet: taper with two-sided, symmetric or offset extents".into()));
                 }
-                let sign = if extent.to.is_none() && extent.direction == crate::Direction::Negative { -1.0 } else { 1.0 };
+                let sign = if !extent.has_to() && extent.direction == crate::Direction::Negative { -1.0 } else { 1.0 };
                 let (len, sign) = if d < 0.0 { (-d, -sign) } else { (d, sign) };
                 let start_plane = ss.plane.offset(from);
                 return Ok(regions
@@ -1712,7 +1713,7 @@ fn feature_tools_with_constructor(
                     None => 0.0,
                 };
             // To Object gives a signed distance from the start: one side only.
-            let direction = if extent.to.is_some() { crate::Direction::Positive } else { extent.direction };
+            let direction = if extent.has_to() { crate::Direction::Positive } else { extent.direction };
             let (a, b) = match (&extent.distance2, direction) {
                 (Some(d2), _) => (-val(vals, d2, Kind::Length)?, d),
                 (None, crate::Direction::Positive) => (0.0, d),
@@ -1737,7 +1738,7 @@ fn feature_tools_with_constructor(
                 }
             }
             let mut tools = Vec::new();
-            let mut untrimmed = extent.to.is_none() && extent.from.is_none() && !extent.through_all;
+            let mut untrimmed = !extent.has_to() && extent.from.is_none() && !extent.through_all;
             for r in &regions {
                 if *operation == Operation::Join {
                     let exact = centered_extrude(&ss.plane, std::slice::from_ref(r), lo + off, hi + off)?;

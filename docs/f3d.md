@@ -1596,3 +1596,41 @@ regression. All 35 local native-import groups also passed. The three-loft origin
 model was rendered and visually inspected; its image remains local. Public-API
 inspection identifies the adapter's ten rejected extrusion extents as ToEntity
 cuts, which still require editable target-reference reconstruction.
+
+
+### To Object extrusion endpoints
+
+One-sided version-8 ToEntity extents now retain their explicit target container,
+`Side1Offset` and taper bindings. The target and parameter identities are checked
+against their owner, class and declared role; cached distances do not replace the
+relationship. Original field-authored tests reject truncated input records,
+invalid binding classes and unknown extent flags.
+
+The verified controls cover parallel circular extrusion caps in both travel
+directions and live offset construction planes. Body-face selectors reuse the
+same bounded recipe and explicit operation ownership checks as loft sections.
+Native start/end cap labels are translated to the kernel's low/high roles using
+the producer's signed travel. Construction-plane selectors follow their explicit
+geometry tracker. Twelve local exports check source diameter, target height and
+endpoint offset edits, volumes, bounds, body count, reopening and undo.
+
+SolidCraft format 21 stores `extent.to_plane` alongside the existing offset.
+A body-face endpoint retains an exact face anchor; a construction endpoint must
+exist in the prior evaluated state. Lost targets fail instead of searching for
+another face. Existing positional `to` endpoints retain their behavior. The
+command accepts `to_plane: "Plane name"` or `to_plane: {face: [x,y,z]}`. Explicit
+planar endpoints cannot also select positional `to`, through-all or a second side.
+Nonparallel exact endpoint planes are currently rejected; general slanted and
+curved native To Object extents remain unfinished.
+
+Three original saved models bring the editable-history suite to 66. Their analytic
+volumes and world bounds are checked after height, pocket-width and offset edits,
+reopening and undo. Engine tests additionally cover large target moves, missing
+sources, copy remapping, malformed saved anchors and atomic rejection. No native
+Fusion exports or measurements are committed.
+
+Validation passed all 30 CI test binaries, 127 IO tests, 576 engine tests, all 66
+saved histories and the WASM checks. The HardEdgeBasin opening regression also
+passed. All 36 local native-import groups passed before the final copy-name
+regression was added. The adapter's ten ToEntity records still need the separately
+observed direction-hint flag; the larger corpus remains incomplete.

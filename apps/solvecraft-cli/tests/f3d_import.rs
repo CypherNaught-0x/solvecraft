@@ -50,8 +50,7 @@ fn operation_ownership_excludes_deleted_tags_and_retains_suppressed_producers() 
 #[test]
 #[ignore = "requires local face-section loft public API controls"]
 fn loft_face_sections_preserve_cap_body_and_parent_dependencies() {
-    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
-    for file in [
+    check_endpoint_histories(&[
         "fusion-face-loft-measurements.json",
         "fusion-face-loft-extra-measurements.json",
         "fusion-face-loft-rectangle-measurements.json",
@@ -63,7 +62,18 @@ fn loft_face_sections_preserve_cap_body_and_parent_dependencies() {
         "fusion-compound-polygons-measurements.json",
         "fusion-serial-join-measurements.json",
         "fusion-triple-join-measurements.json",
-    ] {
+    ]);
+}
+
+#[test]
+#[ignore = "requires local To Object public API controls"]
+fn to_object_endpoints_preserve_target_source_and_offset_edits() {
+    check_endpoint_histories(&["fusion-to-entity-measurements.json"]);
+}
+
+fn check_endpoint_histories(files: &[&str]) {
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    for file in files {
         let api: Value = serde_json::from_slice(&std::fs::read(dir.join(file)).unwrap()).unwrap();
         let verify = |s: &mut Session, row: &Value, label: &str| {
             let measured = volume(s, row["volume"].as_f64().unwrap(), label);

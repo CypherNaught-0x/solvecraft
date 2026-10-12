@@ -18,6 +18,7 @@ pub mod construct;
 mod document;
 mod eval;
 pub mod expr;
+mod extent_target;
 pub mod face_anchor;
 pub use face_anchor::{FaceAnchor, FaceAttachmentStatus};
 pub mod format;
