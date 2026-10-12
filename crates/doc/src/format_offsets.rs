@@ -234,8 +234,9 @@ pub(crate) fn validate_typed(document: &Document) -> Result<()> {
             sketches.insert(feature.id, sketch);
         }
         for (sketch, selection) in feature.kind.profile_sels() {
-            if let ProfileSel::PieceBoundaries { profiles } = selection {
+            if let ProfileSel::PieceBoundaries { profiles, circle_seams } = selection {
                 crate::profile_pieces::validate(profiles)?;
+                crate::profile_pieces::validate_seams(profiles, circle_seams)?;
             }
             if let ProfileSel::OffsetBoundaries { associations } = selection {
                 // A deleted association or source sketch is a repairable model error,

@@ -1114,8 +1114,19 @@ fn multiple_profile_regions_preserve_holes_bodies_edits_and_undo() {
 #[test]
 #[ignore = "requires local split-profile public API controls"]
 fn partial_profile_pieces_preserve_selected_regions_after_edits() {
+    verify_profile_piece_controls("fusion-partial-profile-measurements.json", 15);
+}
+
+#[test]
+#[ignore = "requires local rotated arc and circle public API controls"]
+fn rotated_arcs_and_circle_seams_preserve_regions_after_edits() {
+    verify_profile_piece_controls("fusion-piece-parameter-measurements.json", 60);
+}
+
+fn verify_profile_piece_controls(measurements: &str, count: usize) {
     let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
-    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-partial-profile-measurements.json")).unwrap()).unwrap();
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join(measurements)).unwrap()).unwrap();
+    assert_eq!(api.as_object().unwrap().len(), count);
     let verify = |s: &mut Session, row: &Value| {
         let measured = volume(s, row["volume"].as_f64().unwrap(), "partial profiles");
         assert_eq!(measured["body_count"], row["body_count"]);
@@ -1139,6 +1150,7 @@ fn partial_profile_pieces_preserve_selected_regions_after_edits() {
         }
     };
     for (name, row) in api.as_object().unwrap() {
+        eprintln!("{name}");
         let mut s = Session::default();
         s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
         verify(&mut s, row);

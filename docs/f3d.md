@@ -147,8 +147,9 @@ diameter and coincidence constraints. All 25 controls remain local.
   units remain centimetres. Assembly placement is not reconstructed.
 * Selected circular profiles follow container → profile → tracking record →
   `(primary, secondary)` curve tags, scoped to the referenced sketch. A curve's
-  object ID is not its profile tag. The verified schema is a single loop containing
-  full circles or chains of finite lines and arcs, including inner loops. Intersected partial-curve boundaries still fail explicitly. Ownership and back-references
+  object ID is not its profile tag. Verified regions contain finite lines, arcs
+  and circles, including inner loops and intersected analytic pieces (see the
+  split-boundary and rotated-seam controls below). Ownership and back-references
   are checked, rather than selecting the first circle in a sketch.
 * Generic constraint class `60403D47-0C49-49B0-BDE8-1679608164A2`, version 3, uses
   kind 1 for coincidence between two points. The importer checks kind and operands;
@@ -164,7 +165,7 @@ remain retained in the raw streams, not interpreted as defaults.
 ## Remaining history work
 
 Full extent/start/direction schemas, other sketch geometry and constraints,
-intersected partial-curve profiles, assemblies and native B-reps remain unresolved. Parameter
+free-form partial-curve profiles, assemblies and native B-reps remain unresolved. Parameter
 expressions are preserved and checked against the native cached values; unsupported
 units or expressions fail instead of becoming constants. Native mm/degree input
 parameters now bind directly to feature inputs, so timeline edits update dependent
@@ -1104,11 +1105,10 @@ loaded from serialized profile caches. Recompute requires the same source IDs,
 piece numbers, counts and traversal directions. Missing or ambiguous boundaries
 produce a model error rather than choosing a nearby region by list index.
 
-This import step certifies native lines and positive-Z circles with the observed
-positive-X seam. Partial arcs, rotated native circle seams, and intersections on
-the seam remain explicitly unsupported. Free-form tessellation cannot acquire an
-analytic-piece certificate. These limits avoid assigning unverified native piece
-numbers to superficially similar geometry.
+This initial split-boundary step certified native lines and positive-Z circles
+with the observed positive-X seam. The later controls below extend it to partial
+arcs, rotated native circle seams and cuts on the seam. Free-form tessellation
+still cannot acquire an analytic-piece certificate.
 
 Five original command recipes and `.solvecraft` fixtures cover the lens, both
 crescents and both divided-rectangle regions. Expected circle areas use the
@@ -1129,3 +1129,50 @@ Validation for this step: full `cargo xtask ci` passed all 29 test binaries,
 opening guard completed in 0.86 seconds. All 31 local native import groups and
 12 native inspection groups passed separately. Upstream `8fa52c8` is integrated;
 the edited crescent was rendered and visually checked using original fixture data.
+
+
+## Rotated seams and partial arcs
+
+Sixty new local public-API exports isolate partial semicircles at 0°, 60° and
+180°, circles cut into four regions at centered and offset crossings, and
+intersecting circles with source axes rotated by 60° and 180°. Each baseline
+has a source-dimension edit and a subsequent height edit. All imports are compared
+with independent Fusion volume, body-count and bounding-box measurements; edits,
+reopening and undo are also checked. No Fusion exports are committed.
+
+Circle piece numbering follows the saved local X axis. The first interval contains
+that seam; when a cut lies exactly at the seam, the first interval starts there.
+Arc pieces number forward from the source start point regardless of its rotation.
+Dangling line portions still contribute to the source count. These observations
+replace the previous restrictions on rotated circle seams and partial arcs.
+
+Format 17 stores optional `circle_seams` in `PieceBoundaries` references, measured
+in sketch-local radians. Missing seams preserve format-16 positive-X numbering.
+Seam values must be finite, in [0, 2π), and refer to selected circle sources.
+Runtime graph partitions remain private, shared and unserialized; recomputation
+resolves the saved parameter frame against all current cuts. Exact seam lookup
+checks only adjacent cuts using binary search, avoiding a full cut scan for each
+referenced piece. Invalid, missing and ambiguous boundaries still fail explicitly.
+
+Rotated native semicircles may save an end angle about 2 × 10⁻⁸ radians from the
+independent endpoint. The importer permits radius-scaled numeric roundoff while
+retaining the referenced endpoint, and rejects larger geometric disagreement.
+Normal vectors within 10⁻¹⁰ of positive Z are accepted. These tolerances do not
+permit arbitrary off-plane sketch geometry.
+
+Five original `pieces-*` recipes and saved `.solvecraft` files bring the suite to
+42 projects. They cover a rotated-seam lens and crescent, an exact-seam quarter,
+and both portions of a split semicircle. Volumes use analytic sector and circle
+intersection formulas; source and height edits, reopening and undo are exercised.
+Free-form profile certificates, other feature types, body-support dependencies,
+assemblies and remaining legacy schemas are still unfinished.
+
+
+Validation: full `cargo xtask ci` passed all 30 test binaries, including 104 I/O,
+113 document, 565 engine, 204 kernel and 319 UI tests, all 42 original history
+fixtures, and ten-crate WebAssembly checking. All 32 local native import groups
+and 12 inspection groups passed. The HardEdgeBasin guard passed; an isolated
+`bench-open` measured 13.0 ms parsing, 863.6 ms evaluation and 14 displayed bodies
+with the existing eight expected unsupported endpoint fillets. Upstream `07e263d`
+is integrated, with both branches' performance documentation retained. The edited
+rotated-arc fixture was rendered and visually checked.

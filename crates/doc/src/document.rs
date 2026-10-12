@@ -107,7 +107,12 @@ pub enum ProfileSel {
     /// Exact whole source coverage, including holes; partial source curves do not match.
     WholeBoundaries { profiles: Vec<WholeProfileBoundary> },
     /// Exact directed analytic pieces, including all holes and source split counts.
-    PieceBoundaries { profiles: Vec<PieceProfileBoundary> },
+    PieceBoundaries {
+        profiles: Vec<PieceProfileBoundary>,
+        /// Source circle parameter seams, in sketch-local radians from positive X.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        circle_seams: std::collections::BTreeMap<String, f64>,
+    },
     /// The profile containing each sketch point.
     Points { points: Vec<Vec2> },
 }

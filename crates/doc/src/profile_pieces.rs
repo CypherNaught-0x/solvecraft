@@ -19,7 +19,22 @@ fn keys(value: &Value, expected: &[&str]) -> Result<()> {
 
 /// Check raw budgets before copying into typed document structures.
 pub(crate) fn validate_raw(value: &Value) -> Result<()> {
-    keys(value, &["type", "profiles"])?;
+    if let Some(seams) = value.get("circle_seams") {
+        keys(value, &["type", "profiles", "circle_seams"])?;
+        let seams = seams.as_object().ok_or_else(invalid)?;
+        if seams.len() > 20_000
+            || seams.iter().any(|(id, angle)| {
+                id.is_empty()
+                    || id.len() > 512
+                    || id.chars().any(char::is_control)
+                    || angle.as_f64().is_none_or(|angle| !angle.is_finite() || !(0.0..std::f64::consts::TAU).contains(&angle))
+            })
+        {
+            return Err(invalid());
+        }
+    } else {
+        keys(value, &["type", "profiles"])?;
+    }
     if value.get("type").and_then(Value::as_str) != Some("piece_boundaries") {
         return Err(invalid());
     }
@@ -64,8 +79,9 @@ pub(crate) fn validate_raw(value: &Value) -> Result<()> {
 pub fn piece_profile_selection_from_value(value: &Value) -> Result<ProfileSel> {
     validate_raw(value)?;
     let selection: ProfileSel = serde_json::from_value(value.clone()).map_err(|_| invalid())?;
-    if let ProfileSel::PieceBoundaries { profiles } = &selection {
+    if let ProfileSel::PieceBoundaries { profiles, circle_seams } = &selection {
         validate(profiles)?;
+        validate_seams(profiles, circle_seams)?;
     }
     Ok(selection)
 }
@@ -108,10 +124,39 @@ pub(crate) fn validate(profiles: &[PieceProfileBoundary]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn indices(ss: &SolvedSketch, profiles: &[PieceProfileBoundary]) -> Result<Vec<usize>> {
+pub(crate) fn validate_seams(profiles: &[PieceProfileBoundary], seams: &BTreeMap<String, f64>) -> Result<()> {
+    if seams.len() > 20_000 {
+        return Err(invalid());
+    }
+    let sources = profiles
+        .iter()
+        .flat_map(|profile| std::iter::once(&profile.outer).chain(&profile.holes))
+        .flatten()
+        .map(|part| &part.curve)
+        .collect::<BTreeSet<_>>();
+    for (id, angle) in seams {
+        if !sources.contains(id) || !angle.is_finite() || !(0.0..std::f64::consts::TAU).contains(angle) {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn indices(ss: &SolvedSketch, profiles: &[PieceProfileBoundary], seams: &BTreeMap<String, f64>) -> Result<Vec<usize>> {
     validate(profiles)?;
-    let current =
-        ss.profiles.iter().map(|profile| profile.piece_boundaries().map(|(outer, holes)| PieceProfileBoundary { outer, holes })).collect::<Vec<_>>();
+    validate_seams(profiles, seams)?;
+    if !seams.is_empty() {
+        let circles: BTreeSet<_> =
+            ss.sketch.curves.iter().filter(|curve| matches!(curve.kind, crate::sketch::CurveKind::Circle { .. })).map(|curve| &curve.id).collect();
+        if seams.keys().any(|id| !circles.contains(id)) {
+            return Err(invalid());
+        }
+    }
+    let current = ss
+        .profiles
+        .iter()
+        .map(|profile| profile.piece_boundaries_with_seams(seams).map(|(outer, holes)| PieceProfileBoundary { outer, holes }))
+        .collect::<Vec<_>>();
     profiles
         .iter()
         .map(|identity| {
@@ -165,6 +210,28 @@ mod tests {
         let mut bad = good.clone();
         bad["profiles"][0]["outer"] = json!(vec![part; 513]);
         assert!(piece_profile_selection_from_value(&bad).is_err());
+    }
+
+    #[test]
+    fn saved_circle_seams_are_optional_bounded_and_referenced() {
+        let good = json!({"type":"piece_boundaries","profiles":[{"outer":[{"curve":"circle","piece":1,"count":4,"reversed":false}],"holes":[]}]});
+        let legacy = piece_profile_selection_from_value(&good).unwrap();
+        assert_eq!(serde_json::to_value(legacy).unwrap(), good);
+        for seams in [json!({"circle":0.0}), json!({"circle":std::f64::consts::PI})] {
+            let mut value = good.clone();
+            value["circle_seams"] = seams;
+            let parsed = piece_profile_selection_from_value(&value).unwrap();
+            assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+        }
+        for seams in [json!([]), json!({"missing":1.0}), json!({"circle":-0.1}), json!({"circle":std::f64::consts::TAU}), json!({"circle":"1"})] {
+            let mut value = good.clone();
+            value["circle_seams"] = seams;
+            assert!(piece_profile_selection_from_value(&value).is_err(), "{value}");
+        }
+        let ProfileSel::PieceBoundaries { profiles, .. } = piece_profile_selection_from_value(&good).unwrap() else { panic!("selection") };
+        for angle in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(validate_seams(&profiles, &BTreeMap::from([("circle".into(), angle)])).is_err());
+        }
     }
 
     #[test]

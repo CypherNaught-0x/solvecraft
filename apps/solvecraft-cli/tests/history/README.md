@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These thirty-seven designs and their JSON command recipes are original SolveCraft test
+These forty-two designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -114,3 +114,10 @@ The partial-circle fixtures use radii 30 mm and center separation 40 mm. Their
 baseline lens area is `1800 × acos(2/3) − 400 × sqrt(5)` mm². The diameter edit
 uses the general two-circle intersection formula with radii 35 and 30 mm;
 expectations are analytic values, not captured kernel measurements.
+
+Five `pieces-*` fixtures additionally cover a rotated-seam lens and crescent, a
+quarter-circle with cuts exactly on its seam, and both regions of a split
+semicircle (including a rotated source arc). Their source radius/diameter and
+height edits survive reopening and undo. Quarter areas are πr²/4. The smaller
+semicircle region has area `(r² acos(x/r) − x sqrt(r² − x²))/2`, with divider
+x = 10 mm; the larger region is the semicircle area minus that value.

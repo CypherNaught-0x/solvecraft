@@ -8,6 +8,7 @@
 //! rectangle with a hole, and the disc.
 
 use std::f64::consts::TAU;
+use std::{collections::BTreeMap, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use solvecraft_geom::{Loop2, Region2, Seg2, Vec2};
@@ -19,7 +20,8 @@ const MERGE_TOL: f64 = 1e-6;
 const MAX_EDGES: usize = 50_000;
 
 /// A directed analytic source piece. Numbers are one-based in source direction;
-/// circle piece one crosses the positive-X seam. Counts include dangling pieces.
+/// circle piece one contains the positive-X seam, or starts there if it is a cut.
+/// Counts include dangling pieces.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfilePiece {
@@ -27,6 +29,39 @@ pub struct ProfilePiece {
     pub piece: u32,
     pub count: u32,
     pub reversed: bool,
+}
+
+#[derive(Clone, Debug)]
+struct CirclePartition {
+    cuts: Vec<f64>,
+    tolerance: f64,
+}
+
+impl CirclePartition {
+    // The seam-containing interval is first; an exact seam cut starts interval one.
+    fn first(&self, seam: f64) -> usize {
+        if self.cuts.is_empty() {
+            return 0;
+        }
+        let next = self.cuts.partition_point(|cut| *cut < seam);
+        let previous = next.checked_sub(1).unwrap_or(self.cuts.len() - 1);
+        // Only adjacent cyclic cuts can touch the seam. Keep remapping logarithmic
+        // when a large profile repeatedly references the same source circle.
+        [next % self.cuts.len(), previous]
+            .into_iter()
+            .filter_map(|index| {
+                let distance = (self.cuts.get(index)? - seam).abs();
+                let distance = distance.min(TAU - distance);
+                (distance <= self.tolerance).then_some((index, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(index, _)| index)
+            .unwrap_or(previous)
+    }
+
+    fn number(&self, index: usize, seam: f64) -> u32 {
+        if self.cuts.is_empty() { 1 } else { ((index + self.cuts.len() - self.first(seam)) % self.cuts.len() + 1) as u32 }
+    }
 }
 
 /// A closed region usable by features, with the ids of the curves bounding it.
@@ -48,6 +83,8 @@ pub struct Profile {
     piece_outer: Option<Vec<ProfilePiece>>,
     #[serde(skip)]
     piece_holes: Option<Vec<Vec<ProfilePiece>>>,
+    #[serde(skip)]
+    circle_partitions: Arc<BTreeMap<String, CirclePartition>>,
 }
 
 impl Profile {
@@ -55,6 +92,29 @@ impl Profile {
     /// sampled geometry never acquires this identity from serialized input.
     pub fn piece_boundaries(&self) -> Option<(Vec<ProfilePiece>, Vec<Vec<ProfilePiece>>)> {
         Some((self.piece_outer.clone()?, self.piece_holes.clone()?))
+    }
+
+    /// Resolve cyclic pieces in each source circle's saved local parameter frame.
+    /// Shared partitions include all graph cuts, including pruned dangling pieces.
+    pub fn piece_boundaries_with_seams(&self, seams: &BTreeMap<String, f64>) -> Option<(Vec<ProfilePiece>, Vec<Vec<ProfilePiece>>)> {
+        let (mut outer, mut holes) = self.piece_boundaries()?;
+        for boundary in std::iter::once(&mut outer).chain(&mut holes) {
+            for piece in boundary.iter_mut() {
+                let Some(seam) = seams.get(&piece.curve) else { continue };
+                if !seam.is_finite() || !(0.0..TAU).contains(seam) {
+                    return None;
+                }
+                let partition = self.circle_partitions.get(&piece.curve)?;
+                if piece.count as usize != partition.cuts.len().max(1) || piece.piece == 0 || piece.piece > piece.count {
+                    return None;
+                }
+                let index = (partition.first(0.) + piece.piece as usize - 1) % piece.count as usize;
+                piece.piece = partition.number(index, *seam);
+            }
+            boundary.sort();
+        }
+        holes.sort();
+        Some((outer, holes))
     }
 
     /// Whole source boundaries, certified by complete graph-piece coverage. Intersections,
@@ -683,6 +743,7 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
     };
     let mut loops: Vec<(Loop2, Vec<String>, usize, Option<Vec<String>>, Option<Vec<ProfilePiece>>)> = Vec::new(); // (ccw loop, curve ids, component)
     let mut edges: Vec<Edge> = Vec::new();
+    let mut circle_partitions = BTreeMap::new();
     for (k, (ci, sh)) in shapes.iter().enumerate() {
         let mut ts = cuts.get(k).cloned().unwrap_or_default();
         ts.sort_by(f64::total_cmp);
@@ -737,6 +798,10 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
             }
             Shape::Round { c, r, start, sweep } => {
                 let full = sweep >= TAU - 1e-12;
+                let partition = CirclePartition { cuts: ts.clone(), tolerance: close };
+                if full && analytic {
+                    circle_partitions.insert(id.clone(), partition.clone());
+                }
                 if full && ts.is_empty() {
                     loops.push((
                         Loop2::circle(c, r),
@@ -753,9 +818,6 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
                     let first = bounds.first().copied().unwrap_or(0.0);
                     bounds.push(first + TAU);
                 }
-                // A cut on the circle seam is not yet a certified cyclic identity.
-                // Keep displaying it, but refuse persistent piece references there.
-                let certified = analytic && (!full || ts.first().is_some_and(|t| *t > close && *t < TAU - close));
                 let pieces: Vec<_> = bounds.windows(2).filter(|w| (w[1] - w[0]) * r > MERGE_TOL).collect();
                 for (index, w) in pieces.iter().enumerate() {
                     let (t0, t1) = (w[0], w[1]);
@@ -771,7 +833,7 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
                         id: id.clone(),
                         tag: None,
                         coverage,
-                        analytic: certified.then(|| part(if full { (index + 1) % pieces.len() + 1 } else { index + 1 }, pieces.len())),
+                        analytic: analytic.then(|| part(if full { partition.number(index, 0.) as usize } else { index + 1 }, pieces.len())),
                     });
                 }
             }
@@ -961,6 +1023,7 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
             v.push(k);
         }
     }
+    let circle_partitions = Arc::new(circle_partitions);
     let out: Vec<Profile> = loops
         .iter()
         .enumerate()
@@ -990,6 +1053,7 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
                 holes.sort();
             }
             Profile {
+                circle_partitions: Arc::clone(&circle_partitions),
                 piece_outer: piece_outer.clone(),
                 piece_holes,
                 region,
@@ -1181,6 +1245,62 @@ pub fn merge_regions(regions: &[Region2]) -> Vec<Region2> {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod whole_boundary_tests {
     use super::*;
+
+    #[test]
+    fn circle_quadrants_resolve_exact_and_rotated_seams() {
+        use std::f64::consts::PI;
+        let mut sk = Sketch::new();
+        sk.add_circle(Vec2::ZERO, 30., None, Some("circle")).unwrap();
+        sk.add_line(Vec2::new(-50., 0.), Vec2::new(50., 0.), None, None, Some("horizontal")).unwrap();
+        sk.add_line(Vec2::new(0., -50.), Vec2::new(0., 50.), None, None, Some("vertical")).unwrap();
+        let profiles = find_profiles(&sk);
+        assert_eq!(profiles.len(), 4);
+        for profile in &profiles {
+            let quadrant = match (profile.centroid.x > 0., profile.centroid.y > 0.) {
+                (true, true) => 0,
+                (false, true) => 1,
+                (false, false) => 2,
+                (true, false) => 3,
+            };
+            assert!((profile.area - 225. * PI).abs() < 1e-6);
+            for (seam, first) in [(0., 0), (1e-10, 0), (TAU - 1e-10, 0), (PI / 3., 0), (PI / 2., 1), (PI, 2), (5. * PI / 3., 3)] {
+                let (outer, holes) = profile.piece_boundaries_with_seams(&BTreeMap::from([("circle".into(), seam)])).unwrap();
+                assert!(holes.is_empty());
+                let part = outer.iter().find(|p| p.curve == "circle").unwrap();
+                assert_eq!((part.piece, part.count, part.reversed), ((quadrant + 4 - first) % 4 + 1, 4, false));
+            }
+            for seam in [-1., TAU, f64::NAN, f64::INFINITY] {
+                assert!(profile.piece_boundaries_with_seams(&BTreeMap::from([("circle".into(), seam)])).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn partial_arcs_number_from_the_rotated_start_and_include_dangling_lines() {
+        use std::f64::consts::PI;
+        for phase in [0., PI / 3., PI] {
+            let rotate = |x: f64, y: f64| Vec2::new(x * phase.cos() - y * phase.sin(), x * phase.sin() + y * phase.cos());
+            let mut sk = Sketch::new();
+            sk.add_arc(Vec2::ZERO, rotate(30., 0.), rotate(-30., 0.), [None; 3], Some("arc")).unwrap();
+            sk.add_line(rotate(-30., 0.), rotate(30., 0.), None, None, Some("chord")).unwrap();
+            sk.add_line(rotate(10., -10.), rotate(10., 40.), None, None, Some("divider")).unwrap();
+            let profiles = find_profiles(&sk);
+            assert_eq!(profiles.len(), 2);
+            for profile in profiles {
+                let right = profile.centroid.x * phase.cos() + profile.centroid.y * phase.sin() > 10.;
+                let (outer, holes) = profile.piece_boundaries().unwrap();
+                assert!(holes.is_empty());
+                let parts = outer.iter().map(|p| (p.curve.as_str(), p.piece, p.count, p.reversed)).collect::<Vec<_>>();
+                assert_eq!(
+                    parts,
+                    [("arc", if right { 1 } else { 2 }, 2, false), ("chord", if right { 2 } else { 1 }, 2, false), ("divider", 2, 3, right)]
+                );
+                let cap = (900. * (10_f64 / 30.).acos() - 10. * 800_f64.sqrt()) / 2.;
+                let expected = if right { cap } else { 450. * PI - cap };
+                assert!((profile.area - expected).abs() < 1e-6);
+            }
+        }
+    }
 
     #[test]
     fn whole_boundary_coverage_requires_every_piece_once_in_one_direction() {

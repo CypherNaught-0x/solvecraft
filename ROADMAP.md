@@ -221,8 +221,10 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   now decode all six Gridfinity generators and its full constraint list. Multiple
   selected regions preserve separate bodies and each region's holes through edits;
   sixteen analytic legacy profile records match current resaves. Directed line/circle
-  pieces preserve overlapping and divided regions through source edits; unverified
-  circle seams and partial arcs remain unsupported. Thirty-seven original
+  pieces preserve overlapping and divided regions through source edits; rotated
+  circle seams now persist in the document, and partial arcs retain their source-start
+  numbering. Sixty controls cover rotated axes, exact seam cuts and four-way circle
+  splits through edits and reopening. Forty-two original
   editable-history fixtures check analytic volumes and bounds.
   Signed extrusion start offsets preserve expressions
   and parameter bindings through edits, reopening and undo; zero-angle taper inputs
@@ -320,6 +322,18 @@ headline counts in-scope tabs only and lists the deferred ones separately.
 - Parameters and Configurations have distinct actions in the SOLID toolbar's CONFIGURE panel.
   Parameters opens the user/model variable editor; Configurations opens the configuration table.
   Configure remains available in the panel dropdown.
+- Parameter creation supports Enter with validation and continued keyboard entry. Shared
+  expression autocomplete supports Up/Down selection, Enter/Tab acceptance and Escape dismissal;
+  accepting a suggestion does not submit a parameter or trigger viewport shortcuts.
+- Movable window title bars follow the app's dark/light header palette. Radial right-click
+  menus are opt-in in Preferences > Navigation; ordinary context menus remain the default.
+- Desktop distribution: running Windows windows and executable resources use the app icon;
+  packaging validates icon resources. Nix installs launchers, MIME data and generated icons,
+  with explicit launch apps and Vulkan-loader/driver discovery. Flatpak feed instructions
+  register the required runtime source; release checks exercise desktop modelling on X11/Wayland.
+- OpenGL rendering clamps effective anti-aliasing to 1x across UI pipelines, textures and CAD
+  callbacks to prevent black frames. Other backends retain the requested sample count, and
+  stored preferences remain unchanged.
 - Configuration rules: ordered typed conditions can drive parameters and suppressions or
   restrict values. Preview explains effective values without modifying the document; applying
   rules validates rows atomically. Length expressions retain their authoring units across
@@ -344,7 +358,26 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   continuous collision detection; local thin walls and small details remain limitations.
   See [contact-set limits and recovery](docs/contact-sets.md).
 
+## Document-opening performance
+
+- Cold rebuild profiling separates parsing, geometry, placement, display meshing and
+  thumbnails. Straight-line closest-point projection and exact curved-surface evaluation
+  reuse reduce repeated work without relaxing geometry checks. Three alternating optimized
+  benchmark runs reduce median rebuild time by 26% on the public sensor enclosure and 22%
+  on a local case assembly; shape measurements and topology match the original build.
+  See [performance measurements](docs/perf.md). Further cold Boolean and import costs remain.
+- Prepared assembly geometry survives selection and view changes while real geometry and
+  placement changes invalidate it. A Pi assembly edge-selection probe drops from 9.24 s to
+  0.57 s; initial opening is unchanged. Actual Windows desktop profiling measures 15.87 s
+  median opening, with 82% spent rebuilding geometry; halving full opening remains open.
+
 ## Kernel
+
+- Shell of a stepped, joined planar body no longer creates horizontal subdivisions across
+  continuous walls. Fresh axis-aligned Cut walls are stitched using their exact construction
+  support and shared topology, preserving real steps and intentional boundaries. The local
+  reported case returns from 86 to 49 faces with unchanged material and bounds; regressions
+  cover stepped stock, STEP round trips and saved projections from removed pieces.
 
 truck (Apache-2.0) behind our own `kernel` crate, with our own blend operation and boolean
 retry/validation; see `plan/adr/0001-geometry-kernel.md` (local) — summary in README.

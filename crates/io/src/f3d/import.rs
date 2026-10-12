@@ -248,7 +248,7 @@ impl Design {
                             if c.reference {
                                 return Err(invalid("linked sketch source dependencies are not supported yet"));
                             }
-                            if c.sketch != geometry || c.center.get(2).is_none_or(|z| z.abs() > 1e-10) || c.normal != [0., 0., 1.] {
+                            if c.sketch != geometry || c.center.get(2).is_none_or(|z| z.abs() > 1e-10) || !xy_normal(&c.normal) {
                                 return Err(invalid("unsupported circle placement"));
                             }
                             let center = points.get(&c.center_point).ok_or_else(|| invalid("missing circle center"))?;
@@ -278,7 +278,7 @@ impl Design {
                             if c.reference {
                                 return Err(invalid("linked sketch source dependencies are not supported yet"));
                             }
-                            if c.sketch != geometry || c.normal != [0., 0., 1.] {
+                            if c.sketch != geometry || !xy_normal(&c.normal) {
                                 return Err(invalid("unsupported arc placement"));
                             }
                             let center = Vec3::new(c.center[0], c.center[1], c.center[2]);
@@ -294,7 +294,9 @@ impl Design {
                             {
                                 let point = points.get(&id).filter(|p| p.sketch == geometry).ok_or_else(|| invalid("missing arc point"))?;
                                 let [px, py, pz] = point.position;
-                                if (Vec3::new(px, py, pz) - expected).len() > 1e-9 || pz.abs() > 1e-10 {
+                                // Rotated public-API controls save an angle about 2e-8 rad
+                                // from its exact endpoint; retain the independently saved point.
+                                if (Vec3::new(px, py, pz) - expected).len() > 1e-7 * c.radius.max(1.) || pz.abs() > 1e-10 {
                                     return Err(invalid("arc and point geometry disagree"));
                                 }
                                 let index = point_indices.get(&id).copied().ok_or_else(|| invalid("arc point outside sketch"))?;
@@ -513,7 +515,7 @@ impl Design {
                         }
                         active_bodies.clone()
                     };
-                    FeatureKind::Extrude { sketch, profiles: profile_selection(profile, &circles, &arcs)?, extent, operation, targets }
+                    FeatureKind::Extrude { sketch, profiles: profile_selection(profile, &circles)?, extent, operation, targets }
                 }
             };
             let id = doc.add_feature(kind, Some(&f.name))?;
@@ -641,21 +643,15 @@ pub(super) fn line_midpoints(sketch: &mut Sketch, lines: [usize; 2], id: u64) ->
     Ok(())
 }
 
-fn profile_selection(profile: &SketchProfile, circles: &BTreeMap<u64, SketchCircle>, arcs: &BTreeMap<u64, SketchArc>) -> Result<ProfileSel> {
+fn xy_normal(normal: &[f64; 3]) -> bool {
+    normal.iter().zip([0., 0., 1.]).all(|(value, expected)| value.is_finite() && (value - expected).abs() <= 1e-10)
+}
+
+fn profile_selection(profile: &SketchProfile, circles: &BTreeMap<u64, SketchCircle>) -> Result<ProfileSel> {
     if profile.regions.iter().flatten().flat_map(|boundary| &boundary.pieces).any(|(_, count)| *count != 1) {
         let boundary = |boundary: &ProfileLoop| -> Result<Vec<solvecraft_doc::sketch::ProfilePiece>> {
             let mut pieces = Vec::new();
             for ((id, (piece, count)), reversed) in boundary.curves.iter().zip(&boundary.pieces).zip(&boundary.reversed) {
-                // Circle partition numbers are relative to the source parameter seam.
-                // Only the independently observed positive-X seam is certified here.
-                if let Some(circle) = circles.get(id)
-                    && (circle.x_axis != [1., 0., 0.] || circle.normal != [0., 0., 1.])
-                {
-                    return Err(invalid("partial profile circle seam reconstruction is not supported yet"));
-                }
-                if arcs.contains_key(id) {
-                    return Err(invalid("arc piece profile reconstruction is not supported yet"));
-                }
                 pieces.push(solvecraft_doc::sketch::ProfilePiece { curve: format!("c{id}"), piece: *piece, count: *count, reversed: *reversed });
             }
             pieces.sort();
@@ -668,7 +664,16 @@ fn profile_selection(profile: &SketchProfile, circles: &BTreeMap<u64, SketchCirc
             holes.sort();
             profiles.push(solvecraft_doc::PieceProfileBoundary { outer: boundary(outer)?, holes });
         }
-        return Ok(ProfileSel::PieceBoundaries { profiles });
+        let mut circle_seams = BTreeMap::new();
+        for id in profile.regions.iter().flatten().flat_map(|boundary| &boundary.curves) {
+            if let Some(circle) = circles.get(id) {
+                let angle = circle.x_axis[1].atan2(circle.x_axis[0]).rem_euclid(std::f64::consts::TAU);
+                if angle > 1e-12 && angle < std::f64::consts::TAU - 1e-12 {
+                    circle_seams.insert(format!("c{id}"), angle);
+                }
+            }
+        }
+        return Ok(ProfileSel::PieceBoundaries { profiles, circle_seams });
     }
     let ids = |boundary: &ProfileLoop| {
         let mut ids: Vec<_> = boundary.curves.iter().map(|id| format!("c{id}")).collect();

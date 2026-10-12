@@ -169,6 +169,20 @@ fn arcs_preserve_major_and_rotated_sweeps_and_shared_chord_points() {
 }
 
 #[test]
+fn rotated_arc_roundoff_preserves_independent_endpoints_but_rejects_real_disagreement() {
+    let mut f = arc(PI, PI / 3.);
+    round(&mut f, 31, 17, 3., PI - 2.1e-8, PI / 3.);
+    let mut prefix = Vec::new();
+    attributes(&mut prefix, 17);
+    let normal_z = prefix.len() + 5 * 8;
+    f.0.get_mut(&31).unwrap().2[normal_z..normal_z + 8].copy_from_slice(&(1. + f64::EPSILON).to_le_bytes());
+    volume(&f.design().to_document("Rounded semicircle").unwrap(), 450. * PI * 17.);
+    let mut f = arc(PI, PI / 3.);
+    round(&mut f, 31, 17, 3., PI - 1e-3, PI / 3.);
+    assert!(f.design().to_document("Disagreeing endpoints").unwrap_err().to_string().contains("geometry disagree"));
+}
+
+#[test]
 fn malformed_arc_and_hole_records_are_rejected() {
     for id in [31, 101] {
         let length = arc(PI, 0.).0[&id].2.len();
@@ -365,7 +379,7 @@ fn partial_circles_distinguish_lens_and_crescents_through_edits() {
 }
 
 #[test]
-fn profile_piece_records_reject_invalid_counts_seams_and_truncation() {
+fn profile_piece_records_reject_invalid_counts_and_truncation() {
     for (piece, count) in [(0, 2), (3, 2), (1, 0), (1, 50_001)] {
         let mut f = partial_circles((1, false), (2, false));
         f.0.get_mut(&101).unwrap().2[53..57].copy_from_slice(&u32::to_le_bytes(piece));
@@ -378,8 +392,22 @@ fn profile_piece_records_reject_invalid_counts_seams_and_truncation() {
         f.0.get_mut(&101).unwrap().2.truncate(keep);
         assert!(f.design().sketch_profiles().is_err(), "prefix {keep}");
     }
-    let mut f = partial_circles((1, false), (2, false));
-    round(&mut f, 31, 17, 3., TAU, PI / 2.);
-    assert!(f.design().to_document("Unknown seam").unwrap_err().to_string().contains("seam"));
     assert!(partial_circles((1, false), (2, false)).design().circle_profiles().is_err());
+}
+
+#[test]
+fn rotated_circle_seams_survive_import_edit_and_reopening() {
+    for phase in [PI / 3., PI / 2., PI] {
+        // Rotating only the left source axis moves its lens span to piece two.
+        let mut f = partial_circles((2, false), (2, false));
+        round(&mut f, 31, 17, 3., TAU, phase);
+        let mut doc = f.design().to_document("Rotated source circle").unwrap();
+        volume(&doc, overlap(30., 30., 40.) * 17.);
+        doc.change_param("d7", "70 mm", None, None).unwrap();
+        doc.change_param("height", "23 mm", None, None).unwrap();
+        volume(&doc, overlap(35., 30., 40.) * 23.);
+        let reopened = crate::read_design(&crate::write_design(&doc)).unwrap();
+        assert_eq!(doc, reopened);
+        volume(&reopened, overlap(35., 30., 40.) * 23.);
+    }
 }
