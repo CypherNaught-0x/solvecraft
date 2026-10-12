@@ -370,7 +370,7 @@ fn extrusion_producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, ha
     Ok(feature)
 }
 
-fn selector_tail(r: &mut Reader<'_>, records: &Records<'_>, owner: u64) -> Result<u64> {
+pub(super) fn selector_tail(r: &mut Reader<'_>, records: &Records<'_>, owner: u64) -> Result<u64> {
     let handles = references(r)?;
     let [handle] = handles.as_slice() else {
         return Err(invalid("loft selector requires one body"));

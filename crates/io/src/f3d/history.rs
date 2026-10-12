@@ -20,6 +20,9 @@ pub struct HistoryFeature {
 
 #[derive(Debug, PartialEq)]
 pub enum HistoryKind {
+    Fillet {
+        sets: Vec<FilletSet>,
+    },
     Sketch {
         geometry: u64,
         placement: SketchPlacement,
@@ -207,6 +210,9 @@ impl Design {
                                 return Err(invalid("unsupported plane definition flags"));
                             }
                             (HistoryKind::OffsetPlane { geometry, definition, extra_offset }, String::new())
+                        }
+                        (super::fillets::CLASS, version @ (2 | 3)) => {
+                            (HistoryKind::Fillet { sets: super::fillets::inputs(&mut r, &records, &classes, version)? }, String::new())
                         }
                         (super::lofts::CLASS, 9) => {
                             let (operation, section_containers) = super::lofts::inputs(&mut r, &records, &classes, id)?;

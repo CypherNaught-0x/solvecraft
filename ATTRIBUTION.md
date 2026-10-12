@@ -195,3 +195,7 @@ Vulkan, DirectX 12, Metal and WebGPU retain their requested multisampling.
 | apps/solvecraft-cli/tests/history/combine-source-mirror-target-intersect-keep.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/combine-source-mirror-target-join-consume.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/combine-source-mirror-target-join-keep.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/fillet-vertical.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/fillet-bottom.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/fillet-top.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/fillet-pair.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |

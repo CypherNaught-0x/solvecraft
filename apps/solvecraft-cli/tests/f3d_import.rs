@@ -3,6 +3,66 @@ use serde_json::{Value, json};
 use solvecraft_engine::Session;
 
 #[test]
+#[ignore = "requires local constant-radius fillet controls"]
+fn constant_fillets_retain_selected_edges_radius_and_source_edits() {
+    use solvecraft_engine::doc::{Document, FeatureKind};
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    for mode in ["vertical", "bottom", "top", "pair"] {
+        let analytic = |radius: f64, height: f64, suppressed: bool| {
+            let length = match mode {
+                "vertical" => height,
+                "pair" => 2. * height,
+                _ => 20.,
+            };
+            (20. * 30. * height - if suppressed { 0. } else { (1. - std::f64::consts::PI / 4.) * radius.powi(2) * length }) / 1000.
+        };
+        let check = |s: &mut Session, r, h, suppressed, name: &str| {
+            let want = analytic(r, h, suppressed);
+            let measured = volume(s, want, name);
+            // Scale tolerance to the removed material. A whole-block tolerance
+            // could hide a fillet on a neighboring, differently sized edge.
+            let tolerance = (20. * 30. * h - want * 1000.).abs() * 0.005 + 0.01;
+            assert!((measured["total"]["volume_mm3"].as_f64().unwrap() - want * 1000.).abs() < tolerance, "{name}: fillet removal volume");
+        };
+        for (suffix, r, h, suppressed) in [
+            ("baseline", 2., 40., false),
+            ("radius4", 4., 40., false),
+            ("height50", 2., 50., false),
+            ("suppressed", 2., 40., true),
+            ("restored", 2., 40., false),
+        ] {
+            let name = format!("fillet-{mode}-{suffix}");
+            let mut s = Session::default();
+            s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(s.doc.features.len(), 3);
+            assert!(matches!(s.doc.features[2].kind, FeatureKind::Fillet { .. }));
+            assert_eq!(s.doc.features[2].suppressed, suppressed);
+            assert_eq!(s.doc.features[2].edge_names.len(), if mode == "pair" { 2 } else { 1 });
+            check(&mut s, r, h, suppressed, &name);
+            if suffix == "baseline" {
+                let original = s.doc.to_json();
+                for (feature, value, r, h) in [(2, "4 mm", 4., 40.), (1, "50 mm", 2., 50.)] {
+                    let parameter = s.doc.features[feature].param_names[0].clone();
+                    s.execute("parameters.change", &json!({"name":parameter,"expression":value})).unwrap();
+                    check(&mut s, r, h, false, &name);
+                    assert!(s.model.results.iter().all(|r| r.warning.is_none()), "{name}: edge references must not fall back to old points");
+                    check(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), r, h, false, &name);
+                    s.execute("edit.undo", &json!({})).unwrap();
+                    assert_eq!(s.doc.to_json(), original);
+                }
+            }
+        }
+    }
+    for mode in ["sets", "tangent"] {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length":10,"width":10,"height":10})).unwrap();
+        let before = s.doc.to_json();
+        assert!(s.execute("doc.open", &json!({"path":dir.join(format!("fillet-{mode}-baseline.f3d"))})).is_err());
+        assert_eq!(s.doc.to_json(), before);
+    }
+}
+
+#[test]
 #[ignore = "requires local Combine operation and retention controls"]
 fn combine_bodies_keep_editable_sources_operations_and_tool_retention() {
     use solvecraft_engine::doc::{Document, FeatureKind, Operation};

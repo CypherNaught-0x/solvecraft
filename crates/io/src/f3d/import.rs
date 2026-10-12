@@ -2,6 +2,7 @@
 //! Unsupported schemas fail before a caller replaces its current document.
 use super::history::{empty, finish, payload, references, zeros};
 use super::*;
+use solvecraft_doc::expr::Kind;
 use solvecraft_doc::sketch::{ConstraintKind, Sketch};
 use solvecraft_doc::{Direction, Document, Extent, FeatureKind, Operation, Param, PlaneRef, ProfileSel};
 use solvecraft_geom::{Plane, Vec2, Vec3};
@@ -98,6 +99,7 @@ impl Design {
         for f in history {
             let mut new_body = None;
             let mut new_plane = None;
+            let mut new_edge_names = Vec::new();
             let mut import_face = |object| -> Result<solvecraft_doc::FaceAnchor> {
                 let face = super::loft_faces::face(&records, &classes, object, f.id)?;
                 if operation_owners.is_none() {
@@ -143,6 +145,100 @@ impl Design {
                 face.anchor(&doc, &projection_model.state(), id, &contributions)
             };
             let kind = match f.kind {
+                HistoryKind::Fillet { sets } => {
+                    let [set] = sets.as_slice() else { return Err(invalid("multiple fillet radius sets are not supported yet")) };
+                    if set.tangent_chain {
+                        return Err(invalid("fillet tangent-chain reconstruction is not supported yet"));
+                    }
+                    let radius = length_parameter(&bindings, set.radius)?;
+                    let weight = bindings.get(&set.weight).ok_or_else(|| invalid("missing fillet tangency weight"))?;
+                    if radius.owner != Some(f.id)
+                        || radius.label != "Radius"
+                        || weight.owner != Some(f.id)
+                        || weight.label != "TangencyWeight"
+                        || weight.value != 1.
+                    {
+                        return Err(invalid("unsupported fillet parameter ownership or tangency"));
+                    }
+                    if operation_owners.is_none() {
+                        operation_owners = Some(self.operation_owners()?);
+                    }
+                    let owners = operation_owners.as_ref().ok_or_else(|| invalid("missing fillet operations"))?;
+                    projection_model.evaluate(&doc);
+                    if projection_model.results.iter().any(|r| r.error.is_some()) {
+                        return Err(invalid("cannot regenerate fillet dependencies"));
+                    }
+                    let state = projection_model.state();
+                    let objects = super::loft_faces::objects(&records, &classes, set.container, f.id)?;
+                    if !(1..=64).contains(&objects.len()) {
+                        return Err(invalid("invalid fillet edge count"));
+                    }
+                    let mut body = None;
+                    let mut edges = Vec::new();
+                    for object in objects {
+                        let edge = super::fillets::edge(&records, &classes, object, f.id)?;
+                        if owners.get(&edge.operation) != Some(&edge.feature) {
+                            return Err(invalid("fillet edge operation belongs to another producer"));
+                        }
+                        let source_id = *feature_ids.get(&edge.feature).ok_or_else(|| invalid("fillet precedes its source"))?;
+                        let source = doc.feature(source_id).filter(|f| !f.suppressed).ok_or_else(|| invalid("fillet source is suppressed"))?;
+                        let FeatureKind::Extrude { extent, .. } = &source.kind else { return Err(invalid("unsupported fillet source feature")) };
+                        if extent.direction != solvecraft_doc::Direction::Positive
+                            || extent.start_offset.is_some()
+                            || extent.taper.as_ref().map(|e| doc.eval(e, Kind::Angle)).transpose()?.is_some_and(|a| a.abs() > 1e-12)
+                            || doc.eval(&extent.distance, Kind::Length)? <= 0.
+                        {
+                            return Err(invalid("unsupported fillet source extent"));
+                        }
+                        let [name] = source.body_names.as_slice() else { return Err(invalid("fillet requires one source body")) };
+                        if !active_bodies.contains(name) || body.as_ref().is_some_and(|body| body != name) {
+                            return Err(invalid("fillet edges belong to different or unavailable bodies"));
+                        }
+                        body = Some(name.clone());
+                        let target =
+                            state.body(name).filter(|b| b.feature == source_id).ok_or_else(|| invalid("fillet source body is unavailable"))?;
+                        let profile = *source_profiles.get(&edge.feature).ok_or_else(|| invalid("missing fillet source profile"))?;
+                        let mut face_names = BTreeMap::new();
+                        for label in &edge.labels {
+                            let name = match label {
+                                1 => format!("F{source_id}:start"),
+                                2 => format!("F{source_id}:top"),
+                                _ => {
+                                    let curve = super::side_roles::curve(&records, &classes, edge.feature, u64::from(*label), profile, &lines)?;
+                                    format!("F{source_id}:side:c{curve}")
+                                }
+                            };
+                            face_names.insert(*label, name);
+                        }
+                        let adjacent = edge
+                            .faces
+                            .iter()
+                            .map(|label| face_names.get(label).map(String::as_str).ok_or_else(|| invalid("missing fillet side")))
+                            .collect::<Result<BTreeSet<_>>>()?;
+                        let selected: Vec<_> = solvecraft_doc::naming::edge_names(target)
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(_, name)| name.split('|').map(solvecraft_doc::naming::strip_piece).collect::<BTreeSet<_>>() == adjacent)
+                            .collect();
+                        let [(index, selected)] = selected.as_slice() else { return Err(invalid("fillet edge incidence is missing or ambiguous")) };
+                        if new_edge_names.contains(selected) {
+                            return Err(invalid("duplicate fillet edge selection"));
+                        }
+                        // The current supported profile-line extrusion edges are
+                        // straight. Pick their interior: a shared vertex is also
+                        // on neighboring edges and is ambiguous to the kernel.
+                        let mesh = target.mesh();
+                        let edge = mesh.edges.get(*index).ok_or_else(|| invalid("missing regenerated fillet edge"))?;
+                        let start = edge.first().ok_or_else(|| invalid("empty regenerated fillet edge"))?;
+                        let end = edge.last().ok_or_else(|| invalid("empty regenerated fillet edge"))?;
+                        if start.dist(*end) < 1e-8 {
+                            return Err(invalid("degenerate regenerated fillet edge"));
+                        }
+                        edges.push((*start + *end) * 0.5);
+                        new_edge_names.push(selected.clone());
+                    }
+                    FeatureKind::Fillet { edges, radius: radius.name.clone(), body, style: solvecraft_doc::FilletStyle::Constant }
+                }
                 HistoryKind::Combine { operation, keep_tools, operation_tag, tool_containers, target_container, consumed_handles } => {
                     if operation_owners.is_none() {
                         operation_owners = Some(self.operation_owners()?);
@@ -854,6 +950,7 @@ impl Design {
             feature_ids.insert(f.id, id);
             let feature = doc.features.iter_mut().find(|f| f.id == id).ok_or_else(|| invalid("missing imported feature"))?;
             feature.suppressed = f.suppressed;
+            feature.edge_names = new_edge_names;
             if let Some((geometry, plane)) = new_plane
                 && planes.insert(geometry, (feature.name.clone(), plane)).is_some()
             {

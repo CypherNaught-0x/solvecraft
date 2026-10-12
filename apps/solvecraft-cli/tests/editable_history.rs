@@ -8,7 +8,7 @@ fn recipes() -> Vec<PathBuf> {
     let mut paths: Vec<_> =
         std::fs::read_dir(dir).unwrap().map(|p| p.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
     paths.sort();
-    assert_eq!(paths.len(), 104);
+    assert_eq!(paths.len(), 108);
     paths
 }
 
@@ -41,6 +41,10 @@ fn volume(s: &mut Session, want: f64, label: &str) -> Value {
 }
 
 fn bounds(measure: &Value, expected: &Value, label: &str) {
+    if let Some(tolerance) = expected["volume_tolerance_mm3"].as_f64() {
+        let actual = measure["total"]["volume_mm3"].as_f64().unwrap();
+        assert!((actual - expected_volume(expected)).abs() < tolerance, "{label}: precise removal volume");
+    }
     if let Some(count) = expected.get("body_count") {
         assert_eq!(&measure["body_count"], count, "{label}: body count");
     }

@@ -3,6 +3,29 @@ use solvecraft_engine::Session;
 
 #[test]
 #[ignore = "requires original Gridfinity archive and unchanged modern resave"]
+fn legacy_fillet_sets_match_the_unchanged_modern_resave() {
+    use solvecraft_engine::io::f3d::{HistoryKind, read_f3d};
+    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let file = "Gridfinity Storage Box Shelves (Parametric) V1.0.f3d";
+    let mut decoded = Vec::new();
+    for path in [corpus.join(file), probes.join(format!("corpus-{file}"))] {
+        let designs = read_f3d(&std::fs::read(path).unwrap()).unwrap();
+        let features: Vec<_> =
+            designs[0].timeline().unwrap().into_iter().filter(|f| [46870, 47024, 52135].contains(&f.id)).map(|f| f.feature.unwrap()).collect();
+        assert_eq!(features.len(), 3);
+        for feature in &features {
+            let HistoryKind::Fillet { sets } = &feature.kind else { panic!("fillet feature") };
+            assert_eq!(sets.len(), 1);
+            assert!(sets[0].tangent_chain);
+        }
+        decoded.push(features);
+    }
+    assert_eq!(decoded[0], decoded[1]);
+}
+
+#[test]
+#[ignore = "requires original Gridfinity archive and unchanged modern resave"]
 fn legacy_combine_inputs_match_the_unchanged_modern_resave() {
     use solvecraft_engine::{
         doc::Operation,
@@ -319,7 +342,7 @@ fn legacy_timeline_preserves_every_entry_and_decodes_versioned_sketches() {
     let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
     let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-corpus-measurements.json")).unwrap()).unwrap();
     for (name, count, decoded, sketch_count) in
-        [("adapter-x20-makita.f3d", 49, 40, 12), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 35, 19, 3), ("R36S Grip.f3d", 53, 8, 2)]
+        [("adapter-x20-makita.f3d", 49, 43, 12), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 35, 22, 3), ("R36S Grip.f3d", 53, 25, 2)]
     {
         let mut s = Session::default();
         let before = s.doc.clone();

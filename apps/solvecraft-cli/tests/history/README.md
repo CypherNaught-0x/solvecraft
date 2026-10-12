@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These 104 designs and their JSON command recipes are original SolveCraft test
+These 108 designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -246,3 +246,11 @@ mirrored sources. Keeping the tool adds 8000 mm³. Swapping the mirror into
 the target role moves the Cut result to X = 20..30 mm. Source-height edits,
 mirror-plane moves to X = 17 mm, and suppression are checked analytically,
 including exact bounds, reopening and undo. There are 104 saved designs.
+
+Four `fillet-*` examples round a vertical edge, the opposite vertical pair, or
+one top/bottom edge of a 20 × 30 × 40 mm extrusion. Their volume is
+`width × depth × height − (1 − π/4) × radius² × selected_edge_length`.
+Radius, source height, width and suppression edits check volume and bounds
+through reopening and undo. The extra volume tolerance scales with removed
+material, so a wrong edge cannot hide within the much larger block volume.
+There are 108 original saved designs.

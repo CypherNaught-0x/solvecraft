@@ -302,6 +302,11 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   Version-3 Combine helpers and empty optional metadata now match an unchanged
   modern resave, bringing the Gridfinity timeline to 19 of 35 decoded entries;
   complete reconstruction still requires its remaining feature schemas.
+  Constant-radius fillet records now decode across legacy/current layouts, with
+  editable single-radius extrusion-edge reconstruction. Four analytic fillet
+  models bring the suite to 108; timeline coverage is 43/49 adapter, 22/35
+  Gridfinity and 25/53 R36S. Multiple radius sets, tangent chains and other blend
+  modes remain outstanding, as do the other undecoded feature families.
 - Persistent naming follows the kernel's exact face history (docs/book/src/dev/naming.md):
   references resolve by name first, follow splits and merges, and warn when the entity split,
   merged or vanished, or was found by geometry only (operations that report no history yet).

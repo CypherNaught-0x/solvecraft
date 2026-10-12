@@ -1875,3 +1875,42 @@ opening guard passed in 0.98 seconds. The mirrored-target Cut was rendered and
 visually checked. A final upstream check found `57e6396` (three newer geometry
 commits), fetched for the next integration pass rather than included in these
 validation results.
+
+### Constant-radius fillet inputs and reconstruction
+
+Legacy/current fillet feature versions 2/3 and edge-set versions 9/10 retain
+ordered radius and tangency-weight bindings, tangent-chain flags, selection
+containers, names and suppression. Gridfinity's three original fillet records
+match its unchanged modern resave. Timeline decoding now covers 43/49 adapter,
+22/35 Gridfinity and 25/53 R36S entries; those counts do not mean full import.
+
+Single-radius edge sets on independent, positive, untapered line-profile
+extrusions reconstruct as editable fillets. Explicit operation ownership, side
+labels, and both endpoint-incidence branches identify each selected edge.
+The importer resolves its exact face names and uses an interior midpoint when
+calling the kernel: a shared vertex would also lie on neighboring edges.
+Radius and source-height edits retain those names through saving/reopening.
+
+Four original models use analytic quarter-circle removal volumes and exact
+bounds, with radius, width, height, suppression, reopen and undo checks. They
+bring the saved suite to 108 models. Local controls also vary top/bottom/vertical
+selection, paired edges, radius, height and suppression. Multiple radius sets,
+tangent chains, face/variable/chord fillets and other source topologies still
+require reconstruction; they fail atomically rather than dropping their inputs.
+
+The [documented constant-radius edge-set API](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/fusion_FilletEdgeSetInputs_addConstantRadiusEdgeSet.htm)
+provides the independent radius and tangent-chain controls used in the local
+investigation. No exported native files or measurements are committed.
+
+Validation against upstream `57e6396` passed 143 I/O tests, 667 engine tests,
+300 kernel tests, all 108 editable models, WASM, all 41 local native-import
+groups and 18 inspection tests. The full gate identified an outdated opening
+expectation: upstream now successfully evaluates floor fillets 102/103. The
+updated regression test pins the six remaining nonplanar-end errors and passed
+in 0.99 seconds, with 14 bodies and 11220 display triangles. The other gate
+failure was the sandbox's socket restriction; that test passed separately with
+local socket permission. Formatting and all remaining gate checks passed. The
+paired-edge SolidCraft fixture was rendered and visually checked.
+
+A final remote check found newer upstream `f538eeb5`. It is not included in
+these validation results and remains for the next integration pass.

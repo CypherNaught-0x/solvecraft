@@ -196,6 +196,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
             let history = match d.history() {
                 Ok(features) => json!({"records":features.iter().map(|f| {
                     let kind = match &f.kind {
+                        solvecraft_io::f3d::HistoryKind::Fillet { sets } => json!({"type":"fillet","sets":sets.iter().map(|s| json!({"container":s.container,"radius_binding":s.radius,"weight_binding":s.weight,"tangent_chain":s.tangent_chain})).collect::<Vec<_>>()}),
                         solvecraft_io::f3d::HistoryKind::Sketch { geometry, placement } => json!({"type":"sketch","geometry":geometry,"transform":placement.matrix,"transform_length_unit":"cm","placement_owner":placement.owner,"entities":placement.entities}),
                         solvecraft_io::f3d::HistoryKind::Extrude { operation, profile_containers } => json!({"type":"extrude","operation":operation,"profile_containers":profile_containers}),
                         solvecraft_io::f3d::HistoryKind::Loft { operation, section_containers, target_containers } => json!({"type":"loft","operation":operation,"section_containers":section_containers,"target_containers":target_containers}),

@@ -18,6 +18,7 @@ mod circles;
 mod combines;
 mod constraints;
 mod entity;
+mod fillets;
 #[cfg(test)]
 mod geometric_tests;
 mod history;
@@ -51,6 +52,7 @@ mod side_roles;
 pub use circles::{SketchArc, SketchCircle};
 pub use constraints::{CurveRelation, LinearOrientation, SketchConstraint, SketchConstraintGraph, SketchConstraints};
 pub use entity::EntityMetadata;
+pub use fillets::FilletSet;
 pub use history::{HistoryFeature, HistoryKind, SketchPlacement, TimelineEntry};
 pub use import::import_f3d;
 pub use lines::SketchLine;
