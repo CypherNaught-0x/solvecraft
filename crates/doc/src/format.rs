@@ -49,13 +49,15 @@
 //!   Absent seams retain the positive-X frame used by format 16.
 //! - 18: loft sections may retain certified planar face anchors.
 //!   Existing sketch sections retain their original references.
+//! - 19: circular chord-length loft interpolation is explicit. Absent markers
+//!   preserve the uniform interpolation of existing designs.
 
 use serde_json::Value;
 
 use crate::{DocError, Document, Result};
 
 /// The format this build writes.
-pub const FORMAT: u32 = 18;
+pub const FORMAT: u32 = 19;
 
 pub fn format_string(n: u32) -> String {
     format!("solvecraft/{n}")
@@ -68,12 +70,13 @@ pub fn version_of(s: &str) -> Option<u32> {
 
 /// JSON-level upgrades: entry `i` turns format `i + 1` into `i + 2`.
 type JsonStep = fn(&mut Value) -> Result<()>;
-const JSON_STEPS: [JsonStep; 17] = [
+const JSON_STEPS: [JsonStep; 18] = [
     |_| Ok(()),
     v2_to_v3,
     v3_to_v4,
     v4_to_v5,
     v5_to_v6,
+    |_| Ok(()),
     |_| Ok(()),
     |_| Ok(()),
     |_| Ok(()),

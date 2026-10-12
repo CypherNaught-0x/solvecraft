@@ -458,6 +458,8 @@ pub enum FeatureKind {
     /// Ruled loft through profiles of several sketches, in order.
     Loft {
         sections: Vec<LoftSection>,
+        #[serde(default, skip_serializing_if = "LoftInterpolation::is_uniform")]
+        interpolation: LoftInterpolation,
         #[serde(default)]
         operation: Operation,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -969,6 +971,22 @@ pub struct Component {
     /// Parent component (0 = the root).
     #[serde(default)]
     pub parent: u64,
+}
+
+/// Saved interpolation semantics; absent fields retain the original uniform loft.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoftInterpolation {
+    #[default]
+    Uniform,
+    /// Three coaxial circles, with a shared chord-length section parameter.
+    CircularChord,
+}
+
+impl LoftInterpolation {
+    pub fn is_uniform(&self) -> bool {
+        *self == Self::Uniform
+    }
 }
 
 /// One loft section: a sketch profile/point or an exact planar body face.

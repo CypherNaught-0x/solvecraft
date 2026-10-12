@@ -3446,8 +3446,9 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             }
             d
         }
-        FeatureKind::Loft { sections, operation, targets } => {
+        FeatureKind::Loft { sections, interpolation, operation, targets } => {
             let mut d = start("solid.loft")?;
+            d.extra.insert("interpolation".into(), json!(interpolation));
             d.kind = Kind::Loft { operation: op_index(operation) };
             if let Some(inp) = d.inputs.first_mut() {
                 inp.items = sections

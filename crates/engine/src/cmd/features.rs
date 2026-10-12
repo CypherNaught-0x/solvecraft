@@ -22,7 +22,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "CREATE")
         .icon("sweep")
         .params("sketch: profile sketch; profiles?; path_sketch: sketch; path: [curve ids in order]; operation?"),
-    CommandSpec::new("solid.loft", "Loft", loft).at("SOLID", "CREATE").icon("loft").params("sections: [{sketch, profiles?} | {sketch, point: id} (an apex) | {face: [x,y,z], body?, index?}] (2..50, in order); operation?, targets?"),
+    CommandSpec::new("solid.loft", "Loft", loft).at("SOLID", "CREATE").icon("loft").params("sections: [{sketch, profiles?} | {sketch, point: id} (an apex) | {face: [x,y,z], body?, index?}] (2..50, in order); interpolation?: uniform | circular_chord (three coaxial circles); operation?, targets?"),
     CommandSpec::new("solid.box", "Box", prim_box).at("SOLID", "CREATE").icon("box").params("length, width, height: expr; corner?: [x,y,z] | center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?"),
     CommandSpec::new("solid.cylinder", "Cylinder", prim_cylinder).at("SOLID", "CREATE").icon("cylinder").params("radius | diameter, height: expr; base?: [x,y,z] (centre of the bottom: numbers in mm or length expressions; default: the origin); axis?: X|Y|Z|[x,y,z] (default Z); operation?"),
     CommandSpec::new("solid.sphere", "Sphere", prim_sphere).at("SOLID", "CREATE").icon("sphere").params("radius | diameter: expr; center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?"),
@@ -1338,7 +1338,11 @@ fn loft(s: &mut Session, p: &Value) -> Result<Value> {
         }
         sections.push(solvecraft_doc::LoftSection { sketch, profiles: profiles(sec, cmd)?, point: None, face: None });
     }
-    add_feature(s, p, FeatureKind::Loft { sections, operation: operation(p, cmd)?, targets: string_list(p, "targets") })
+    let interpolation = match p.get("interpolation") {
+        None => solvecraft_doc::LoftInterpolation::Uniform,
+        Some(value) => serde_json::from_value(value.clone()).map_err(|_| bad(cmd, "interpolation must be uniform or circular_chord"))?,
+    };
+    add_feature(s, p, FeatureKind::Loft { sections, interpolation, operation: operation(p, cmd)?, targets: string_list(p, "targets") })
 }
 
 fn thread(s: &mut Session, p: &Value) -> Result<Value> {

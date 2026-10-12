@@ -95,15 +95,6 @@ fn loft_sections_follow_source_and_plane_edits() {
     };
     for (name, row) in api.as_object().unwrap() {
         let mut s = Session::default();
-        if name.starts_with("loft-3-") {
-            // Similar volume is insufficient: the current uniform interpolation
-            // differs from the independent control's outer surface and bounds.
-            let before = s.doc.clone();
-            let error = s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_err();
-            assert!(error.to_string().contains("multi-section loft interpolation"));
-            assert_eq!(s.doc, before);
-            continue;
-        }
         s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
         verify(&mut s, row, name);
         verify(&mut Session::new(solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap()), row, name);

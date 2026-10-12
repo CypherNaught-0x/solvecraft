@@ -31,6 +31,7 @@ mod helix;
 mod iges_in;
 mod iges_out;
 mod lip;
+mod loft_chord;
 mod loopblend;
 mod measure;
 mod meshbody;
@@ -59,7 +60,9 @@ pub use blend::{ChamferSide, chamfer, chamfer_sides, fillet};
 pub use blend_corner::fillet_radii;
 pub use blend_variable::{fillet_chord, fillet_variable, fillet_variable_points};
 pub use body::{Body, CapSignature, EdgeInfo, FaceInfo, FacePaint, FaceSource, Paint};
-pub use build::{PathSeg, box_solid, canonical_revolve_axis, cylinder, extrude, extrude_tapered, loft, revolve, sphere, sweep, torus};
+pub use build::{
+    PathSeg, box_solid, canonical_revolve_axis, cylinder, extrude, extrude_tapered, loft, loft_circular_chord, revolve, sphere, sweep, torus,
+};
 pub use delete_face::delete_faces;
 pub use emboss::{cylinder_emboss_anchor, emboss_cylinder, emboss_cylinder_at, has_cylinder_emboss_wall, infer_cylinder_emboss};
 pub use helix::{loft_to_point, sweep_helix, sweep_helix_mesh};

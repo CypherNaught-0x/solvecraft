@@ -488,12 +488,13 @@ impl Design {
                     FeatureKind::Sketch { plane: plane_ref, sketch }
                 }
                 HistoryKind::Loft { operation, section_containers, target_containers } => {
-                    if section_containers.len() != 2 {
+                    if !(2..=3).contains(&section_containers.len()) {
                         return Err(invalid("multi-section loft interpolation is not supported yet"));
                     }
                     if !matches!(operation, Operation::NewBody | Operation::Join) {
                         return Err(invalid("loft cut/intersect history is not supported yet"));
                     }
+                    let three_sections = section_containers.len() == 3;
                     let mut sections = Vec::new();
                     for container in section_containers {
                         let objects = super::loft_faces::objects(&records, &classes, container, f.id)?;
@@ -534,6 +535,15 @@ impl Design {
                         };
                         if loops.len() != 1 {
                             return Err(invalid("loft sections with holes are not supported yet"));
+                        }
+                        if three_sections {
+                            let [boundary] = loops.as_slice() else { return Err(invalid("missing circular loft boundary")) };
+                            let [circle] = boundary.curves.as_slice() else {
+                                return Err(invalid("three-section native loft requires complete circular sketch profiles"));
+                            };
+                            if !boundary.outer || boundary.pieces != [(1, 1)] || !circles.get(circle).is_some_and(|c| c.sketch == profile.geometry) {
+                                return Err(invalid("three-section native loft requires complete circular sketch profiles"));
+                            }
                         }
                         let (sketch, _) = sketches.get(&profile.geometry).ok_or_else(|| invalid("loft section must precede its feature"))?;
                         sections.push(solvecraft_doc::LoftSection {
@@ -578,7 +588,17 @@ impl Design {
                         }
                         vec![body.clone()]
                     };
-                    FeatureKind::Loft { sections, operation, targets }
+                    let interpolation = if sections.len() == 3 {
+                        if sections.iter().any(|s| s.face.is_some()) {
+                            return Err(invalid("three-section native loft requires circular sketch profiles"));
+                        }
+                        // The kernel validates coaxial complete circles on every
+                        // evaluation, including after parameter/plane edits.
+                        solvecraft_doc::LoftInterpolation::CircularChord
+                    } else {
+                        solvecraft_doc::LoftInterpolation::Uniform
+                    };
+                    FeatureKind::Loft { sections, interpolation, operation, targets }
                 }
                 HistoryKind::Extrude { operation, profile_containers } => {
                     let selected = selected(&records, &profiles, f.id, &profile_containers)?;

@@ -165,8 +165,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
 - Two-section native F3D lofts preserve ordered sketch profiles and certified
   circular/rectangular extrusion-cap sections, including explicit Join targets. Source
   dimensions, parent heights, plane dependencies and suppression remain editable.
-  Nine original loft recipes extend the editable-history suite to 52 files.
-  Multi-section interpolation, other native face recipes and the larger supplied
+  Three coaxial circular sections also retain editable chord-length interpolation.
+  Twelve original loft recipes extend the editable-history suite to 55 files.
+  General multi-section interpolation, other native face recipes and the larger supplied
   designs remain incomplete.
 - Native F3D investigation: bounded archive/index inspection via `file.inspect_f3d`
   validates four supplied local files without changing the current design. Layout 8

@@ -62,3 +62,35 @@ pub(crate) fn validate_sections_json(value: &serde_json::Value) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{FeatureKind, LoftInterpolation, Operation};
+
+    #[test]
+    fn older_lofts_keep_uniform_interpolation_and_new_modes_roundtrip() {
+        let mut doc = Document::new("Interpolation compatibility");
+        doc.add_feature(
+            FeatureKind::Loft {
+                sections: (1..=3).map(|sketch| LoftSection { sketch, profiles: ProfileSel::All, point: None, face: None }).collect(),
+                interpolation: LoftInterpolation::Uniform,
+                operation: Operation::NewBody,
+                targets: vec![],
+            },
+            None,
+        )
+        .unwrap();
+        let mut old: serde_json::Value = serde_json::from_str(&doc.to_json()).unwrap();
+        assert!(old["features"][0].get("interpolation").is_none());
+        old["format"] = serde_json::json!("solvecraft/18");
+        assert_eq!(Document::from_json(&old.to_string()).unwrap(), doc);
+        old["format"] = serde_json::json!("solvecraft/19");
+        old["features"][0]["interpolation"] = serde_json::json!("circular_chord");
+        let changed = Document::from_json(&old.to_string()).unwrap();
+        assert!(matches!(changed.features[0].kind, FeatureKind::Loft { interpolation: LoftInterpolation::CircularChord, .. }));
+        assert_eq!(Document::from_json(&changed.to_json()).unwrap(), changed);
+        old["features"][0]["interpolation"] = serde_json::json!("unknown");
+        assert!(Document::from_json(&old.to_string()).is_err());
+    }
+}

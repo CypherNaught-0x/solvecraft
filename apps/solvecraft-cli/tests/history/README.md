@@ -142,3 +142,12 @@ cases. A 10 × 20 × 10 mm pedestal contributes 2000 mm³; its loft to a 20 × 4
 section 30 mm away contributes 14000 mm³, using the rectangular transition
 formula above. Width, parent-height and plane-height edits check analytic volume
 and bounds independently, including the downward loft from the bottom face.
+
+
+Three `loft-three-circle-*` fixtures use radii 7, 16 and 11 mm on planes at
+0, 23 and 71 mm. Forward and reversed circular-chord lofts have the same volume;
+the legacy uniform fixture intentionally differs. Expected volumes are analytic
+integrals of `pi * r(u)^2 * z'(u)` for the quadratic interpolants, not values
+captured from either CAD application's tessellation. Each recipe checks diameter
+and middle-plane edits independently, then reopen and undo. These fixtures bring
+the suite to 55 original saved designs.

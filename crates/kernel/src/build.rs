@@ -794,6 +794,16 @@ fn resample(lp: &Loop2, n: usize, angles: &[f64]) -> Loop2 {
 /// Ruled loft through two or more planar sections (outer loops only). The sections and the
 /// same sections in reverse order give the same body.
 pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {
+    loft_impl(sections, false)
+}
+
+/// Smooth quadratic interpolation through three coaxial circular sections.
+/// All boundary control points share one geometric chord-length parameter.
+pub fn loft_circular_chord(sections: &[(Plane, Loop2)]) -> Result<Body> {
+    loft_impl(sections, true)
+}
+
+fn loft_impl(sections: &[(Plane, Loop2)], circular_chord: bool) -> Result<Body> {
     if sections.len() < 2 || sections.len() > 50 {
         return Err(KernelError::Invalid("a loft needs 2…50 sections".into()));
     }
@@ -811,6 +821,7 @@ pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {
     let step = centre(last) - centre(first);
     let big = [step.x, step.y, step.z].into_iter().max_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap_or(0.0);
     let ordered: Vec<&(Plane, Loop2)> = if big < 0.0 { sections.iter().rev().collect() } else { sections.iter().collect() };
+    let middle = if circular_chord { crate::loft_chord::middle_parameter(&ordered)? } else { 0.5 };
     // Orient every section counter-clockwise about the first section's normal (`Body::new`
     // turns the solid outward), then match segment counts and starting points to the section
     // with the most segments.
@@ -849,8 +860,12 @@ pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {
         wires.push(uniform_wire(p, &r)?);
     }
     // Three sections or more: one smooth surface through them all for each segment.
+    // An explicit interpolation mode must never silently become a ruled loft.
+    if circular_chord {
+        return guard("circular chord loft", || smooth_loft(&wires, middle));
+    }
     if wires.len() >= 3
-        && let Ok(b) = guard("loft", || smooth_loft(&wires))
+        && let Ok(b) = guard("loft", || smooth_loft(&wires, middle))
     {
         return Ok(b);
     }
@@ -867,10 +882,10 @@ pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {
 
 /// Points across the sections (one per section, in order) as a smooth B-spline: cubic through
 /// four or more, quadratic through three.
-fn across(pts: &[Vec3]) -> Option<mt::BSplineCurve<mt::Point3>> {
+fn across(pts: &[Vec3], t: f64) -> Option<mt::BSplineCurve<mt::Point3>> {
     match pts {
         [a, b, c] => {
-            let m = *b * 2.0 - (*a + *c) * 0.5;
+            let m = if t == 0.5 { *b * 2.0 - (*a + *c) * 0.5 } else { (*b - *a * (1.0 - t).powi(2) - *c * t.powi(2)) / (2.0 * t * (1.0 - t)) };
             mt::BSplineCurve::try_new(mt::KnotVec::bezier_knot(2), vec![p3(*a), p3(m), p3(*c)]).ok()
         }
         _ => interpolate_cubic(pts),
@@ -880,7 +895,7 @@ fn across(pts: &[Vec3]) -> Option<mt::BSplineCurve<mt::Point3>> {
 /// A loft whose side faces are B-spline surfaces through every section (smooth across the
 /// middle sections, which leave no edges). Every section wire comes from `uniform_wire`, so the
 /// k-th edges of all sections share one knot vector and their control points pair up.
-fn smooth_loft(wires: &[mt::Wire]) -> Result<Body> {
+fn smooth_loft(wires: &[mt::Wire], middle: f64) -> Result<Body> {
     let fail = |m: &str| KernelError::Failed(format!("smooth loft: {m}"));
     let edges: Vec<Vec<mt::Edge>> = wires.iter().map(|w| w.edge_iter().cloned().collect()).collect();
     let n = edges.first().map(Vec::len).ok_or_else(|| fail("no sections"))?;
@@ -898,7 +913,7 @@ fn smooth_loft(wires: &[mt::Wire]) -> Result<Body> {
     let mut seams: Vec<mt::Edge> = Vec::with_capacity(n);
     for k in 0..n {
         let pts: Vec<Vec3> = edges.iter().filter_map(|es| es.get(k).map(|e| from_p3(e.front().point()))).collect();
-        let c = across(&pts).ok_or_else(|| fail("seam"))?;
+        let c = across(&pts, middle).ok_or_else(|| fail("seam"))?;
         let (Some(a), Some(b)) = (first.get(k), last.get(k)) else { return Err(fail("seam")) };
         seams.push(mt::Edge::new(a.front(), b.front(), mt::Curve::BSplineCurve(c)));
     }
@@ -916,7 +931,7 @@ fn smooth_loft(wires: &[mt::Wire]) -> Result<Body> {
         let mut vk = None;
         for j in 0..m {
             let pts: Vec<Vec3> = curves.iter().filter_map(|c| c.control_points().get(j).map(|p| from_p3(*p))).collect();
-            let c = across(&pts).ok_or_else(|| fail("surface"))?;
+            let c = across(&pts, middle).ok_or_else(|| fail("surface"))?;
             vk = Some(c.knot_vec().clone());
             ctrl.push(c.control_points().clone());
         }

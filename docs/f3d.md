@@ -1232,7 +1232,7 @@ face/point, boolean, guided and other unverified modes fail explicitly. Compact
 identity plane transforms now decode alongside explicit 4×4 matrices; mixing an
 origin sketch with an offset-plane sketch exercises this representation.
 
-Three-section lofts remain rejected during reconstruction. The existing kernel's
+At this milestone, three-section lofts were rejected during reconstruction. The existing kernel's
 uniform interpolation gives approximately 59,057.5 mm³ for the baseline control,
 close to Fusion's measured 59,038.4 mm³, but its maximum radius differs by about
 0.044 mm. The volume tolerance alone would conceal that discrepancy. Body-face
@@ -1331,3 +1331,33 @@ Validation: full `cargo xtask ci` passed all 30 binaries, including 112 I/O test
 checking. All 34 local native-import regression groups passed separately. The
 rectangular bottom-face fixture was rendered and visually checked. Upstream
 `07e263d` remains integrated and unchanged.
+
+
+## Three circular sections with editable interpolation
+
+Native lofts with three complete coaxial circular sketch profiles now retain a
+`circular_chord` interpolation mode. For consecutive section radii and axial
+positions, the chord lengths are `hypot(delta_radius, delta_height)`; their ratio
+sets the common middle-section parameter. A quadratic Bezier surface passes
+through all three sections at that parameter. Every seam and surface control uses
+the same parameter, so an intermediate section remains planar.
+
+This mode recalculates from the evaluated profiles after dimension or plane edits.
+It validates complete circles, coaxial planes, finite coordinates, and positive
+radial controls and axial derivatives. Unsupported shapes or folded spans report
+an error; they never silently change to piecewise ruled surfaces. Native three-
+section face selectors, guides, and general noncircular interpolation remain
+unsupported. The adapter's modified side-face provenance is still outstanding.
+
+Format 19 records this choice explicitly. Existing files with no interpolation
+field retain the previous uniform mode. The `solid.loft` command accepts
+`interpolation: "circular_chord"`, and feature editing retains the saved choice.
+Three original recipes and saved `.solvecraft` files cover forward/reversed order
+and legacy uniform behavior, with analytic volumes, source-size/plane edits,
+reopen and undo. The suite now contains 55 editable-history files. No Fusion
+exports or measured assets are committed.
+
+The local native loft controls pass independent volume and 0.01 mm bounds checks,
+including the three-section baseline, source edit and plane edit. Kernel tests
+also distinguish both interpolation modes with an independent polynomial volume
+integral and reject degenerate, noncircular, offset and non-finite sections.

@@ -1911,7 +1911,10 @@ fn feature_tools_with_constructor(
             let m = crate::rigid(Vec3::ZERO, origin_w, axis_w, -start);
             Ok(bodies.iter().map(|b| kernel::transform_matrix(b, m)).collect::<std::result::Result<Vec<_>, _>>()?)
         }
-        FeatureKind::Loft { sections, .. } if sections.iter().any(|s| s.point.is_some()) => {
+        FeatureKind::Loft { sections, interpolation, .. } if sections.iter().any(|s| s.point.is_some()) => {
+            if !interpolation.is_uniform() {
+                return Err(DocError::Invalid("circular chord loft cannot contain point sections".into()));
+            }
             // A profile lofted to a sketch point (an apex).
             let [a, b] = &sections[..] else { return Err(DocError::Invalid("not supported yet: a point section in a loft of more than two".into())) };
             let (prof, pt) = if a.point.is_some() { (b, a) } else { (a, b) };
@@ -1963,13 +1966,16 @@ fn feature_tools_with_constructor(
             let pitch = if *clockwise { -p } else { p };
             Ok(vec![kernel::sweep_helix(&plane, &region, *base, axis, pitch, n)?])
         }
-        FeatureKind::Loft { sections, .. } => {
+        FeatureKind::Loft { sections, interpolation, .. } => {
             let mut secs = Vec::new();
             for sec in sections {
                 let (plane, region) = sec.region(doc, st, f.component)?;
                 secs.push((plane, region.outer));
             }
-            Ok(vec![kernel::loft(&secs)?])
+            Ok(vec![match interpolation {
+                crate::LoftInterpolation::Uniform => kernel::loft(&secs)?,
+                crate::LoftInterpolation::CircularChord => kernel::loft_circular_chord(&secs)?,
+            }])
         }
         FeatureKind::Sweep { sketch, profiles, path_sketch, path, .. } => {
             let ss = st.sketch(*sketch).ok_or_else(|| DocError::Unknown(format!("sketch {sketch} (it must come earlier in the timeline)")))?;
