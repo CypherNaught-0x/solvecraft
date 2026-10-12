@@ -316,7 +316,7 @@ pub(super) fn producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, h
     extrusion_producer(records, classes, handle, false)
 }
 
-fn extrusion_producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, handle: u64, allow_consumed: bool) -> Result<u64> {
+fn extrusion_producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, handle: u64, allow_mirror: bool) -> Result<u64> {
     require_class(classes, handle, HANDLE, 2)?;
     let mut r = payload(records.primary(handle)?, handle)?;
     zeros(&mut r, 6)?;
@@ -324,7 +324,9 @@ fn extrusion_producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, ha
         return Err(invalid("unsupported loft body identity"));
     }
     let flags = r.take(2)?;
-    if flags != [0, 1] && !(allow_consumed && flags == [1, 1]) {
+    // This final-state flag says a later feature consumed the body. Earlier
+    // selectors still need its producer; timeline suppression is checked separately.
+    if !matches!(flags, [0, 1] | [1, 1]) {
         return Err(invalid("unsupported loft body identity"));
     }
     let body = r.reference()?;
@@ -333,17 +335,27 @@ fn extrusion_producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, ha
     if !classes.get(&body).is_some_and(|c| c.id == "D3937028-C20C-4E65-B010-94AD418A5C20" && matches!(c.version, 18 | 19)) {
         return Err(invalid("unsupported loft source body class or version"));
     }
-    require_class(classes, feature, "DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8)?;
     let mut r = payload(records.secondary(handle)?, handle)?;
     empty(&mut r)?;
     require_class(classes, r.reference()?, "C3423E04-7E85-4B44-8E31-A5FA9C100052", 2)?;
     finish(&r)?;
     let mut r = payload(records.primary(feature)?, feature)?;
-    let input = super::history::extrude_inputs(&mut r, classes)?;
-    if input.operation != solvecraft_doc::Operation::NewBody || input.start_offset.is_some() {
-        return Err(invalid("loft face requires an independent profile-plane extrusion"));
+    if allow_mirror && classes.get(&feature).is_some_and(|c| c.id == super::mirrors::CLASS && c.version == 0) {
+        empty(&mut r)?;
+        zeros(&mut r, 1)?;
+        if !super::attributes::read(&mut r)?.is_empty() {
+            return Err(invalid("unsupported mirror source attributes"));
+        }
+        r.reference()?; // helper and source ownership are checked by mirrors::inputs
+        r.reference()?;
+    } else {
+        require_class(classes, feature, "DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8)?;
+        let input = super::history::extrude_inputs(&mut r, classes)?;
+        if input.operation != solvecraft_doc::Operation::NewBody || input.start_offset.is_some() {
+            return Err(invalid("loft face requires an independent profile-plane extrusion"));
+        }
+        references(&mut r)?;
     }
-    references(&mut r)?;
     let version = records
         .design
         .classes
@@ -463,7 +475,10 @@ fn selected_body(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64
     for i in 0..count {
         let operation = r.u64()?;
         let flags = r.u32()?;
-        if operation == 0 || !seen.insert(operation) || if i == 0 { !matches!(flags, 32 | 33) } else { !matches!(flags, 4 | 128 | 129) } {
+        if operation == 0
+            || !seen.insert(operation)
+            || if i == 0 { !(matches!(flags, 32 | 33) || (combine && flags == 3 && count == 1)) } else { !matches!(flags, 4 | 128 | 129) }
+        {
             return Err(invalid("unsupported or duplicate loft target operation"));
         }
         operations.push(TargetOperation { operation, label: 0, flags });
@@ -471,7 +486,13 @@ fn selected_body(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64
     let last_loft = operations.iter().rposition(|operation| matches!(operation.flags, 128 | 129));
     for (i, operation) in operations.iter().enumerate() {
         let expected = if i == 0 {
-            if last_loft.is_some() { 32 } else { 33 }
+            if combine && operation.flags == 3 {
+                3
+            } else if last_loft.is_some() {
+                32
+            } else {
+                33
+            }
         } else if matches!(operation.flags, 128 | 129) {
             if last_loft == Some(i) { 129 } else { 128 }
         } else {
@@ -496,7 +517,7 @@ fn selected_body(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64
         }
         // Resolved through the explicit producer label table during import.
         operation.label = identity.u32()?;
-        if operation.label < 3 {
+        if operation.label < if combine && operation.flags == 3 { 1 } else { 3 } {
             return Err(invalid("invalid loft target body label"));
         }
         zeros(&mut identity, 8)?;
@@ -523,7 +544,11 @@ fn selected_body(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64
         zeros(&mut r, 4)?;
     }
     let handle = selector_tail(&mut r, records, owner)?;
-    Ok((Target { feature: extrusion_producer(records, classes, handle, combine)?, operations }, handle))
+    let feature = extrusion_producer(records, classes, handle, combine)?;
+    if classes.get(&feature).is_some_and(|c| c.id == super::mirrors::CLASS) != operations.first().is_some_and(|op| op.flags == 3) {
+        return Err(invalid("body selector mode disagrees with its producer"));
+    }
+    Ok((Target { feature, operations }, handle))
 }
 
 #[cfg(test)]
@@ -646,6 +671,20 @@ mod tests {
         refs(b, &[80]);
         b.extend([0; 56]);
         reference(b, 19);
+    }
+
+    #[test]
+    fn historical_body_selectors_can_resolve_later_consumed_extrusions() {
+        let mut f = authored(true);
+        let bytes = &mut f.0.get_mut(&80).unwrap().2;
+        let at = bytes.len() - 24;
+        bytes[at] = 1;
+        let d = Fixture(f.0.clone()).design();
+        let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+        assert_eq!(producer(&Records::new(&d), &classes, 80).unwrap(), 9);
+        assert_eq!(target_object(&Records::new(&d), &classes, 190, 19).unwrap().feature, 9);
+        f.0.get_mut(&80).unwrap().2[at] = 2;
+        assert!(decode(f, true).is_err());
     }
 
     fn authored_rectangle(high: bool) -> Fixture {

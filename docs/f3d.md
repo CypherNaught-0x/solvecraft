@@ -1798,11 +1798,13 @@ suppression. The importer validates operation ownership, source body labels,
 container owners and the consumed-handle list. A consumed tool is available to
 its earlier history; its final cached state does not suppress its extrusion.
 
-The initial reconstruction accepts single-body, profile-plane extrusion
-producers. An earlier cut can retain that original body reference and remains
-part of the editable timeline. Additional tracked contributing operations,
-mirror-produced bodies, component transfers and other source schemas still fail
-atomically. Cached geometry never replaces an unsupported editable source.
+Reconstruction accepts single-body, profile-plane extrusion producers and
+single-output body mirrors. An earlier cut retains its original body reference;
+tracked Join contributions must belong to earlier, active extrusions targeting
+that exact body. Mirrored body labels must match the output identity and the
+three explicit operation owners: source, mirror and transformed instance.
+Component transfers, ambiguous multiple mirror outputs and other source schemas
+still fail atomically. Cached geometry never replaces an unsupported editable source.
 
 Six original `combine-*` fixtures use overlapping 20 mm blocks, with analytically
 derived Join/Cut/Intersect volumes of 12000/4000/4000 mm³. Keeping the tool adds
@@ -1842,11 +1844,34 @@ still prevent complete import.
 
 Six additional local controls verify that a source block with an earlier pocket
 retains its cut through Combine Join/Cut/Intersect, with or without keeping the
-tool. Analytic volume, body count and bounds pass. Joined and mirrored source
-controls are prepared for the next reconstruction extension; they still fail
-explicitly. All 76 public reference models pass after the upstream integration.
+tool. Analytic volume, body count and bounds pass. All 76 public reference models
+pass after the upstream integration.
 
 The legacy Combine update passed the full CI gate (33 binaries, including 136
 I/O tests and all 80 editable examples), all 17 local inspection tests and the
 native Combine reconstruction group. The inspection coverage expectation now
 includes the newly decoded Gridfinity entry. HardEdgeBasin opened in 0.86 seconds.
+
+### Combine inputs with preceding history
+
+Twenty-four original `combine-source-*` examples exercise prior joins, pockets,
+and mirrors, with all three Combine modes and both tool-retention choices.
+The mirror is tested as either target or tool; a reflected Cut target occupies
+the opposite side of the overlap. Analytic volume, exact bounds, source-height
+and mirror-plane edits, suppression, reopening and undo bring the saved suite
+to 104 examples. Local native controls exercise the corresponding import paths.
+
+A body consumed later in the timeline remains a valid source for earlier
+features. Its final handle state therefore does not suppress its producer.
+Suppression and availability are checked against the reconstructed timeline.
+Field-authored tests reject mismatched output handles, source owners, instance
+owners, body identities, duplicate label groups and truncated records.
+
+Validation against upstream `6efbd6f` passed all 104 saved models, 139 I/O tests,
+665 engine tests, 364 UI tests, WASM, all 40 local native-import groups and 17
+inspection tests. The full gate's localhost connection test required a separate
+run with socket permission; its other 32 binaries passed. HardEdgeBasin's
+opening guard passed in 0.98 seconds. The mirrored-target Cut was rendered and
+visually checked. A final upstream check found `57e6396` (three newer geometry
+commits), fetched for the next integration pass rather than included in these
+validation results.

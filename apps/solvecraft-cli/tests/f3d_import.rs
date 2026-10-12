@@ -44,13 +44,79 @@ fn combine_bodies_keep_editable_sources_operations_and_tool_retention() {
         assert_eq!(s.doc.features[4].suppressed, name.ends_with("suppressed"));
         volume(&mut s, expected, name);
     }
-    // A body produced by a mirror requires a different source schema. Refuse it
-    // atomically until that relationship is implemented, rather than dropping it.
+    // Combined mirrors use a different mode; unsupported history remains atomic.
     let mut s = Session::default();
     s.execute("solid.box", &json!({"length":10,"width":10,"height":10})).unwrap();
     let before = s.doc.to_json();
-    assert!(s.execute("doc.open", &json!({"path":dir.join("mirror-consumed-after.f3d")})).is_err());
+    assert!(s.execute("doc.open", &json!({"path":dir.join("mirror-mode-combine.f3d")})).is_err());
     assert_eq!(s.doc.to_json(), before);
+}
+
+#[test]
+#[ignore = "requires local Combine joined, cut, and mirrored source controls"]
+fn combine_modified_and_mirrored_sources_remain_editable() {
+    use solvecraft_engine::doc::{Document, FeatureKind};
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    for source in ["join", "cut", "mirror", "mirror-target"] {
+        for (mode, slot) in [("join", 0), ("cut", 1), ("intersect", 2)] {
+            for keep in [false, true] {
+                let name = format!("combine-source-{source}-{mode}-{}", if keep { "keep" } else { "consume" });
+                let mut s = Session::default();
+                s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+                let mirrored = source.starts_with("mirror");
+                let base = match source {
+                    "join" => [12., 4., 8.],
+                    "cut" => [11.5, 3.5, 3.5],
+                    _ => [12., 4., 4.],
+                }[slot];
+                let expected = base + if keep { 8. } else { 0. };
+                let measure = volume(&mut s, expected, &name);
+                assert_eq!(measure["body_count"], if keep { 2 } else { 1 });
+                assert_eq!(s.doc.features.len(), if mirrored { 5 } else { 7 });
+                let combined = s.doc.features.last().unwrap();
+                assert!(matches!(&combined.kind, FeatureKind::Combine { target, tools, .. }
+                    if target == if source == "mirror-target" { "Body2" } else { "Body1" }
+                    && tools == &[if source == "mirror-target" { "Body1" } else { "Body2" }]));
+                if source == "mirror-target" && mode == "cut" && !keep {
+                    assert_eq!(measure["bodies"][0]["bbox"]["min"], json!([20., 0., 0.]));
+                    assert_eq!(measure["bodies"][0]["bbox"]["max"], json!([30., 20., 20.]));
+                }
+                let feature = combined.name.clone();
+                let original = s.doc.to_json();
+                let distance = s.doc.features[1].param_names[0].clone();
+                s.execute("parameters.change", &json!({"name":distance,"expression":"30 mm"})).unwrap();
+                let changed = if mirrored {
+                    base * 1.5 + if keep { 12. } else { 0. }
+                } else {
+                    base + if slot != 2 { 4. } else { 0. } + if keep { 8. } else { 0. }
+                };
+                volume(&mut s, changed, &name);
+                volume(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), changed, &name);
+                s.execute("edit.undo", &json!({})).unwrap();
+                assert_eq!(s.doc.to_json(), original);
+                if mirrored {
+                    let plane = s.doc.features[2].param_names[0].clone();
+                    s.execute("parameters.change", &json!({"name":plane,"expression":"17 mm"})).unwrap();
+                    let changed = [13.6, 5.6, 2.4][slot] + if keep { 8. } else { 0. };
+                    volume(&mut s, changed, &name);
+                    volume(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), changed, &name);
+                    s.execute("edit.undo", &json!({})).unwrap();
+                }
+                s.execute("timeline.suppress", &json!({"feature":feature,"suppressed":true})).unwrap();
+                volume(
+                    &mut s,
+                    match source {
+                        "join" => 20.,
+                        "cut" => 15.,
+                        _ => 16.,
+                    },
+                    &name,
+                );
+                s.execute("edit.undo", &json!({})).unwrap();
+                volume(&mut s, expected, &name);
+            }
+        }
+    }
 }
 
 fn volume(s: &mut Session, want_cm3: f64, label: &str) -> Value {

@@ -5,25 +5,63 @@ use super::*;
 const BODY: &str = "ABA79BE7-D8D2-4C17-B59B-C2035E111F77";
 
 pub(super) fn validate(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, feature: u64, operation: u64, label: u64) -> Result<()> {
+    if operation == 0 {
+        return Err(invalid("empty whole-body operation"));
+    }
+    validate_groups(records, classes, feature, label, None, &BTreeSet::from([operation]))
+}
+
+pub(super) fn validate_mirror(
+    records: &Records<'_>,
+    classes: &BTreeMap<u64, &Class>,
+    feature: u64,
+    label: u64,
+    handle: u64,
+    operations: &BTreeSet<u64>,
+) -> Result<()> {
+    require_class(classes, feature, super::mirrors::CLASS, 0)?;
+    require_class(classes, handle, "D26351F0-5940-4D23-AA20-2C35475A6D9E", 2)?;
+    let mut r = payload(records.primary(handle)?, handle)?;
+    zeros(&mut r, 6)?;
+    let identity = r.wide_string()?;
+    if operations.len() != 3 || operations.contains(&0) {
+        return Err(invalid("unsupported mirror body operation groups"));
+    }
+    validate_groups(records, classes, feature, label, Some(&identity), operations)
+}
+
+fn validate_groups(
+    records: &Records<'_>,
+    classes: &BTreeMap<u64, &Class>,
+    feature: u64,
+    label: u64,
+    identity: Option<&str>,
+    operations: &BTreeSet<u64>,
+) -> Result<()> {
     let labels = super::side_roles::label_table(records, classes, feature)?;
     let id = *labels.get(&label).ok_or_else(|| invalid("missing whole-body feature label"))?;
     require_class(classes, id, BODY, 4)?;
     let mut r = payload(records.primary(id)?, id)?;
     zeros(&mut r, 7)?;
-    if r.wide_string()?.is_empty() {
-        return Err(invalid("empty whole-body identity"));
+    let actual = r.wide_string()?;
+    if actual.is_empty() || identity.is_some_and(|identity| identity != actual) {
+        return Err(invalid("empty or inconsistent whole-body identity"));
     }
     zeros(&mut r, 4)?;
-    if r.u32()? != 1 {
+    if r.u32()? as usize != operations.len() {
         return Err(invalid("unsupported whole-body label group"));
     }
-    names(&mut r, records.design.layout)?;
-    if r.u64()? != operation || operation == 0 {
-        return Err(invalid("whole-body label belongs to another operation"));
-    }
-    zeros(&mut r, 1)?;
-    if r.u32()? != 1 {
-        return Err(invalid("unsupported whole-body recipe count"));
+    let mut seen = BTreeSet::new();
+    for _ in operations {
+        names(&mut r, records.design.layout)?;
+        let operation = r.u64()?;
+        if !operations.contains(&operation) || !seen.insert(operation) {
+            return Err(invalid("whole-body label belongs to another operation"));
+        }
+        zeros(&mut r, 1)?;
+        if r.u32()? != 1 {
+            return Err(invalid("unsupported whole-body recipe count"));
+        }
     }
     match r.bytes.get(r.at) {
         Some(0) => {
@@ -188,6 +226,61 @@ mod tests {
             assert!(parse(text, &offsets).is_err(), "{text}/{offsets:?}");
         }
         assert!(parse("1", &vec![0; 1026]).is_err());
+    }
+
+    #[test]
+    fn mirror_label_groups_keep_exact_body_identity_and_operation_membership() {
+        let fixture = || {
+            let mut f = authored(false);
+            f.0.get_mut(&9).unwrap().0 = super::super::mirrors::CLASS.into();
+            f.0.get_mut(&9).unwrap().1 = 0;
+            f.0.get_mut(&901).unwrap().2[21..29].copy_from_slice(&1_u64.to_le_bytes());
+            let mut body = vec![0; 7];
+            wide(&mut body, "independent-mirrored-body");
+            u32(&mut body, 0);
+            u32(&mut body, 3);
+            for operation in [8001, 9001, 9002] {
+                string(&mut body, "193");
+                u32(&mut body, 3);
+                for end in [0, 2, 3] {
+                    u32(&mut body, end);
+                }
+                u64(&mut body, operation);
+                body.push(0);
+                u32(&mut body, 1);
+            }
+            body.extend([0; 2]);
+            f.0.get_mut(&902).unwrap().2 = body;
+            let mut handle = vec![0; 6];
+            wide(&mut handle, "independent-mirrored-body");
+            f.put(903, "D26351F0-5940-4D23-AA20-2C35475A6D9E", 2, handle, None);
+            f
+        };
+        let resolve = |f: Fixture, groups| {
+            let d = f.design();
+            let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+            validate_mirror(&Records::new(&d), &classes, 9, 1, 903, &groups)
+        };
+        let groups = BTreeSet::from([8001, 9001, 9002]);
+        resolve(fixture(), groups.clone()).unwrap();
+        for groups in [BTreeSet::from([8001]), BTreeSet::from([8001, 9001, 9003]), BTreeSet::from([0, 9001, 9002])] {
+            assert!(resolve(fixture(), groups).is_err());
+        }
+        for id in [902, 903] {
+            for keep in 0..fixture().0[&id].2.len() {
+                let mut f = fixture();
+                f.0.get_mut(&id).unwrap().2.truncate(keep);
+                assert!(resolve(f, groups.clone()).is_err(), "{id}/{keep}");
+            }
+        }
+        let mut wrong = fixture();
+        wrong.0.get_mut(&903).unwrap().2[10] = b'x';
+        assert!(resolve(wrong, groups.clone()).is_err());
+        let mut duplicate = fixture();
+        let bytes = &mut duplicate.0.get_mut(&902).unwrap().2;
+        let at = bytes.windows(8).position(|v| v == 9002_u64.to_le_bytes()).unwrap();
+        bytes[at..at + 8].copy_from_slice(&9001_u64.to_le_bytes());
+        assert!(resolve(duplicate, groups).is_err());
     }
 
     #[test]

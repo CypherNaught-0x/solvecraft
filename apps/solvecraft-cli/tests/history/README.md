@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These eighty designs and their JSON command recipes are original SolveCraft test
+These 104 designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -237,3 +237,12 @@ Join gives 12000 mm³, Cut and Intersect give 4000 mm³. Keeping the tool adds
 height edits recalculate the intersection as overlap-width × 20 × min(heights).
 Suppression restores both source bodies. Every case checks exact world bounds,
 body count, volume, reopening and undo. These bring the suite to 80 saved designs.
+
+Twenty-four `combine-source-*` designs extend the cube controls with a prior
+10 mm extension, a 10 × 10 × 10 mm pocket, or a reflection through X = 15 mm.
+Join/Cut/Intersect volumes are 12000/4000/8000 mm³ for the extended source,
+11500/3500/3500 mm³ for the pocketed source, and 12000/4000/4000 mm³ for
+mirrored sources. Keeping the tool adds 8000 mm³. Swapping the mirror into
+the target role moves the Cut result to X = 20..30 mm. Source-height edits,
+mirror-plane moves to X = 17 mm, and suppression are checked analytically,
+including exact bounds, reopening and undo. There are 104 saved designs.

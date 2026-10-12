@@ -156,13 +156,10 @@ impl Design {
                     let mut selected_handles = BTreeSet::new();
                     let mut body = |object| -> Result<(String, u64)> {
                         let (selected, handle) = super::loft_faces::combine_target(&records, &classes, object, f.id)?;
-                        let [operation] = selected.operations.as_slice() else {
-                            return Err(invalid("Combine sources modified after their extrusion are not supported yet"));
-                        };
+                        let operation = selected.operations.first().ok_or_else(|| invalid("missing Combine source operation"))?;
                         if owners.get(&operation.operation) != Some(&selected.feature) || !selected_handles.insert(handle) {
                             return Err(invalid("duplicate or inconsistent Combine source identity"));
                         }
-                        super::body_labels::validate(&records, &classes, selected.feature, operation.operation, u64::from(operation.label))?;
                         let source = feature_ids
                             .get(&selected.feature)
                             .and_then(|id| doc.feature(*id))
@@ -171,6 +168,27 @@ impl Design {
                         let [body] = source.body_names.as_slice() else { return Err(invalid("Combine source requires one produced body")) };
                         if !active_bodies.contains(body) {
                             return Err(invalid("Combine source is no longer available"));
+                        }
+                        for (i, operation) in selected.operations.iter().enumerate() {
+                            let native = *owners.get(&operation.operation).ok_or_else(|| invalid("missing Combine contributor owner"))?;
+                            let contributor = feature_ids
+                                .get(&native)
+                                .and_then(|id| doc.feature(*id))
+                                .filter(|f| !f.suppressed)
+                                .ok_or_else(|| invalid("Combine contributor follows its selector or is suppressed"))?;
+                            if i > 0
+                                && !(operation.flags == 4
+                                    && matches!(&contributor.kind,
+                                FeatureKind::Extrude { operation: Operation::Join, targets, .. } if targets.as_slice() == [body.clone()]))
+                            {
+                                return Err(invalid("Combine contributor belongs to another body or operation"));
+                            }
+                            if operation.flags == 3 {
+                                let groups = super::mirrors::output_operations(&records, &classes, owners, native, handle, operation.operation)?;
+                                super::body_labels::validate_mirror(&records, &classes, native, u64::from(operation.label), handle, &groups)?;
+                            } else {
+                                super::body_labels::validate(&records, &classes, native, operation.operation, u64::from(operation.label))?;
+                            }
                         }
                         Ok((body.clone(), handle))
                     };

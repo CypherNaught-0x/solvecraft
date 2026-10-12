@@ -294,7 +294,10 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   Native Combine Join/Cut/Intersect now preserve explicit target/tool identities,
   tool retention and suppression for independent extrusion bodies. Six new
   analytic block examples bring the editable-history suite to 80 designs.
-  Additional tracked contributors, mirror-produced Combine sources and component transfers remain
+  Joined extrusion contributors and single-output body mirrors now remain editable
+  as Combine inputs, including the mirrored target and later-consumed source case.
+  Twenty-four additional analytic source-history controls bring the fixture suite
+  to 104 designs. Component transfers and ambiguous multiple mirror outputs remain
   explicit unsupported cases.
   Version-3 Combine helpers and empty optional metadata now match an unchanged
   modern resave, bringing the Gridfinity timeline to 19 of 35 decoded entries;

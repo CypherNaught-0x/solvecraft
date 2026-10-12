@@ -8,10 +8,9 @@ const WRAPPER: &str = "335CC7BD-BBE5-40AA-9E8C-5EC99D427A3A";
 const CURVE: &str = "2DEE34BE-FA70-4D54-979C-164D86FDA786";
 
 pub(super) fn label_table(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, feature: u64) -> Result<BTreeMap<u64, u64>> {
-    if !classes
-        .get(&feature)
-        .is_some_and(|c| matches!((c.id.as_str(), c.version), ("DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8) | (super::lofts::CLASS, 9)))
-    {
+    if !classes.get(&feature).is_some_and(|c| {
+        matches!((c.id.as_str(), c.version), ("DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8) | (super::lofts::CLASS, 9) | (super::mirrors::CLASS, 0))
+    }) {
         return Err(invalid("unsupported feature label-table owner"));
     }
     // Abstract inherited classes have no object IDs; consult the class table,
@@ -44,7 +43,8 @@ pub(super) fn label_table(records: &Records<'_>, classes: &BTreeMap<u64, &Class>
     for _ in 0..count {
         let id = r.reference()?;
         let role = r.u64()?;
-        if role < 3 || !classes.contains_key(&id) || !ids.insert(id) || entries.insert(role, id).is_some() {
+        let minimum = if classes.get(&feature).is_some_and(|c| c.id == super::mirrors::CLASS) { 1 } else { 3 };
+        if role < minimum || !classes.contains_key(&id) || !ids.insert(id) || entries.insert(role, id).is_some() {
             return Err(invalid("invalid or duplicate extrusion label"));
         }
     }

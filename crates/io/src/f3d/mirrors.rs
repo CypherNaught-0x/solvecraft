@@ -181,6 +181,63 @@ pub(super) fn inputs(
     Ok(kind)
 }
 
+// A mirrored body's label groups name its original body, the mirror operation,
+// and the transformed instance. All three must belong to this exact mirror.
+pub(super) fn output_operations(
+    records: &Records<'_>,
+    classes: &BTreeMap<u64, &Class>,
+    owners: &BTreeMap<u64, u64>,
+    feature: u64,
+    handle: u64,
+    operation: u64,
+) -> Result<BTreeSet<u64>> {
+    require_class(classes, feature, CLASS, 0)?;
+    let version = records
+        .design
+        .classes
+        .iter()
+        .find(|c| c.id == "2EDC2536-D95B-4469-8ACA-DC07124D9C43")
+        .map(|c| c.version)
+        .unwrap_or(if records.design.layout == 8 { 2 } else { 0 });
+    let mut r = payload(records.primary(feature)?, feature)?;
+    let HistoryKind::Mirror { source_container, output_count: 1, .. } = inputs(&mut r, records, classes, feature, version)? else {
+        return Err(invalid("Combine requires an unambiguous single body-mirror output"));
+    };
+    let mut r = payload(records.primary(feature)?, feature)?;
+    empty(&mut r)?;
+    zeros(&mut r, 1)?;
+    super::attributes::read(&mut r)?;
+    let helper = r.reference()?;
+    r.reference()?;
+    let roles = super::history::body_roles(&mut r, classes, version)?;
+    if roles.get(1).is_none_or(|ids| ids.as_slice() != [handle]) || owners.get(&operation) != Some(&feature) {
+        return Err(invalid("mirror body label disagrees with output ownership"));
+    }
+    let source = super::loft_faces::target(records, classes, source_container, feature)?;
+    let [source_operation] = source.operations.as_slice() else { return Err(invalid("unsupported composite mirror source")) };
+    if owners.get(&source_operation.operation) != Some(&source.feature) {
+        return Err(invalid("mirror body source operation belongs to another feature"));
+    }
+    let mut groups = BTreeSet::from([source_operation.operation, operation]);
+    for (tag, owner) in owners {
+        if !classes.get(owner).is_some_and(|c| c.id == INSTANCE && c.version == 0) {
+            continue;
+        }
+        let mut r = payload(records.primary(*owner)?, *owner)?;
+        zeros(&mut r, 6)?;
+        let index = r.u32()?;
+        let parent = r.reference()?;
+        finish(&r)?;
+        if parent == helper && (index != 2 || !groups.insert(*tag)) {
+            return Err(invalid("unsupported mirror body instance operation"));
+        }
+    }
+    if groups.len() != 3 {
+        return Err(invalid("missing mirror body instance operation"));
+    }
+    Ok(groups)
+}
+
 fn feature_source(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<(u64, Vec<u64>)> {
     require_class(classes, id, "5A1BF548-241F-46FD-9FB5-E4B05126EB9D", 1)?;
     let mut r = payload(records.primary(id)?, id)?;
@@ -237,7 +294,7 @@ fn owner_tail(r: &mut Reader<'_>, owner: u64) -> Result<()> {
 mod tests {
     use super::*;
     use crate::f3d::import_tests::{Fixture, common, fixture};
-    use crate::f3d::relationship_tests::{reference, refs, u32, u64, wide};
+    use crate::f3d::relationship_tests::{reference, refs, string, u32, u64, wide};
 
     // Original, field-authored relationships with arbitrary IDs and identities.
     // Actual reconstruction is independently checked against local API controls.
@@ -403,6 +460,64 @@ mod tests {
             f.0.get_mut(&9).unwrap().2[9] = operation;
             assert!(f.design().history().is_err(), "operation {operation}");
         }
+    }
+
+    fn authored_output() -> Fixture {
+        let mut f = authored_feature(false);
+        f.0.get_mut(&910).unwrap().2[45] = 2; // body selection
+        let mut b = vec![0; 6];
+        for n in [1, 3, 1, 1] {
+            u32(&mut b, n);
+        }
+        string(&mut b, "8001");
+        u32(&mut b, 7);
+        b.extend([0; 12]);
+        string(&mut b, "body_recipe_data");
+        u32(&mut b, 0);
+        u32(&mut b, u32::MAX);
+        f.put(941, "7ACC2A03-0261-4879-A14A-A93D661A5BDC", 3, b, None);
+        let mut b = vec![0; 6];
+        u32(&mut b, 1);
+        u64(&mut b, 8001);
+        u32(&mut b, 33);
+        reference(&mut b, 941);
+        u32(&mut b, 1);
+        wide(&mut b, "original-selector");
+        wide(&mut b, "original-source-body");
+        u32(&mut b, 2);
+        b.extend([0; 8]);
+        refs(&mut b, &[80]);
+        b.extend([0; 56]);
+        reference(&mut b, 19);
+        f.put(920, "9716F783-676D-42E0-93F9-EBF273E7C035", 1, b, None);
+        f
+    }
+
+    #[test]
+    fn mirrored_body_groups_require_the_exact_source_output_and_instance() {
+        let resolve = |f: Fixture, owners: &BTreeMap<u64, u64>, handle| {
+            let d = f.design();
+            let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+            output_operations(&Records::new(&d), &classes, owners, 19, handle, 8007)
+        };
+        let owners = BTreeMap::from([(8001, 9), (8007, 19), (8008, 912)]);
+        assert_eq!(resolve(authored_output(), &owners, 950).unwrap(), BTreeSet::from([8001, 8007, 8008]));
+        assert!(resolve(authored_output(), &owners, 80).is_err());
+        for (tag, owner) in [(8001, 19), (8007, 9), (8008, 911), (8008, 900)] {
+            let mut wrong = owners.clone();
+            wrong.insert(tag, owner);
+            assert!(resolve(authored_output(), &wrong, 950).is_err(), "{tag}/{owner}");
+        }
+        for id in [950, 912, 920, 941] {
+            for keep in 0..authored_output().0[&id].2.len() {
+                let mut f = authored_output();
+                f.0.get_mut(&id).unwrap().2.truncate(keep);
+                assert!(resolve(f, &owners, 950).is_err(), "{id}/{keep}");
+            }
+        }
+        let mut wrong = authored_output();
+        wrong.0.get_mut(&912).unwrap().2[13..21].copy_from_slice(&999_u64.to_le_bytes());
+        assert!(resolve(wrong, &owners, 950).is_err());
     }
 
     #[test]
