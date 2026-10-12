@@ -52,15 +52,12 @@ fn check_basin() {
     assert!(session.model.param_errors.is_empty());
     assert_eq!(session.model.results.len(), 58);
     assert!(session.model.results.iter().all(|r| !r.skipped));
-    // Upstream does not yet support these endpoint fillets. Pin their identities
-    // and diagnostics, rather than mistaking fast failed evaluation for success.
+    // The left/right floor fillets (102/103) now succeed. Pin the six remaining
+    // nonplanar-end failures so fast failed evaluation cannot count as success.
     let errors: Vec<_> = session.model.results.iter().filter_map(|r| r.error.as_ref().map(|e| (r.id, e.as_str()))).collect();
-    assert_eq!(errors.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [102, 103, 104, 105, 106, 107, 108, 109]);
+    assert_eq!(errors.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [104, 105, 106, 107, 108, 109]);
     assert!(
-        errors.iter().all(|(_, e)| {
-            *e == "not supported yet: each end of the edge must touch exactly one more face"
-                || *e == "not supported yet: the faces at the edge ends must be planar"
-        }),
+        errors.iter().all(|(_, e)| *e == "not supported yet: the faces at the edge ends must be planar"),
         "unexpected feature failures: {errors:?}"
     );
     let world = session.world_state();
