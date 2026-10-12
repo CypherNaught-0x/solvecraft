@@ -173,6 +173,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   validate a closed four-edge incidence graph and resolve explicit sketch-curve
   labels on all four sides, separate-sketch joins and whole-line polygon profiles.
   Legacy operation maps and retired tags preserve live producer ownership.
+  Legacy loft selector prefixes, inherited tails and body-role positions now
+  retain the same four adapter face identities as an unchanged modern resave;
+  composite Join targets and the rest of that design remain incomplete.
   Rotated sketch bases retain live offset-plane dependencies.
   Other composite selector roles remain incomplete.
   General multi-section interpolation, other native face recipes and the larger supplied

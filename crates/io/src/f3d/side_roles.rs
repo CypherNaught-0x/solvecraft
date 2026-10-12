@@ -9,14 +9,23 @@ const CURVE: &str = "2DEE34BE-FA70-4D54-979C-164D86FDA786";
 
 fn curve_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, feature: u64, label: u64) -> Result<(u64, [u64; 2])> {
     require_class(classes, feature, "DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8)?;
-    // This slot is part of the version-2 inherited feature tail consumed by
-    // history::timeline. Older tails remain unsupported for side attachments.
-    if classes.values().any(|c| c.id == "A0A15D26-1F3B-4120-A3F1-9CDDA189AB74" && c.version != 2) {
-        return Err(invalid("unsupported side-role inherited feature version"));
-    }
+    // Abstract inherited classes have no object IDs; consult the class table,
+    // not the object-to-class index, when locating this explicit reference.
+    let version = records
+        .design
+        .classes
+        .iter()
+        .find(|c| c.id == "A0A15D26-1F3B-4120-A3F1-9CDDA189AB74")
+        .map(|c| c.version)
+        .unwrap_or(if records.design.layout == 8 { 2 } else { 0 });
+    let tail = match version {
+        1 => 58,
+        2 => 59,
+        _ => return Err(invalid("unsupported side-role inherited feature version")),
+    };
     let bytes = records.primary(feature)?;
     let mut r = payload(bytes, feature)?;
-    r.at = bytes.len().checked_sub(59).filter(|at| *at >= r.at).ok_or_else(|| invalid("truncated side-role feature tail"))?;
+    r.at = bytes.len().checked_sub(tail).filter(|at| *at >= r.at).ok_or_else(|| invalid("truncated side-role feature tail"))?;
     let labels = r.reference()?;
     require_class(classes, labels, LABELS, 2)?;
     let mut r = payload(records.primary(labels)?, labels)?;
@@ -211,6 +220,30 @@ mod tests {
         assert_eq!(resolve(authored(), 98, false).unwrap(), 31, "distinct point objects may represent the same incident endpoints");
         assert!(resolve(authored(), 99, false).is_err(), "referenced neighbors must actually meet the selected curve");
         assert!(resolve(authored(), 3, false).is_err(), "labels are not ordinal curve positions");
+    }
+
+    #[test]
+    fn legacy_tail_uses_abstract_class_version_for_explicit_label_reference() {
+        let mut f = authored();
+        let bytes = &mut f.0.get_mut(&9).unwrap().2;
+        bytes.remove(bytes.len() - 15);
+        let mut d = f.design();
+        d.classes.push(Class {
+            id: "A0A15D26-1F3B-4120-A3F1-9CDDA189AB74".into(),
+            parent: String::new(),
+            version: 1,
+            group: String::new(),
+            objects: Vec::new(),
+        });
+        let resolve = |d: &Design| {
+            let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+            curve_identity(&Records::new(d), &classes, 9, 23)
+        };
+        assert_eq!(resolve(&d).unwrap(), (19, [18, 20]));
+        for version in [0, 2, 3] {
+            d.classes.last_mut().unwrap().version = version;
+            assert!(resolve(&d).is_err(), "wrong inherited version {version}");
+        }
     }
 
     #[test]

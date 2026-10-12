@@ -302,7 +302,7 @@ pub(super) fn operation(value: u32) -> Result<Operation> {
     }
 }
 
-fn body_roles(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>, version: u32) -> Result<Vec<Vec<u64>>> {
+pub(super) fn body_roles(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>, version: u32) -> Result<Vec<Vec<u64>>> {
     let count = match version {
         1 => 3,
         2 => 4,
@@ -313,6 +313,11 @@ fn body_roles(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>, version: u32)
         let ids = references(r)?;
         validate_refs(classes, &ids)?;
         roles.push(ids);
+    }
+    // An unchanged legacy archive gains an empty leading role when saved with
+    // schema 2. Keep canonical output/target positions for both encodings.
+    if version == 1 {
+        roles.insert(0, Vec::new());
     }
     Ok(roles)
 }

@@ -71,7 +71,9 @@ pub(super) fn inputs(
         };
         match kind {
             2 => require_class(classes, *object, "4BD53E5A-0B3E-45E5-AE8B-02044306485A", 0)?,
-            3 => require_class(classes, *object, super::body_projections::SELECTOR, 3)?,
+            3 => {
+                super::loft_faces::selector_version(classes, *object)?;
+            }
             _ => return Err(invalid("loft point sections are not supported yet")),
         }
         finish(&s)?;

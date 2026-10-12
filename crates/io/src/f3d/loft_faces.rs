@@ -212,11 +212,12 @@ fn cap_recipe(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64) -
             }
             (role == 2, true, None, BTreeMap::new())
         } else {
-            if selected.values().any(|r| *r < 3)
-                || !roles.get(1).is_some_and(|term| term.values().all(|r| *r == 1))
-                || !roles.get(4).is_some_and(|term| term.values().all(|r| *r == 2))
-                || roles.iter().skip(2).take(2).flat_map(|term| term.values()).any(|r| *r < 3)
-            {
+            // A side on a joined extrusion can be bounded by the upper cap of
+            // an earlier producer and the upper cap of its own producer. Cap
+            // orientation and term order therefore do not identify the side.
+            let cap_terms = roles.iter().skip(1).filter(|term| term.values().all(|r| *r <= 2)).count();
+            let side_terms = roles.iter().skip(1).filter(|term| term.values().all(|r| *r >= 3)).count();
+            if selected.values().any(|r| *r < 3) || cap_terms != 2 || side_terms != 2 {
                 return Err(invalid("unsupported planar side incidence roles"));
             }
             (false, true, Some(role), selected.clone())
@@ -308,7 +309,9 @@ fn producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, handle: u64)
     let body = r.reference()?;
     let feature = r.reference()?;
     finish(&r)?;
-    require_class(classes, body, "D3937028-C20C-4E65-B010-94AD418A5C20", 19)?;
+    if !classes.get(&body).is_some_and(|c| c.id == "D3937028-C20C-4E65-B010-94AD418A5C20" && matches!(c.version, 18 | 19)) {
+        return Err(invalid("unsupported loft source body class or version"));
+    }
     require_class(classes, feature, "DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8)?;
     let mut r = payload(records.secondary(handle)?, handle)?;
     empty(&mut r)?;
@@ -320,18 +323,37 @@ fn producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, handle: u64)
         return Err(invalid("loft face requires an independent profile-plane extrusion"));
     }
     references(&mut r)?;
-    if !references(&mut r)?.is_empty() || references(&mut r)? != [handle] || !references(&mut r)?.is_empty() || !references(&mut r)?.is_empty() {
+    let version = records
+        .design
+        .classes
+        .iter()
+        .find(|c| c.id == "2EDC2536-D95B-4469-8ACA-DC07124D9C43")
+        .map(|c| c.version)
+        .unwrap_or(if records.design.layout == 8 { 2 } else { 0 });
+    let roles = super::history::body_roles(&mut r, classes, version)?;
+    if roles.get(1).is_none_or(|ids| ids.as_slice() != [handle]) || roles.iter().enumerate().any(|(i, ids)| i != 1 && !ids.is_empty()) {
         return Err(invalid("loft body handle disagrees with its producer"));
     }
     Ok(feature)
 }
 
-fn selector_tail(r: &mut Reader<'_>, owner: u64) -> Result<u64> {
+fn selector_tail(r: &mut Reader<'_>, records: &Records<'_>, owner: u64) -> Result<u64> {
     let handles = references(r)?;
     let [handle] = handles.as_slice() else {
         return Err(invalid("loft selector requires one body"));
     };
-    r.take(56)?; // inherited evaluation/cache state
+    let version = records
+        .design
+        .classes
+        .iter()
+        .find(|c| c.id == "A0A15D26-1F3B-4120-A3F1-9CDDA189AB74")
+        .map(|c| c.version)
+        .unwrap_or(if records.design.layout == 8 { 2 } else { 0 });
+    r.take(match version {
+        1 => 55,
+        2 => 56,
+        _ => return Err(invalid("unsupported loft selector inherited schema")),
+    })?; // inherited evaluation/cache state
     if r.reference()? != owner {
         return Err(invalid("loft selector belongs to another feature"));
     }
@@ -339,10 +361,18 @@ fn selector_tail(r: &mut Reader<'_>, owner: u64) -> Result<u64> {
     Ok(*handle)
 }
 
+pub(super) fn selector_version(classes: &BTreeMap<u64, &Class>, id: u64) -> Result<u32> {
+    classes
+        .get(&id)
+        .filter(|c| c.id == super::body_projections::SELECTOR && matches!(c.version, 2 | 3))
+        .map(|c| c.version)
+        .ok_or_else(|| invalid("unsupported loft selector class or version"))
+}
+
 pub(super) fn face(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<Face> {
-    require_class(classes, id, super::body_projections::SELECTOR, 3)?;
+    let version = selector_version(classes, id)?;
     let mut r = payload(records.primary(id)?, id)?;
-    zeros(&mut r, 8)?;
+    zeros(&mut r, if version == 2 { 7 } else { 8 })?;
     let recipe = cap_recipe(records, classes, r.reference()?)?;
     if r.u32()? != 1 {
         return Err(invalid("unsupported loft face source count"));
@@ -358,7 +388,7 @@ pub(super) fn face(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u
         return Err(invalid("loft face requires one cached identity"));
     };
     require_class(classes, *cached, "C46D3EEB-40E1-43FA-83DC-9CB204335417", 1)?;
-    let handle = selector_tail(&mut r, owner)?;
+    let handle = selector_tail(&mut r, records, owner)?;
     Ok(Face {
         feature: producer(records, classes, handle)?,
         high: recipe.high,
@@ -418,7 +448,7 @@ pub(super) fn target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, con
         return Err(invalid("unsupported loft target selection type"));
     }
     zeros(&mut r, 8)?;
-    let handle = selector_tail(&mut r, owner)?;
+    let handle = selector_tail(&mut r, records, owner)?;
     Ok((producer(records, classes, handle)?, operation, rectangular))
 }
 
@@ -635,6 +665,36 @@ mod tests {
     }
 
     #[test]
+    fn joined_side_can_have_caps_from_different_producers_with_the_same_orientation() {
+        let mut f = authored_joined_side();
+        let bytes = &mut f.0.get_mut(&181).unwrap().2;
+        let mut r = Reader { bytes, at: 18 };
+        let mut labels = Vec::new();
+        for term in 0..5 {
+            for _ in 0..r.u32().unwrap() {
+                assert_eq!(r.u32().unwrap(), 1);
+                if term == 1 {
+                    labels.push(r.at);
+                }
+                r.take(1).unwrap();
+                r.u32().unwrap();
+                assert_eq!(r.u32().unwrap(), 1);
+                r.u64().unwrap();
+            }
+        }
+        for at in &labels {
+            bytes[*at] = b'2';
+        }
+        let d = Fixture(f.0.clone()).design();
+        let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+        assert!(face(&Records::new(&d), &classes, 180, 19).is_ok());
+        for at in labels {
+            f.0.get_mut(&181).unwrap().2[at] = b'8';
+        }
+        assert!(decode(f, false).is_err(), "a third side neighbor cannot replace a cap boundary");
+    }
+
+    #[test]
     fn composite_side_recipe_rejects_ambiguous_roles_operations_and_incidence() {
         for keep in 0..authored_joined_side().0[&181].2.len() {
             let mut f = authored_joined_side();
@@ -700,8 +760,12 @@ mod tests {
 
     fn decode(f: Fixture, body: bool) -> Result<(u64, u64, bool)> {
         let d = f.design();
+        decode_design(&d, body)
+    }
+
+    fn decode_design(d: &Design, body: bool) -> Result<(u64, u64, bool)> {
         let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
-        let records = Records::new(&d);
+        let records = Records::new(d);
         if body {
             let (producer, operation, _) = target(&records, &classes, 192, 19)?;
             Ok((producer, operation, false))
@@ -717,6 +781,84 @@ mod tests {
             assert_eq!(decode(authored(high), false).unwrap(), (9, 8001, high));
             assert_eq!(decode(authored(high), true).unwrap(), (9, 8001, false));
         }
+    }
+
+    fn legacy(mut f: Fixture) -> Design {
+        f.0.get_mut(&180).unwrap().1 = 2;
+        f.0.get_mut(&180).unwrap().2.remove(0);
+        f.0.get_mut(&81).unwrap().1 = 18;
+        for id in [180, 190] {
+            let bytes = &mut f.0.get_mut(&id).unwrap().2;
+            bytes.remove(bytes.len() - 25);
+        }
+        let d = Fixture(f.0.clone()).design();
+        let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+        let mut r = Reader { bytes: &f.0[&9].2, at: 0 };
+        super::super::history::extrude_inputs(&mut r, &classes).unwrap();
+        references(&mut r).unwrap(); // profile; legacy omits the first body role
+        let at = r.at;
+        assert_eq!(r.u32().unwrap(), 0);
+        f.0.get_mut(&9).unwrap().2.drain(at..at + 4);
+        let mut d = f.design();
+        for id in ["A0A15D26-1F3B-4120-A3F1-9CDDA189AB74", "2EDC2536-D95B-4469-8ACA-DC07124D9C43"] {
+            d.classes.push(Class { id: id.into(), parent: String::new(), version: 1, group: String::new(), objects: Vec::new() });
+        }
+        d
+    }
+
+    #[test]
+    fn legacy_selector_and_inherited_roles_preserve_face_and_target_ownership() {
+        for high in [false, true] {
+            let d = legacy(authored(high));
+            assert_eq!(decode_design(&d, false).unwrap(), (9, 8001, high));
+            assert_eq!(decode_design(&d, true).unwrap(), (9, 8001, false));
+        }
+        for id in [super::super::body_projections::SELECTOR, "A0A15D26-1F3B-4120-A3F1-9CDDA189AB74", "2EDC2536-D95B-4469-8ACA-DC07124D9C43"] {
+            for version in [0, 4] {
+                let mut d = legacy(authored(true));
+                d.classes.iter_mut().find(|c| c.id == id).unwrap().version = version;
+                assert!(decode_design(&d, false).is_err(), "{id}/{version}");
+            }
+        }
+        // A newer header must not silently consume the legacy record's owner.
+        let mut d = legacy(authored(true));
+        d.classes.iter_mut().find(|c| c.id == "A0A15D26-1F3B-4120-A3F1-9CDDA189AB74").unwrap().version = 2;
+        assert!(decode_design(&d, false).is_err());
+        assert!(decode_design(&d, true).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires local original adapter and unchanged public API resave"]
+    fn original_adapter_loft_face_selectors_match_public_api_resave() {
+        let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
+        let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+        let mut results = Vec::new();
+        for path in [corpus.join("adapter-x20-makita.f3d"), probes.join("corpus-adapter-x20-makita.f3d")] {
+            let designs = read_f3d(&std::fs::read(&path).unwrap()).unwrap();
+            let d = &designs[0];
+            let records = Records::new(d);
+            let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+            let mut faces = Vec::new();
+            for entry in d.timeline().unwrap() {
+                if entry.class != super::super::lofts::CLASS {
+                    continue;
+                }
+                let feature = entry.feature.unwrap();
+                let HistoryKind::Loft { section_containers, .. } = feature.kind else { panic!("wrong loft kind") };
+                for container in section_containers {
+                    for object in objects(&records, &classes, container, feature.id).unwrap() {
+                        if selector_version(&classes, object).is_err() {
+                            continue;
+                        }
+                        let selected = face(&records, &classes, object, feature.id).unwrap_or_else(|e| panic!("{} / {object}: {e}", path.display()));
+                        faces.push((feature.id, selected.feature, selected.contributions, selected.all_operations, selected.side_roles));
+                    }
+                }
+            }
+            assert_eq!(faces.len(), 4);
+            results.push((faces, d.operation_owners().unwrap()));
+        }
+        assert_eq!(results[0], results[1]);
     }
 
     #[test]

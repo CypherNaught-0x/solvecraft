@@ -1485,3 +1485,35 @@ WASM, and the HardEdgeBasin opening regression (0.85 seconds for its test).
 All 35 local native-import groups also passed, including the 71 face-loft controls
 and deletion/suppression/recreation ownership checks. A rendered original stepped
 polygon fixture was visually inspected; probe files and images remain local.
+
+
+### Legacy loft selectors and inherited role positions
+
+The original adapter's four planar face selectors now decode with their original
+class version 2 as well as version 3 from an unchanged public-API resave. Version
+2 has seven prefix bytes; version 3 has eight. Inherited feature schema 1 has a
+55-byte selector evaluation tail and a side-label reference 58 bytes from the end
+of the feature; schema 2 uses 56 and 59 bytes. Abstract class versions come from
+the complete class table, since these classes have no object registrations.
+Body handles accept the observed body classes 18 and 19. Inherited body schema 1
+omits the leading role list added by schema 2; decoding normalizes that position
+before checking that a handle belongs to its producer.
+
+Joined side recipes may have two upper-cap boundaries from different producers:
+one from the earlier base and one from the added extrusion. Their two cap terms
+and two side terms are classified by explicit labels, while the bounded incidence
+graph continues to enforce a closed four-edge boundary. This does not remove the
+separate exact face-certificate check required during reconstruction.
+
+Original field-authored tests cover both schemas, wrong inherited versions,
+producer ownership, cap orientation and malformed side boundaries. A local test
+compares all four original adapter face identities and the live operation map
+with the unchanged Fusion resave. No native bytes are copied into the test suite.
+The adapter's composite Join target selectors, which carry several modifying
+operations, remain unsupported. Its other unsupported constraints, profiles and
+features still prevent full import; successful selector decoding is not a claim
+that the complete design regenerates.
+
+Validation: full CI passed all 30 binaries, including 122 IO tests, the 59 saved
+history fixtures and WASM. The HardEdgeBasin opening regression passed in 0.92
+seconds. The local original/resaved adapter selector comparison also passed.
