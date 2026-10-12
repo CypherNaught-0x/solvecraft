@@ -287,7 +287,7 @@ fn legacy_timeline_preserves_every_entry_and_decodes_versioned_sketches() {
     let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
     let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-corpus-measurements.json")).unwrap()).unwrap();
     for (name, count, decoded, sketch_count) in
-        [("adapter-x20-makita.f3d", 49, 25, 12), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 35, 15, 3), ("R36S Grip.f3d", 53, 8, 2)]
+        [("adapter-x20-makita.f3d", 49, 25, 12), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 35, 17, 3), ("R36S Grip.f3d", 53, 8, 2)]
     {
         let mut s = Session::default();
         let before = s.doc.clone();
@@ -532,4 +532,39 @@ fn analytic_legacy_profile_boundaries_match_resaved_records() {
         }
     }
     assert_eq!(successes, 16, "analytic legacy profile coverage changed");
+}
+
+#[test]
+#[ignore = "requires the local Gridfinity original/resave and public API plane measurements"]
+fn legacy_offset_planes_match_public_api_dependencies_and_placements() {
+    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-timeline-shapes.json")).unwrap()).unwrap();
+    let name = "Gridfinity Storage Box Shelves (Parametric) V1.0.f3d";
+    let mut original = None;
+    for path in [corpus.join(name), probes.join(format!("corpus-{name}"))] {
+        let designs = solvecraft_engine::io::f3d::read_f3d(&std::fs::read(&path).unwrap()).unwrap();
+        let d = &designs[0];
+        let planes = d.offset_planes().unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert_eq!(planes.len(), 2);
+        let parameters = d.parameters().unwrap();
+        for (plane, row) in planes.iter().zip(api[name].as_array().unwrap()) {
+            let parameter = parameters.iter().find(|p| p.binding == Some(plane.distance)).unwrap();
+            assert_eq!(parameter.name, row["offset"]["name"]);
+            assert_eq!(parameter.expression, row["offset"]["expression"]);
+            assert_eq!(parameter.owner, Some(plane.feature));
+            assert!((parameter.value - row["offset"]["value"].as_f64().unwrap()).abs() < 1e-9);
+            assert!(plane.extra.is_none());
+            for (got, key, scale) in [(plane.plane.origin, "origin", 10.), (plane.plane.normal(), "normal", 1.)] {
+                for (value, want) in [got.x, got.y, got.z].iter().zip(row["geometry"][key].as_array().unwrap()) {
+                    assert!((value - want.as_f64().unwrap() * scale).abs() < 1e-8);
+                }
+            }
+        }
+        if let Some(expected) = &original {
+            assert_eq!(&planes, expected);
+        } else {
+            original = Some(planes);
+        }
+    }
 }

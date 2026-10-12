@@ -1176,3 +1176,40 @@ and 12 inspection groups passed. The HardEdgeBasin guard passed; an isolated
 with the existing eight expected unsupported endpoint fillets. Upstream `07e263d`
 is integrated, with both branches' performance documentation retained. The edited
 rotated-arc fixture was rendered and visually checked.
+
+
+## Legacy offset planes
+
+Gridfinity's original version-2 construction-plane features and version-8
+plane definitions now decode alongside current version-4/15 records. Its public
+API identifies two ordinary offsets from XZ and YZ, driven by `d188` and `d94`.
+Original and resaved records retain identical feature/geometry/base identities,
+distance bindings and cached placements. The extra-offset slot is optional;
+absence remains absence rather than introducing an artificial driving parameter.
+
+Plane feature headers use the shared optional-attribute block. The observed
+version-8 definition has a shorter zero header and lacks the later method flag;
+all other reference, method, ownership and finite-placement checks remain active.
+`file.inspect_f3d` reports these offset dependencies even when another timeline
+feature prevents importing the whole design. This raises the decoded Gridfinity
+timeline from 15 to 17 of 35 entries; full Gridfinity import remains unfinished.
+
+Original field-authored old/current records check chained parent edits, reopening
+and every truncated feature/definition prefix. A new original YZ fixture checks
+positive-X extrusion bounds, offset edits and undo, bringing the editable-history
+suite to 43 files. No exported Fusion data is committed.
+
+The next loft investigation has six measured two/three-section controls. The
+adapter's four public-API lofts combine an existing body face with a sketch profile
+and use join operations. Three-section controls show Fusion's smooth interpolation;
+matching their history requires both source-face references and verified loft
+geometry, not simply a series of frustums. Loft import is not implemented yet.
+
+
+Validation: full `cargo xtask ci` passed 30 binaries, including 105 I/O,
+113 document, 565 engine, 204 kernel and 319 UI tests, all 43 history fixtures,
+and ten-crate WebAssembly checking. The HardEdgeBasin guard passed in 0.86 s.
+All 32 local native import groups and 13 inspection groups passed. Upstream
+`07e263d` remains integrated and current. Opening Gridfinity now gets past both
+plane entries and reports its next unsupported timeline class, FilletFeature
+at object 46870; this is not yet a full-document import.

@@ -21,7 +21,7 @@ pub struct HistoryFeature {
 #[derive(Debug, PartialEq)]
 pub enum HistoryKind {
     Sketch { geometry: u64, placement: SketchPlacement },
-    OffsetPlane { geometry: u64, definition: u64, extra_offset: u64 },
+    OffsetPlane { geometry: u64, definition: u64, extra_offset: Option<u64> },
     Extrude { operation: Operation, profile_containers: Vec<u64> },
 }
 
@@ -138,22 +138,38 @@ impl Design {
                             placement.projections = projections;
                             (HistoryKind::Sketch { geometry, placement }, name)
                         }
-                        ("D869265F-F339-4751-A066-91D30F81FF08", 4) => {
+                        ("D869265F-F339-4751-A066-91D30F81FF08", version @ (2 | 4)) => {
                             empty(&mut r)?;
-                            zeros(&mut r, 2)?;
-                            if r.take(5)? != [1, 0, 0, 0, 0] {
+                            zeros(&mut r, 1)?;
+                            if !super::attributes::read(&mut r)?.is_empty() {
+                                return Err(invalid("unsupported plane feature attributes"));
+                            }
+                            if r.u32()? != 1 {
                                 return Err(invalid("unsupported plane binding flags"));
                             }
-                            let extra_offset = r.reference()?;
-                            require_class(&classes, extra_offset, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
+                            if version >= 4 {
+                                zeros(&mut r, 1)?;
+                            }
+                            let extra_offset = match r.bytes.get(r.at) {
+                                Some(0) => {
+                                    r.take(1)?;
+                                    None
+                                }
+                                Some(1) => {
+                                    let binding = r.reference()?;
+                                    require_class(&classes, binding, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
+                                    Some(binding)
+                                }
+                                _ => return Err(invalid("unsupported plane extra offset")),
+                            };
                             if r.take(1)? != [1] {
                                 return Err(invalid("unsupported plane flags"));
                             }
                             let geometry = r.reference()?;
                             require_class(&classes, geometry, super::planes::GEOMETRY, 1)?;
                             let definition = r.reference()?;
-                            require_class(&classes, definition, super::planes::DEFINITION, 15)?;
-                            if r.take(1)? != [1] {
+                            require_class(&classes, definition, super::planes::DEFINITION, if version == 2 { 8 } else { 15 })?;
+                            if r.take(1)? != [u8::from(extra_offset.is_some())] {
                                 return Err(invalid("unsupported plane definition flags"));
                             }
                             (HistoryKind::OffsetPlane { geometry, definition, extra_offset }, String::new())

@@ -49,6 +49,7 @@ pub use history::{HistoryFeature, HistoryKind, SketchPlacement, TimelineEntry};
 pub use import::import_f3d;
 pub use lines::SketchLine;
 pub use parameters::Parameter;
+pub use planes::OffsetPlaneDefinition;
 pub use points::SketchPoint;
 pub use profiles::{CircleProfile, ProfileLoop, SketchProfile};
 

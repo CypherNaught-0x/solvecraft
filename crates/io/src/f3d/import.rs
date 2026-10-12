@@ -40,7 +40,7 @@ impl Design {
         let named_parameters: BTreeMap<_, _> = parameters.iter().map(|p| (p.name.as_str(), p)).collect();
         let mut internal_offsets = BTreeSet::new();
         for f in &history {
-            if let HistoryKind::OffsetPlane { extra_offset, .. } = &f.kind {
+            if let HistoryKind::OffsetPlane { extra_offset: Some(extra_offset), .. } = &f.kind {
                 let p = length_parameter(&bindings, *extra_offset)?;
                 let mut expression = p.expression.split_whitespace();
                 if p.owner != Some(f.id)
@@ -101,7 +101,7 @@ impl Design {
             let kind = match f.kind {
                 HistoryKind::OffsetPlane { geometry, definition, extra_offset } => {
                     let definition = super::planes::definition(&records, &classes, definition, f.id)?;
-                    if definition.extra != Some(extra_offset) {
+                    if definition.extra != extra_offset {
                         return Err(invalid("inconsistent internal plane offset binding"));
                     }
                     let p = length_parameter(&bindings, definition.distance.ok_or_else(|| invalid("missing plane distance"))?)?;

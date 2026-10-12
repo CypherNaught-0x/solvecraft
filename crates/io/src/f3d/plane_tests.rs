@@ -126,6 +126,63 @@ fn bounds(doc: &Document, z: f64) {
     assert!((sketch.plane.origin.z - z).abs() < 1e-9);
     volume(doc, std::f64::consts::PI * 30. * 30. * 17.);
 }
+
+fn absent_extra_offsets(legacy: bool) -> Fixture {
+    let mut f = planes_fixture();
+    for (owner, base, total, name) in [(2000, 1000, 2., "parent"), (2100, 2001, 3., "child")] {
+        f.0.remove(&(owner + 22));
+        f.0.remove(&(owner + 23));
+        definition(&mut f, owner + 10, owner, base, Some(owner + 21), None, total);
+        let mut b = vec![0; 4];
+        b.extend([0, 1]);
+        u32(&mut b, 0); // present but empty attributes
+        u32(&mut b, 1);
+        if !legacy {
+            b.push(0);
+        }
+        b.extend([0, 1]); // absent extra offset, geometry follows
+        reference(&mut b, owner + 1);
+        reference(&mut b, owner + 10);
+        b.push(0);
+        common(&mut b, name, false);
+        f.put(owner, "D869265F-F339-4751-A066-91D30F81FF08", if legacy { 2 } else { 4 }, b, None);
+    }
+    if legacy {
+        // A class has one version for every instance, including sketch supports.
+        for (guid, version, b, _) in f.0.values_mut() {
+            if guid == planes::DEFINITION {
+                *version = 8;
+                b.drain(26..41);
+                b.remove(203);
+            }
+        }
+    }
+    f
+}
+
+#[test]
+fn legacy_and_resaved_planes_without_extra_offsets_preserve_parent_edits() {
+    for legacy in [false, true] {
+        let d = absent_extra_offsets(legacy).design();
+        let planes = d.offset_planes().unwrap();
+        assert_eq!(planes.len(), 2);
+        assert!(planes.iter().all(|p| p.extra.is_none()));
+        assert_eq!(planes.iter().map(|p| (p.feature, p.base, p.distance)).collect::<Vec<_>>(), [(2000, 1000, 2021), (2100, 2001, 2121)]);
+        let mut doc = d.to_document("Original legacy offset planes").unwrap();
+        bounds(&doc, 30.);
+        doc.change_param("parent", "40 mm", None, None).unwrap();
+        bounds(&doc, 50.);
+        bounds(&crate::read_design(&crate::write_design(&doc)).unwrap(), 50.);
+        for id in [2000, 2010] {
+            for keep in 0..absent_extra_offsets(legacy).0[&id].2.len() {
+                let mut f = absent_extra_offsets(legacy);
+                f.0.get_mut(&id).unwrap().2.truncate(keep);
+                assert!(f.design().offset_planes().is_err(), "{legacy}/{id}/{keep}");
+            }
+        }
+    }
+}
+
 #[test]
 fn offset_plane_dependencies_follow_parent_edits_and_reopen() {
     let mut doc = planes_fixture().design().to_document("Offset planes").unwrap();

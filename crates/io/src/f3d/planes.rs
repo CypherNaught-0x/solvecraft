@@ -6,6 +6,49 @@ use solvecraft_geom::{Plane, Vec3};
 pub(super) const GEOMETRY: &str = "8D424E29-DE23-4B1F-A3AD-84C52A497D1A";
 pub(super) const DEFINITION: &str = "7B6C3C2D-4096-4E6D-B225-699E8C2D9355";
 
+#[derive(Debug, PartialEq)]
+pub struct OffsetPlaneDefinition {
+    pub feature: u64,
+    pub geometry: u64,
+    pub base: u64,
+    pub distance: u64,
+    pub extra: Option<u64>,
+    /// Cached placement in millimetres, checked separately against dependencies on import.
+    pub plane: Plane,
+}
+
+impl Design {
+    /// Inspect verified offset-plane dependencies even when unrelated timeline
+    /// features remain unsupported. Unknown plane methods still fail explicitly.
+    pub fn offset_planes(&self) -> Result<Vec<OffsetPlaneDefinition>> {
+        let records = Records::new(self);
+        let classes = self.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+        let mut out = Vec::new();
+        for entry in self.timeline()? {
+            if entry.class != "D869265F-F339-4751-A066-91D30F81FF08" {
+                continue;
+            }
+            let feature = entry.feature?;
+            let HistoryKind::OffsetPlane { geometry, definition: id, extra_offset } = feature.kind else {
+                return Err(invalid("unsupported plane history"));
+            };
+            let d = definition(&records, &classes, id, feature.id)?;
+            if d.extra != extra_offset {
+                return Err(invalid("inconsistent internal plane offset binding"));
+            }
+            out.push(OffsetPlaneDefinition {
+                feature: feature.id,
+                geometry,
+                base: d.base,
+                distance: d.distance.ok_or_else(|| invalid("missing plane distance"))?,
+                extra: d.extra,
+                plane: d.plane,
+            });
+        }
+        Ok(out)
+    }
+}
+
 pub(super) struct Definition {
     pub base: u64,
     pub distance: Option<u64>,
@@ -14,20 +57,31 @@ pub(super) struct Definition {
 }
 
 pub(super) fn definition(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<Definition> {
-    require_class(classes, id, DEFINITION, 15)?;
+    let version = classes
+        .get(&id)
+        .filter(|class| class.id == DEFINITION && matches!(class.version, 8 | 15))
+        .map(|class| class.version)
+        .ok_or_else(|| invalid("unsupported plane definition class"))?;
     let mut r = payload(records.primary(id)?, id)?;
     empty(&mut r)?;
-    zeros(&mut r, 36)?;
-    if r.take(2)? != [1, 0] {
-        return Err(invalid("unsupported plane definition header"));
-    }
-    let extra = match r.bytes.get(r.at) {
-        Some(0) => {
-            r.take(1)?;
-            None
+    let extra = if version == 8 {
+        // Original layout-5 offset planes have no extra-offset slot; the
+        // current public-API resave adds the version-15 header and null slot.
+        zeros(&mut r, 24)?;
+        None
+    } else {
+        zeros(&mut r, 36)?;
+        if r.take(2)? != [1, 0] {
+            return Err(invalid("unsupported plane definition header"));
         }
-        Some(1) => Some(r.reference()?),
-        _ => return Err(invalid("unsupported plane extra offset")),
+        match r.bytes.get(r.at) {
+            Some(0) => {
+                r.take(1)?;
+                None
+            }
+            Some(1) => Some(r.reference()?),
+            _ => return Err(invalid("unsupported plane extra offset")),
+        }
     };
     zeros(&mut r, 8)?;
     let mut matrix = [0.; 16];
@@ -39,7 +93,9 @@ pub(super) fn definition(records: &Records<'_>, classes: &BTreeMap<u64, &Class>,
     if r.u32()? != 2 {
         return Err(invalid("unsupported construction-plane method"));
     }
-    zeros(&mut r, 1)?;
+    if version >= 15 {
+        zeros(&mut r, 1)?;
+    }
     let distance = match references(&mut r)?.as_slice() {
         [] => None,
         [id] => Some(*id),

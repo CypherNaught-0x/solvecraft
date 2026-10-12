@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These forty-two designs and their JSON command recipes are original SolveCraft test
+These forty-three designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -12,6 +12,7 @@ recipe, independent expectations and optional edits.
 | negative-extrude | Signed height, downward bounds | 5040π |
 | placed-circle | Offset local center, explicit XZ placement | 324π |
 | plane-xy | Offset plane, parent edits and negative placement | 1500π |
+| plane-yz | YZ plane offset toward +X, parameter and feature edits | 1500π |
 | plane-xz | XZ plane offset toward +Y, parent edits | 1500π |
 | plane-chained | Two dependent planes, parameter and feature edits | 1500π |
 | suppressed-extrude | Suppression and unsuppression | 0 → 5040π |

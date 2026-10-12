@@ -223,8 +223,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   sixteen analytic legacy profile records match current resaves. Directed line/circle
   pieces preserve overlapping and divided regions through source edits; rotated
   circle seams now persist in the document, and partial arcs retain their source-start
-  numbering. Sixty controls cover rotated axes, exact seam cuts and four-way circle
-  splits through edits and reopening. Forty-two original
+  numbering. Legacy Gridfinity construction planes now retain offset bindings and
+  match their current resaves, including absent internal extra-offset slots. Sixty controls cover rotated axes, exact seam cuts and four-way circle
+  splits through edits and reopening. Forty-three original
   editable-history fixtures check analytic volumes and bounds.
   Signed extrusion start offsets preserve expressions
   and parameter bindings through edits, reopening and undo; zero-angle taper inputs
