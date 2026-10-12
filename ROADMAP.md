@@ -163,9 +163,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   and assembly components are flattened into bodies. Closed periodic faces (torus, B-spline
   bands) are split in two for meshing; measure() uses a finer tolerance for small radii.
 - Two-section native F3D lofts preserve ordered sketch profiles and certified
-  circular extrusion-cap sections, including explicit Join targets. Source
+  circular/rectangular extrusion-cap sections, including explicit Join targets. Source
   dimensions, parent heights, plane dependencies and suppression remain editable.
-  Six original loft recipes extend the editable-history suite to 49 files.
+  Nine original loft recipes extend the editable-history suite to 52 files.
   Multi-section interpolation, other native face recipes and the larger supplied
   designs remain incomplete.
 - Native F3D investigation: bounded archive/index inspection via `file.inspect_f3d`

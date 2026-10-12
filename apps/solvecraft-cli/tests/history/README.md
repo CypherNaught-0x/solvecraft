@@ -136,3 +136,9 @@ volume, 8000π mm³, with different body counts. Independent source diameter,
 parent height and section-plane edits check that the loft follows the original
 face after regeneration, saving and undo. The bottom-face control also guards
 against circular loft winding being lost between oppositely oriented planes.
+
+The three `loft-face-rectangle-*` fixtures add the corresponding rectangular
+cases. A 10 × 20 × 10 mm pedestal contributes 2000 mm³; its loft to a 20 × 40 mm
+section 30 mm away contributes 14000 mm³, using the rectangular transition
+formula above. Width, parent-height and plane-height edits check analytic volume
+and bounds independently, including the downward loft from the bottom face.

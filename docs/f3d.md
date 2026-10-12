@@ -1291,3 +1291,43 @@ tests, 205 enabled kernel tests, 49 original history fixtures and the ten-crate
 WebAssembly check. All 34 local native-import regression groups passed. The
 bottom-face fixture was rendered and checked visually. The HardEdgeBasin opening
 regression passed in the same gate; upstream `07e263d` remains integrated.
+
+## Rectangular face sections
+
+Rectangular top/bottom cap selectors now validate five explicit terms: the cap
+and four cyclic sides. Each boundary edge contains both face incidences and its
+two endpoint incidences; bottom caps traverse the boundary in reverse. The
+producer profile must contain exactly four whole, planar, connected orthogonal
+lines in the referenced sketch. Profile traversal order is not used as identity.
+This rejects nonrectangular or partial boundaries instead of inferring a shape
+from cached geometry.
+
+The Join body recipe has observed markers 4 for the supported circle and 7 for
+the supported rectangle. Both markers require the same producer/operation/body
+consistency checks and validation against the producer's actual profile. Other
+markers remain unsupported. These values are not treated as a general formula
+for arbitrary solids.
+
+Sixteen additional independent rectangle controls cover NewBody/Join, top/bottom,
+selection of the second overlapping extrusion, width edits, parent-height edits
+and plane-height edits. All 32 face-loft controls match independent volumes and
+per-body bounds through saving and undo. Original field-authored tests also
+exercise rectangle incidence, truncation, malformed target markers and invalid
+source profiles. Three original rectangular-face recipes bring the regular
+editable-history suite to 52 designs.
+
+The adapter's face references additionally combine topology labels from several
+preceding operations, including composite terms. A local joined-source control
+has been produced for that next investigation; accepting rectangular independent
+extrusion caps does not yet cover those modified-body faces.
+
+Public-API inspection confirms all four adapter loft sections are rectangular
+side faces of modified bodies. Independent and joined side-face controls now
+isolate that remaining dependency. They are investigation evidence, not yet
+supported imports.
+
+Validation: full `cargo xtask ci` passed all 30 binaries, including 112 I/O tests,
+52 saved-history fixtures, opening-performance checks and ten-crate WebAssembly
+checking. All 34 local native-import regression groups passed separately. The
+rectangular bottom-face fixture was rendered and visually checked. Upstream
+`07e263d` remains integrated and unchanged.

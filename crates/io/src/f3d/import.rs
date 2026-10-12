@@ -510,18 +510,7 @@ impl Design {
                             }
                             let profile: &&SketchProfile =
                                 source_profiles.get(&face.feature).ok_or_else(|| invalid("loft face precedes its producer"))?;
-                            let [loops] = profile.regions.as_slice() else {
-                                return Err(invalid("unsupported loft face producer regions"));
-                            };
-                            let [boundary] = loops.as_slice() else {
-                                return Err(invalid("unsupported loft face producer holes"));
-                            };
-                            let [circle] = boundary.curves.as_slice() else {
-                                return Err(invalid("loft face recipe requires a circular producer"));
-                            };
-                            if !boundary.outer || boundary.pieces != [(1, 1)] || !circles.contains_key(circle) {
-                                return Err(invalid("unsupported loft cap boundary recipe"));
-                            }
+                            face.validate_profile(profile, &circles, &lines)?;
                             projection_model.evaluate(&doc);
                             if projection_model.results.iter().any(|r| r.error.is_some()) {
                                 return Err(invalid("cannot regenerate loft face dependencies"));
@@ -569,13 +558,16 @@ impl Design {
                         let [container] = target_containers.as_slice() else {
                             return Err(invalid("loft join requires one explicit target"));
                         };
-                        let (producer, operation) = super::loft_faces::target(&records, &classes, *container, f.id)?;
+                        let (producer, operation, rectangular) = super::loft_faces::target(&records, &classes, *container, f.id)?;
                         if operation_owners.is_none() {
                             operation_owners = Some(self.operation_owners()?);
                         }
                         if operation_owners.as_ref().and_then(|o| o.get(&operation)) != Some(&producer) {
                             return Err(invalid("loft target operation disagrees with its producer"));
                         }
+                        let profile = source_profiles.get(&producer).ok_or_else(|| invalid("missing loft target profile"))?;
+                        super::loft_faces::Face { feature: producer, operation, high: false, rectangular }
+                            .validate_profile(profile, &circles, &lines)?;
                         let source =
                             feature_ids.get(&producer).and_then(|id| doc.feature(*id)).ok_or_else(|| invalid("loft target precedes its producer"))?;
                         let [body] = source.body_names.as_slice() else {

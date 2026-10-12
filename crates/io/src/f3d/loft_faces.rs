@@ -1,4 +1,4 @@
-//! Explicit circular extrusion-cap identities observed in loft face controls.
+//! Explicit extrusion-cap identities observed in circular and rectangular loft controls.
 //! Persistent producer/operation references are authoritative; cached geometry
 //! is never used to choose a nearby face.
 use super::history::{empty, finish, payload, references, require_class, zeros};
@@ -11,9 +11,51 @@ pub(super) struct Face {
     pub feature: u64,
     pub operation: u64,
     pub high: bool,
+    pub rectangular: bool,
 }
 
 impl Face {
+    pub fn validate_profile(&self, profile: &SketchProfile, circles: &BTreeMap<u64, SketchCircle>, lines: &BTreeMap<u64, SketchLine>) -> Result<()> {
+        let [loops] = profile.regions.as_slice() else { return Err(invalid("unsupported loft face producer regions")) };
+        let [boundary] = loops.as_slice() else { return Err(invalid("unsupported loft face producer holes")) };
+        if !boundary.outer || boundary.pieces.iter().any(|piece| *piece != (1, 1)) {
+            return Err(invalid("unsupported loft cap boundary pieces"));
+        }
+        if !self.rectangular {
+            let [circle] = boundary.curves.as_slice() else { return Err(invalid("loft face recipe requires a circular producer")) };
+            if !circles.get(circle).is_some_and(|c| c.sketch == profile.geometry) {
+                return Err(invalid("missing loft cap circle"));
+            }
+            return Ok(());
+        }
+        if boundary.curves.len() != 4 {
+            return Err(invalid("loft face recipe requires four rectangle sides"));
+        }
+        use solvecraft_geom::Vec3;
+        let mut sides = Vec::new();
+        for id in &boundary.curves {
+            let line = lines.get(id).filter(|l| l.sketch == profile.geometry).ok_or_else(|| invalid("missing loft rectangle side"))?;
+            let [x, y, z] = line.start;
+            let [u, v, w] = line.end;
+            let (a, b) = (Vec3::new(x, y, z), Vec3::new(u, v, w));
+            if z.abs() > 1e-10 || w.abs() > 1e-10 || (b - a).len() < 1e-9 {
+                return Err(invalid("degenerate or nonplanar loft rectangle"));
+            }
+            sides.push((a, b));
+        }
+        for (i, (a, b)) in sides.iter().enumerate() {
+            for vertex in [a, b] {
+                let adjacent: Vec<_> =
+                    sides.iter().enumerate().filter(|(j, (c, d))| *j != i && ((*vertex - *c).len() < 1e-9 || (*vertex - *d).len() < 1e-9)).collect();
+                let [(_, (c, d))] = adjacent.as_slice() else { return Err(invalid("ambiguous loft rectangle incidence")) };
+                if (*b - *a).dot(*d - *c).abs() > 1e-9 * (*b - *a).len() * (*d - *c).len() {
+                    return Err(invalid("loft cap producer is not a rectangle"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn anchor(&self, doc: &solvecraft_doc::Document, state: &solvecraft_doc::ModelState, id: u64) -> Result<solvecraft_doc::FaceAnchor> {
         let feature = doc.feature(id).filter(|f| !f.suppressed).ok_or_else(|| invalid("missing loft face producer"))?;
         let [body] = feature.body_names.as_slice() else {
@@ -50,17 +92,21 @@ pub(super) fn objects(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id
     Ok(objects)
 }
 
-fn cap_recipe(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64) -> Result<(u64, bool)> {
+fn cap_recipe(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64) -> Result<(u64, bool, bool)> {
     require_class(classes, id, IDENTITY, 3)?;
     let mut r = payload(records.primary(id)?, id)?;
     zeros(&mut r, 6)?;
-    for value in [1, 3, 3] {
+    for value in [1, 3] {
         if r.u32()? != value {
             return Err(invalid("unsupported loft face recipe header"));
         }
     }
+    let count = r.u32()?;
+    if count != 3 && count != 5 {
+        return Err(invalid("unsupported loft face term count"));
+    }
     let mut terms = Vec::new();
-    for _ in 0..3 {
+    for _ in 0..count {
         if r.u32()? != 1 {
             return Err(invalid("unsupported loft face term count"));
         }
@@ -72,9 +118,11 @@ fn cap_recipe(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64) -
         terms.push((label, r.u64()?));
     }
     let labels: Vec<_> = terms.iter().map(|t| t.0.as_str()).collect();
-    let high = match labels.as_slice() {
-        ["2", "-1", "3"] => true,
-        ["1", "-102", "3"] => false,
+    let (high, rectangular) = match labels.as_slice() {
+        ["2", "-1", "3"] => (true, false),
+        ["1", "-102", "3"] => (false, false),
+        ["2", "3", "6", "4", "5"] => (true, true),
+        ["1", "3", "6", "4", "5"] => (false, true),
         _ => return Err(invalid("unsupported loft face topology recipe")),
     };
     let operation = terms.first().ok_or_else(|| invalid("missing face terms"))?.1;
@@ -88,17 +136,82 @@ fn cap_recipe(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64) -
     zeros(&mut r, 4)?;
     // Boundary incidence and cap role, independently checked with top, bottom
     // and overlapping second-body controls. Unknown trees are not label matches.
-    for value in [-1_i32, 1, 1, -1, 2, 2, -1, 0, -1, 1, -1, 2, 2, -1, 0, -1, 1, 1, -1, 0, 0, -1, 1, 0].into_iter().chain(if high {
-        [2, 2, 2, 2, 1, 0, 1, -1]
+    let tree = if rectangular {
+        rectangle_tree(high)
     } else {
-        [2, 1, 1, 1, 2, 1, 2, -1]
-    }) {
+        let mut tree = vec![-1_i32, 1, 1, -1, 2, 2, -1, 0, -1, 1, -1, 2, 2, -1, 0, -1, 1, 1, -1, 0, 0, -1, 1, 0];
+        tree.extend(if high { [2, 2, 2, 2, 1, 0, 1, -1] } else { [2, 1, 1, 1, 2, 1, 2, -1] });
+        tree
+    };
+    for value in tree {
         if r.u32()? != value as u32 {
             return Err(invalid("unsupported loft face incidence tree"));
         }
     }
     finish(&r)?;
-    Ok((operation, high))
+    Ok((operation, high, rectangular))
+}
+
+/// Four cyclic cap edges, each incident to the cap, a side and two vertices.
+/// Term indices follow [cap, side3, side6, side4, side5]. Bottom caps traverse
+/// the boundary in the opposite direction. Vertex incidence changes at the seam.
+fn rectangle_tree(high: bool) -> Vec<i32> {
+    let index = |side| match side {
+        3 => 1,
+        4 => 3,
+        5 => 4,
+        6 => 2,
+        _ => 0,
+    };
+    let mut tree = vec![-1, 4];
+    for side in if high { [3, 4, 5, 6] } else { [3, 6, 5, 4] } {
+        let this = index(side);
+        let previous = index(if side == 3 { 6 } else { side - 1 });
+        let next = index(if side == 6 { 3 } else { side + 1 });
+        let (a, b) = if side == 3 { (this, 0) } else { (0, previous) };
+        let (a, b) = if high { (a, b) } else { (b, a) };
+        // The last side's next vertex uses the first side; other next vertices
+        // use the current side and cap, in the cap's orientation.
+        let (c, d) = if side == 6 {
+            if high { (next, 0) } else { (0, next) }
+        } else if high {
+            (0, this)
+        } else {
+            (this, 0)
+        };
+        tree.extend([
+            -1,
+            -1,
+            2,
+            this,
+            -1,
+            0,
+            -1,
+            2,
+            -1,
+            3,
+            if side == 3 { previous } else { this },
+            -1,
+            a,
+            -1,
+            b,
+            -1,
+            0,
+            0,
+            -1,
+            3,
+            if side == 6 { this } else { next },
+            -1,
+            c,
+            -1,
+            d,
+            -1,
+            0,
+            0,
+            -1,
+        ]);
+    }
+    tree
 }
 
 fn producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, handle: u64) -> Result<u64> {
@@ -146,7 +259,7 @@ pub(super) fn face(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u
     require_class(classes, id, super::body_projections::SELECTOR, 3)?;
     let mut r = payload(records.primary(id)?, id)?;
     zeros(&mut r, 8)?;
-    let (operation, high) = cap_recipe(records, classes, r.reference()?)?;
+    let (operation, high, rectangular) = cap_recipe(records, classes, r.reference()?)?;
     if r.u32()? != 1 {
         return Err(invalid("unsupported loft face source count"));
     }
@@ -162,10 +275,10 @@ pub(super) fn face(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u
     };
     require_class(classes, *cached, "C46D3EEB-40E1-43FA-83DC-9CB204335417", 1)?;
     let handle = selector_tail(&mut r, owner)?;
-    Ok(Face { feature: producer(records, classes, handle)?, operation, high })
+    Ok(Face { feature: producer(records, classes, handle)?, operation, high, rectangular })
 }
 
-pub(super) fn target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, container: u64, owner: u64) -> Result<(u64, u64)> {
+pub(super) fn target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, container: u64, owner: u64) -> Result<(u64, u64, bool)> {
     let objects = objects(records, classes, container, owner)?;
     let [id] = objects.as_slice() else {
         return Err(invalid("loft target requires one body"));
@@ -189,9 +302,16 @@ pub(super) fn target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, con
             return Err(invalid("unsupported loft body recipe header"));
         }
     }
-    if identity.string()?.parse::<u64>().ok() != Some(operation) || identity.u32()? != 4 {
+    if identity.string()?.parse::<u64>().ok() != Some(operation) {
         return Err(invalid("loft target recipe disagrees with operation"));
     }
+    // Observed producer-shape markers; reconstruction also validates the
+    // explicitly owned profile, so these are not accepted as generic body IDs.
+    let rectangular = match identity.u32()? {
+        4 => false,
+        7 => true,
+        _ => return Err(invalid("unsupported loft target shape marker")),
+    };
     zeros(&mut identity, 12)?;
     if identity.string()? != "body_recipe_data" || identity.u32()? != 0 || identity.u32()? != u32::MAX {
         return Err(invalid("unsupported loft body recipe"));
@@ -207,7 +327,7 @@ pub(super) fn target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, con
     }
     zeros(&mut r, 8)?;
     let handle = selector_tail(&mut r, owner)?;
-    Ok((producer(records, classes, handle)?, operation))
+    Ok((producer(records, classes, handle)?, operation, rectangular))
 }
 
 #[cfg(test)]
@@ -298,12 +418,93 @@ mod tests {
         reference(b, 19);
     }
 
+    fn authored_rectangle(high: bool) -> Fixture {
+        let mut f = authored(high);
+        let mut b = vec![0; 6];
+        for n in [1, 3, 5] {
+            u32(&mut b, n);
+        }
+        for label in [if high { "2" } else { "1" }, "3", "6", "4", "5"] {
+            u32(&mut b, 1);
+            string(&mut b, label);
+            u32(&mut b, 0);
+            u32(&mut b, 1);
+            u64(&mut b, 8001);
+        }
+        u32(&mut b, 0);
+        string(&mut b, "bounded_face_recipe_data");
+        u32(&mut b, 0);
+        u32(&mut b, u32::MAX);
+        u32(&mut b, 4);
+        // Field-authored edge/corner incidence, independent of rectangle_tree.
+        let edges = if high {
+            [[1, 2, 1, 0, 3, 0, 1], [3, 3, 0, 1, 4, 0, 3], [4, 4, 0, 3, 2, 0, 4], [2, 2, 0, 4, 2, 1, 0]]
+        } else {
+            [[1, 2, 0, 1, 3, 1, 0], [2, 2, 4, 0, 2, 0, 1], [4, 4, 3, 0, 2, 4, 0], [3, 3, 1, 0, 4, 3, 0]]
+        };
+        for [side, a, b0, c, d, e, g] in edges {
+            for n in [-1_i32, -1, 2, side, -1, 0, -1, 2, -1, 3, a, -1, b0, -1, c, -1, 0, 0, -1, 3, d, -1, e, -1, g, -1, 0, 0, -1] {
+                u32(&mut b, n as u32);
+            }
+        }
+        f.put(181, IDENTITY, 3, b, None);
+        f.0.get_mut(&191).unwrap().2[30..34].copy_from_slice(&7_u32.to_le_bytes());
+        f
+    }
+
+    #[test]
+    fn rectangular_cap_incidence_and_target_markers_are_not_circular_aliases() {
+        for high in [false, true] {
+            let d = authored_rectangle(high).design();
+            let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+            let records = Records::new(&d);
+            let selected = face(&records, &classes, 180, 19).unwrap();
+            assert!(selected.rectangular);
+            assert_eq!((selected.feature, selected.operation, selected.high), (9, 8001, high));
+            assert_eq!(target(&records, &classes, 192, 19).unwrap(), (9, 8001, true));
+            for keep in 0..authored_rectangle(high).0[&181].2.len() {
+                let mut f = authored_rectangle(high);
+                f.0.get_mut(&181).unwrap().2.truncate(keep);
+                assert!(decode(f, false).is_err(), "{high}/{keep}");
+            }
+            let mut f = authored_rectangle(high);
+            let bytes = &mut f.0.get_mut(&181).unwrap().2;
+            let end = bytes.len();
+            bytes[end - 1] ^= 1;
+            assert!(decode(f, false).is_err());
+            let mut f = authored_rectangle(high);
+            f.0.get_mut(&191).unwrap().2[30..34].copy_from_slice(&6_u32.to_le_bytes());
+            assert!(decode(f, true).is_err());
+        }
+    }
+
+    #[test]
+    fn rectangular_cap_profile_requires_owned_whole_connected_orthogonal_sides() {
+        let design = super::super::polygon_tests::rectangle().design();
+        let mut profiles = design.sketch_profiles().unwrap();
+        let profile = &mut profiles[0];
+        let mut lines: BTreeMap<_, _> = design.sketch_lines().unwrap().into_iter().map(|l| (l.id, l)).collect();
+        let face = Face { feature: 9, operation: 8001, high: true, rectangular: true };
+        face.validate_profile(profile, &BTreeMap::new(), &lines).unwrap();
+        profile.regions[0][0].curves.reverse();
+        face.validate_profile(profile, &BTreeMap::new(), &lines).unwrap();
+        profile.regions[0][0].pieces[0] = (1, 2);
+        assert!(face.validate_profile(profile, &BTreeMap::new(), &lines).is_err());
+        profile.regions[0][0].pieces[0] = (1, 1);
+        let line = *lines.keys().next().unwrap();
+        lines.get_mut(&line).unwrap().sketch += 1;
+        assert!(face.validate_profile(profile, &BTreeMap::new(), &lines).is_err());
+        lines.get_mut(&line).unwrap().sketch -= 1;
+        lines.get_mut(&line).unwrap().end[1] += 0.5;
+        assert!(face.validate_profile(profile, &BTreeMap::new(), &lines).is_err());
+    }
+
     fn decode(f: Fixture, body: bool) -> Result<(u64, u64, bool)> {
         let d = f.design();
         let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
         let records = Records::new(&d);
         if body {
-            let (producer, operation) = target(&records, &classes, 192, 19)?;
+            let (producer, operation, _) = target(&records, &classes, 192, 19)?;
             Ok((producer, operation, false))
         } else {
             let face = face(&records, &classes, 180, 19)?;
