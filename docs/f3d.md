@@ -1798,10 +1798,11 @@ suppression. The importer validates operation ownership, source body labels,
 container owners and the consumed-handle list. A consumed tool is available to
 its earlier history; its final cached state does not suppress its extrusion.
 
-The initial reconstruction accepts independent, single-body, profile-plane
-extrusions. Bodies modified by intervening operations, mirror-produced bodies,
-component transfers and other source schemas still fail atomically. It does not
-substitute cached geometry for an unsupported editable source.
+The initial reconstruction accepts single-body, profile-plane extrusion
+producers. An earlier cut can retain that original body reference and remains
+part of the editable timeline. Additional tracked contributing operations,
+mirror-produced bodies, component transfers and other source schemas still fail
+atomically. Cached geometry never replaces an unsupported editable source.
 
 Six original `combine-*` fixtures use overlapping 20 mm blocks, with analytically
 derived Join/Cut/Intersect volumes of 12000/4000/4000 mm³. Keeping the tool adds
@@ -1828,3 +1829,24 @@ their independent geometry and edit checks. The integrated gate passed all 33
 CI binaries (664 engine tests, 361 UI tests, 298 kernel tests and 164 sketch
 tests), WASM, 39 native-import groups and 16 inspection tests. HardEdgeBasin's
 opening guard passed in 1.96 seconds during the final gate.
+
+Legacy Combine helpers now accept the observed version-3 layout as well as
+version 5. The original Gridfinity file and its unchanged modern resave retain
+identical operation, target, two tool-container and consumed-body identities.
+Both also contain an explicitly present but empty optional metadata block.
+The reader accepts that empty encoding while rejecting unknown populated
+attributes. A field-authored test covers version handling, both empty metadata
+encodings and truncated helpers; a local archive test compares all decoded inputs.
+Gridfinity now decodes 19 of 35 timeline entries. Its remaining feature types
+still prevent complete import.
+
+Six additional local controls verify that a source block with an earlier pocket
+retains its cut through Combine Join/Cut/Intersect, with or without keeping the
+tool. Analytic volume, body count and bounds pass. Joined and mirrored source
+controls are prepared for the next reconstruction extension; they still fail
+explicitly. All 76 public reference models pass after the upstream integration.
+
+The legacy Combine update passed the full CI gate (33 binaries, including 136
+I/O tests and all 80 editable examples), all 17 local inspection tests and the
+native Combine reconstruction group. The inspection coverage expectation now
+includes the newly decoded Gridfinity entry. HardEdgeBasin opened in 0.86 seconds.

@@ -294,8 +294,11 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   Native Combine Join/Cut/Intersect now preserve explicit target/tool identities,
   tool retention and suppression for independent extrusion bodies. Six new
   analytic block examples bring the editable-history suite to 80 designs.
-  Modified or mirror-produced Combine sources and component transfers remain
+  Additional tracked contributors, mirror-produced Combine sources and component transfers remain
   explicit unsupported cases.
+  Version-3 Combine helpers and empty optional metadata now match an unchanged
+  modern resave, bringing the Gridfinity timeline to 19 of 35 decoded entries;
+  complete reconstruction still requires its remaining feature schemas.
 - Persistent naming follows the kernel's exact face history (docs/book/src/dev/naming.md):
   references resolve by name first, follow splits and merges, and warn when the entity split,
   merged or vanished, or was found by geometry only (operations that report no history yet).

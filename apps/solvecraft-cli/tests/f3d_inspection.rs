@@ -2,6 +2,38 @@ use serde_json::json;
 use solvecraft_engine::Session;
 
 #[test]
+#[ignore = "requires original Gridfinity archive and unchanged modern resave"]
+fn legacy_combine_inputs_match_the_unchanged_modern_resave() {
+    use solvecraft_engine::{
+        doc::Operation,
+        io::f3d::{HistoryKind, read_f3d},
+    };
+    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let file = "Gridfinity Storage Box Shelves (Parametric) V1.0.f3d";
+    let mut decoded = Vec::new();
+    for path in [corpus.join(file), probes.join(format!("corpus-{file}"))] {
+        let designs = read_f3d(&std::fs::read(path).unwrap()).unwrap();
+        let timeline = designs[0].timeline().unwrap();
+        assert_eq!(timeline.len(), 35);
+        let feature = timeline.into_iter().find(|f| f.id == 66161).unwrap().feature.unwrap();
+        assert_eq!(
+            feature.kind,
+            HistoryKind::Combine {
+                operation: Operation::Join,
+                keep_tools: false,
+                operation_tag: 450,
+                tool_containers: vec![66162, 66169],
+                target_container: 66176,
+                consumed_handles: vec![31544, 34694],
+            }
+        );
+        decoded.push(feature);
+    }
+    assert_eq!(decoded[0], decoded[1]);
+}
+
+#[test]
 #[ignore = "requires SOLVECRAFT_F3D_PROBES with the body-reference API controls"]
 fn topology_operation_owners_distinguish_overlapping_source_extrusions() {
     let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").expect("set SOLVECRAFT_F3D_PROBES"));
@@ -287,7 +319,7 @@ fn legacy_timeline_preserves_every_entry_and_decodes_versioned_sketches() {
     let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
     let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-corpus-measurements.json")).unwrap()).unwrap();
     for (name, count, decoded, sketch_count) in
-        [("adapter-x20-makita.f3d", 49, 40, 12), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 35, 18, 3), ("R36S Grip.f3d", 53, 8, 2)]
+        [("adapter-x20-makita.f3d", 49, 40, 12), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 35, 19, 3), ("R36S Grip.f3d", 53, 8, 2)]
     {
         let mut s = Session::default();
         let before = s.doc.clone();

@@ -1,5 +1,5 @@
 //! Whole-body Combine inputs verified with operation, retention and suppression controls.
-use super::history::{finish, payload, references, require_class, zeros};
+use super::history::{empty, finish, payload, references, require_class, zeros};
 use super::*;
 use solvecraft_doc::Operation;
 
@@ -14,7 +14,11 @@ pub(super) fn inputs(
     owner: u64,
     body_version: u32,
 ) -> Result<HistoryKind> {
-    zeros(r, 6)?;
+    empty(r)?;
+    zeros(r, 1)?;
+    if !super::attributes::read(r)?.is_empty() {
+        return Err(invalid("unsupported Combine attributes"));
+    }
     let operation = match r.u32()? {
         0 => Operation::Join,
         1 => Operation::Cut,
@@ -30,13 +34,20 @@ pub(super) fn inputs(
     zeros(r, 1)?;
     let helpers = references(r)?;
     let [helper] = helpers.as_slice() else { return Err(invalid("unsupported Combine helper count")) };
-    require_class(classes, *helper, HELPER, 5)?;
+    let helper_version =
+        classes.get(helper).filter(|c| c.id == HELPER).map(|c| c.version).ok_or_else(|| invalid("unsupported Combine helper class"))?;
     let mut h = payload(records.primary(*helper)?, *helper)?;
-    zeros(&mut h, 24)?;
-    if h.u32()? != 3 {
-        return Err(invalid("unsupported Combine helper mode"));
+    match helper_version {
+        3 => zeros(&mut h, 7)?,
+        5 => {
+            zeros(&mut h, 24)?;
+            if h.u32()? != 3 {
+                return Err(invalid("unsupported Combine helper mode"));
+            }
+            zeros(&mut h, 14)?;
+        }
+        _ => return Err(invalid("unsupported Combine helper version")),
     }
-    zeros(&mut h, 14)?;
     if h.take(2)? != [1, 0] || h.reference()? != owner {
         return Err(invalid("inconsistent Combine helper owner"));
     }
@@ -160,6 +171,37 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn legacy_helpers_and_empty_optional_metadata_preserve_combine_inputs() {
+        for version in [3, 5] {
+            for metadata in [false, true] {
+                let mut f = authored(0, false, false);
+                if version == 3 {
+                    let helper = f.0.get_mut(&900).unwrap();
+                    helper.1 = 3;
+                    helper.2.drain(7..42);
+                }
+                if metadata {
+                    let record = &mut f.0.get_mut(&19).unwrap().2;
+                    record[5] = 1;
+                    record.splice(6..6, [0; 4]);
+                }
+                assert_eq!(f.design().history().unwrap(), authored(0, false, false).design().history().unwrap());
+                let mut f = authored(0, false, false);
+                f.0.get_mut(&900).unwrap().1 = 4;
+                assert!(f.design().history().is_err());
+            }
+        }
+        for keep in 0..27 {
+            let mut f = authored(0, false, false);
+            let helper = f.0.get_mut(&900).unwrap();
+            helper.1 = 3;
+            helper.2.drain(7..42);
+            helper.2.truncate(keep);
+            assert!(f.design().history().is_err(), "legacy helper truncated at {keep}");
         }
     }
 
