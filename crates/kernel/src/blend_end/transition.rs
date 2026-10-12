@@ -93,7 +93,11 @@ pub(super) fn build(
         replacements.insert(seam.id(), if oriented.front() == seam.absolute_front() { ne } else { ne.inverse() });
         points.push(nv);
     }
-    let h = points.iter().map(|v| (vtx(v) - p).dot(inward)).fold(0.0_f64, f64::max) + 2.0 * r;
+    // Keep curved endpoint fills local to the neighboring rounds. A long
+    // unconstrained collar can overshoot the barrel and reverse its normals.
+    // Sharp planar fans still need the larger setback to clear their seams.
+    let collar = if curved { 0.25 * r } else { 2.0 * r };
+    let h = points.iter().map(|v| (vtx(v) - p).dot(inward)).fold(0.0_f64, f64::max) + collar;
     if !h.is_finite() || h > size {
         return Err(unsupported("oversized transition setback"));
     }
@@ -128,7 +132,7 @@ pub(super) fn build(
             // side-wall tangent planes, while keeping the sharp floor meeting.
             (conic(vtx(a), p, vtx(b), 1.0), Normal::Free)
         } else {
-            cylinder_boundary(face, vtx(a), vtx(b), tol)?
+            cylinder_boundary(face, vtx(a), vtx(b), tol, i == 0, i + 2 == points.len())?
         };
         let region = crate::blend_trim::FaceRegion::new(face, tol)?;
         let (lo, hi) = curve.range_tuple();
@@ -187,9 +191,15 @@ pub(super) fn build(
         let n = surface.normal(u, v);
         out += Vec3::new(n.x, n.y, n.z);
     }
-    if crease {
-        let (sections, patches) = fan::build(faces, &fan, &points, &wire, &boundaries, &section, center, inward, sign, size, &planes, out)?;
-        return Ok(End { a, b, sections, removed, replacements, connections, patches });
+    if crease || (curved && fan.len() > 2) {
+        match fan::build(faces, &fan, &points, &wire, &boundaries, &section, center, inward, sign, size, &planes, out, crease) {
+            Ok((sections, patches)) => return Ok(End { a, b, sections, removed, replacements, connections, patches }),
+            Err(error) if crease => return Err(error),
+            // A shallow rim can fold the fixed rectangular chart. A smooth
+            // terminal fan also admits a single trimmed graph; that fit still
+            // must pass the same position, tangency and containment checks.
+            Err(_) => {}
+        }
     }
     crate::blend_corner::setback::partition::check(std::slice::from_ref(&wire), out, size)?;
     let surface = crate::blend_corner::setback::transition(&boundaries, out, size, &planes)?;
@@ -200,7 +210,7 @@ pub(super) fn build(
 /// Exact cylindrical boundary with zero angular velocity at its endpoints.
 /// It therefore joins a contact rail without imposing incompatible mixed
 /// curvature on the new patch's side-wall boundary.
-fn cylinder_boundary(face: &mt::Face, start: Vec3, end: Vec3, tol: f64) -> Result<(mt::Curve, Normal)> {
+fn cylinder_boundary(face: &mt::Face, start: Vec3, end: Vec3, tol: f64, start_rail: bool, end_rail: bool) -> Result<(mt::Curve, Normal)> {
     use crate::offset::{Surf, surf_of};
     let Some(Surf::Cylinder { o, a, r, convex }) = surf_of(face, tol) else {
         return Err(unsupported("non-cylindrical transition end"));
@@ -243,18 +253,33 @@ fn cylinder_boundary(face: &mt::Face, start: Vec3, end: Vec3, tol: f64) -> Resul
         }
         angular.push(q);
     }
+    // On a concave floor round, turn away from the wall before advancing
+    // quickly toward the fan tip. Linear axial progress can force the fill to
+    // bend back toward its barrel. Mirrored Bernstein controls give the same
+    // physical boundary when traversed in reverse. All heights remain between
+    // the endpoints and the curve stays exactly on the original cylinder.
+    let midpoint = if start_rail && !end_rail {
+        0.2
+    } else if end_rail && !start_rail {
+        0.8
+    } else {
+        0.5
+    };
+    let heights = if convex || midpoint == 0.5 { vec![hs, he] } else { vec![hs, hs + (he - hs) * midpoint, he] };
+    let height_degree = heights.len() - 1;
+    let degree = 6 + height_degree;
     let mut controls = Vec::new();
-    for k in 0_usize..=7 {
+    for k in 0_usize..=degree {
         let mut q = mt::Vector4::new(0.0, 0.0, 0.0, 0.0);
         for (i, point) in angular.iter().enumerate() {
             let Some(j) = k.checked_sub(i) else { continue };
-            let Some(height) = [hs, he].get(j).copied() else { continue };
+            let Some(height) = heights.get(j).copied() else { continue };
             q += (*point + mt::Vector4::new(a.x * height * point.w, a.y * height * point.w, a.z * height * point.w, 0.0))
-                * (choose(6, i) / choose(7, k));
+                * (choose(6, i) * choose(height_degree, j) / choose(degree, k));
         }
         controls.push(q);
     }
-    let curve = mt::Curve::NurbsCurve(mt::NurbsCurve::new(mt::BSplineCurve::new(mt::KnotVec::bezier_knot(7), controls)));
+    let curve = mt::Curve::NurbsCurve(mt::NurbsCurve::new(mt::BSplineCurve::new(mt::KnotVec::bezier_knot(degree), controls)));
     Ok((curve, if convex { Normal::Cylinder { origin: o, axis: a } } else { Normal::InwardCylinder { origin: o, axis: a } }))
 }
 
@@ -360,12 +385,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn concave_boundary_is_exact_bounded_and_independent_of_traversal() {
+        let body = crate::cylinder(Vec3::ZERO, Vec3::Z, 2.0, 4.0).unwrap();
+        let face =
+            body.solid.face_iter().find(|f| matches!(crate::offset::surf_of(f, 1e-7), Some(crate::offset::Surf::Cylinder { .. }))).unwrap().inverse();
+        let start = Vec3::new(2.0, 0.0, 1.0);
+        let end = Vec3::new(0.0, 2.0, 3.0);
+        let (forward, _) = cylinder_boundary(&face, start, end, 1e-7, true, false).unwrap();
+        let (reverse, _) = cylinder_boundary(&face, end, start, 1e-7, false, true).unwrap();
+        for i in 0..=256 {
+            let t = i as f64 / 256.0;
+            let p = from_p3(forward.subs(t));
+            assert!((p.x.hypot(p.y) - 2.0).abs() < 1e-12);
+            assert!((1.0..=3.0).contains(&p.z));
+            assert!(p.dist(from_p3(reverse.subs(1.0 - t))) < 1e-12);
+        }
+        for t in [0.0, 1.0] {
+            let tangent = forward.der(t);
+            assert!(tangent.x.hypot(tangent.y) < 1e-12);
+            assert!(tangent.z > 0.0);
+        }
+    }
+
+    #[test]
     fn cylindrical_boundary_stays_exact_and_meets_contact_rails_axially() {
         let body = crate::cylinder(Vec3::ZERO, Vec3::Z, 2.0, 4.0).unwrap();
         let face = body.solid.face_iter().find(|f| matches!(crate::offset::surf_of(f, 1e-7), Some(crate::offset::Surf::Cylinder { .. }))).unwrap();
         let start = Vec3::new(2.0, 0.0, 1.0);
         let end = Vec3::new(0.0, 2.0, 3.0);
-        let (curve, _) = cylinder_boundary(face, start, end, 1e-7).unwrap();
+        let (curve, _) = cylinder_boundary(face, start, end, 1e-7, true, false).unwrap();
         assert!(from_p3(curve.subs(0.0)).dist(start) < 1e-12);
         assert!(from_p3(curve.subs(1.0)).dist(end) < 1e-12);
         for i in 0..=256 {

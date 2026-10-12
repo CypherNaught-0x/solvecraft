@@ -262,6 +262,84 @@ pub(crate) fn transition(boundaries: &[Boundary], out: Vec3, size: f64, planes: 
     fit_impl(boundaries, out, size, planes, None)
 }
 
+fn cylinder(normal: &Normal) -> Option<(Vec3, Vec3, bool)> {
+    match normal {
+        Normal::Cylinder { origin, axis } => Some((*origin, *axis, false)),
+        Normal::InwardCylinder { origin, axis } => Some((*origin, *axis, true)),
+        _ => None,
+    }
+}
+
+/// Convex radial sections guide the interior without replacing the boundary
+/// position/tangency checks or the control-hull containment certificate.
+/// The section tangent and the terminal tangent plane meet at `middle`.
+/// A quartic with collinear first/last three controls has zero curvature at
+/// both ends and cannot acquire a reversed radial profile between them.
+fn radial_guide(boundaries: &[Boundary]) -> Result<Vec<Vec3>> {
+    let mut guide_samples = Vec::new();
+    if (4..=5).contains(&boundaries.len())
+        && let Some((center, axis, _)) = boundaries.first().and_then(|b| cylinder(&b.normal))
+    {
+        let section = boundaries.first().ok_or_else(|| unsupported("guide section"))?;
+        let (sa, sb) = section.curve.range_tuple();
+        for i in 1..32 {
+            let start = section.sample(sb + (sa - sb) * i as f64 / 32.0)?.0;
+            let radial = (start - center) - axis * (start - center).dot(axis);
+            let cross = axis.cross(radial);
+            let mut endpoint = None;
+            for boundary in boundaries.iter().skip(2).take(boundaries.len() - 3) {
+                let (lo, hi) = boundary.curve.range_tuple();
+                let residual = |t: f64| -> Result<f64> {
+                    let value = (from_p3(boundary.curve.subs(t)) - start).dot(cross);
+                    if value.is_finite() { Ok(value) } else { Err(unsupported("non-finite radial guide intersection")) }
+                };
+                for j in 0..32 {
+                    let (mut low, mut high) = (lo + (hi - lo) * j as f64 / 32.0, lo + (hi - lo) * (j + 1) as f64 / 32.0);
+                    let f = residual(low)?;
+                    if f * residual(high)? > 0.0 {
+                        continue;
+                    }
+                    for _ in 0..40 {
+                        let mid = (low + high) * 0.5;
+                        if (residual(mid)? < 0.0) == (f < 0.0) {
+                            low = mid;
+                        } else {
+                            high = mid;
+                        }
+                    }
+                    let (end, normal) = boundary.sample((low + high) * 0.5)?;
+                    if (end - center).dot(radial) > 0.0 {
+                        endpoint = Some((end, normal));
+                        break;
+                    }
+                }
+                if endpoint.is_some() {
+                    break;
+                }
+            }
+            let Some((end, normal)) = endpoint else { continue };
+            let den = normal.dot(axis);
+            if den.abs() < 1e-8 {
+                continue;
+            }
+            let middle = start + axis * ((end - start).dot(normal) / den);
+            let span = (end - start).dot(axis);
+            let h = (middle - start).dot(axis) / span;
+            if !h.is_finite() || !(-1e-9..=1.0 + 1e-9).contains(&h) {
+                continue;
+            }
+            for j in 1..16 {
+                let t = j as f64 / 16.0;
+                let c = [start, start + (middle - start) * 0.5, middle, middle + (end - middle) * 0.5, end];
+                let coefficients =
+                    [(1.0 - t).powi(4), 4.0 * t * (1.0 - t).powi(3), 6.0 * t * t * (1.0 - t).powi(2), 4.0 * t.powi(3) * (1.0 - t), t.powi(4)];
+                guide_samples.push(c.into_iter().zip(coefficients).fold(Vec3::ZERO, |p, (c, w)| p + c * w));
+            }
+        }
+    }
+    Ok(guide_samples)
+}
+
 fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3)], radii: Option<[f64; 3]>) -> Result<mt::Surface> {
     if boundaries.len() < 3
         || boundaries.len() > 16
@@ -275,11 +353,6 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
     // Sharp terminal boundaries may require a curvature discontinuity. Fully
     // tangent rim transitions instead need C2 spans and a curvature-variation
     // penalty: minimum bending alone can satisfy every boundary yet pucker inside.
-    let cylinder = |normal: &Normal| match normal {
-        Normal::Cylinder { origin, axis } => Some((*origin, *axis, false)),
-        Normal::InwardCylinder { origin, axis } => Some((*origin, *axis, true)),
-        _ => None,
-    };
     let common_cylinder = boundaries.first().and_then(|b| cylinder(&b.normal)).is_some_and(|(origin, axis, inward)| {
         boundaries.iter().all(|b| {
             cylinder(&b.normal)
@@ -428,6 +501,7 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
     // bound. Validate between the fitting samples as well as at the corners.
     let tolerance = (size * 1e-6).max(1e-6);
     let trim = bounds::Trim::new(boundaries, origin, x, y, du, dv, tolerance)?;
+    let guide_samples = if smooth_transition { radial_guide(boundaries)? } else { Vec::new() };
     let densities: &[usize] = if radii.is_some() { &[20, 32, 48, 64] } else { &[20, 32, 48, 64, 80] };
     for &density in densities {
         let knot_vec = |axis: Vec3, length: f64| -> Result<Vec<f64>> {
@@ -458,6 +532,15 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
         let kv = knot_vec(y, dv)?;
         let (nu, nv) = (ku.len() - 4, kv.len() - 4);
         let mut rows = Vec::new();
+        for p in &guide_samples {
+            let q = *p - origin;
+            let (u, v) = (q.dot(x) / du, q.dot(y) / dv);
+            if inside(u, v) {
+                let (bu, _, _) = basis(&ku, u, nu)?;
+                let (bv, _, _) = basis(&kv, v, nv)?;
+                rows.push(tensor(&bu, &bv, 10.0, q.dot(z)));
+            }
+        }
         for (p, normal) in &samples {
             let p = *p - origin;
             let (u, v) = (p.dot(x) / du, p.dot(y) / dv);
@@ -593,6 +676,19 @@ fn fit_impl(boundaries: &[Boundary], out: Vec3, size: f64, planes: &[(Vec3, Vec3
                 rows.push(tensor(ddbu, bv, w / (du * du), 0.0));
                 rows.push(tensor(dbu, dbv, 2.0_f64.sqrt() * w / (du * dv), 0.0));
                 rows.push(tensor(bu, ddbv, w / (dv * dv), 0.0));
+                // Penalize bending along the retained cylinder's axis more
+                // strongly than transverse bending. That direction is straight
+                // on the barrel; isotropic bending alone can add a long bulge.
+                if smooth_transition && let Some((_, axis, _)) = boundaries.first().and_then(|b| cylinder(&b.normal)) {
+                    let (a, b) = (axis.dot(x) / du, axis.dot(y) / dv);
+                    let mut entries = std::collections::BTreeMap::new();
+                    for (aa, bb, c) in [(ddbu, bv, a * a), (dbu, dbv, 2.0 * a * b), (bu, ddbv, b * b)] {
+                        for (i, value) in tensor(aa, bb, c * w * 10.0, 0.0).entries {
+                            *entries.entry(i).or_insert(0.0) += value;
+                        }
+                    }
+                    rows.push(Row { entries: entries.into_iter().collect(), rhs: 0.0 });
+                }
                 if smooth_transition {
                     // Penalize changes in physical curvature on a tenth of the
                     // patch width. The mixed terms form the rotation-invariant

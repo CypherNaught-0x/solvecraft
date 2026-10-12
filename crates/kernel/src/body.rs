@@ -1333,6 +1333,7 @@ impl Body {
     /// A tessellation with its edges flagged for display (seams, tangent joins, protected creases).
     fn flagged(&self, mut m: Mesh) -> Result<Mesh> {
 
+
         if self.is_mesh() {
             return Ok(m);
         }

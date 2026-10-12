@@ -21,9 +21,14 @@ pub(crate) fn fit(
     if ![20, 32, 40, 56].contains(&density) {
         return Err(unsupported("patch density budget"));
     }
+    let guide_weight = if singular.iter().any(|s| *s) { 0.01 } else { 1e-4 };
     let z = out.normalized().ok_or_else(|| unsupported("patch direction"))?;
     let x = z.any_perp();
     let y = z.cross(x);
+    let axial = match boundaries[0].normal {
+        Normal::Cylinder { axis, .. } | Normal::InwardCylinder { axis, .. } => Some((axis.dot(x), axis.dot(y))),
+        _ => None,
+    };
     let base = |side: usize, t: f64| -> Result<(Vec3, Vec3)> {
         let b = boundaries.get(side).ok_or_else(|| unsupported("boundary"))?;
         let t = if side == 0 || side == 3 { 1.0 - t } else { t };
@@ -166,8 +171,8 @@ pub(crate) fn fit(
                     _ => (1.0, t),
                 };
                 let (p, normal) = sample(side, t)?;
-                let (bu, du, _) = basis(&knots, u, n)?;
-                let (bv, dv, _) = basis(&knots, v, n)?;
+                let (bu, du, ddu) = basis(&knots, u, n)?;
+                let (bv, dv, ddv) = basis(&knots, v, n)?;
                 rows.push(tensor(&bu, &bv, 10000.0, (p - origin).dot(z)));
                 if normal != Vec3::ZERO {
                     if !normal.dot(z).is_finite() || normal.dot(z) < 1e-3 {
@@ -182,6 +187,63 @@ pub(crate) fn fit(
                     rows.push(tensor(&du, &bv, w * normal.dot(z), -project(&du, &bv).dot(normal) / normal.dot(z)));
                     rows.push(tensor(&bu, &dv, w * normal.dot(z), -project(&bu, &dv).dot(normal) / normal.dot(z)));
                 }
+                // Match the barrel's zero axial curvature softly. The physical
+                // Hessian includes derivatives of the non-affine projected map;
+                // length-squared scaling keeps this condition invariant to units.
+                if side == 0
+                    && i > 0
+                    && i < 1024
+                    && let Some((ax, ay)) = axial
+                {
+                    let d = [project(&du, &bv), project(&bu, &dv), project(&ddu, &bv), project(&du, &dv), project(&bu, &ddv)]
+                        .map(|p| [p.dot(x), p.dot(y)]);
+                    let (_, h) = physical_curvature_weights(d).ok_or_else(|| unsupported("singular section map"))?;
+                    let weights: [f64; 5] = std::array::from_fn(|k| ax * ax * h[0][k] + 2.0 * ax * ay * h[1][k] + ay * ay * h[2][k]);
+                    let mut entries = std::collections::BTreeMap::new();
+                    for ((aa, bb), c) in [(&ddu, &bv), (&du, &dv), (&bu, &ddv), (&du, &bv), (&bu, &dv)].into_iter().zip(weights) {
+                        for (index, value) in tensor(aa, bb, c * size * (corners[1] - corners[0]).len(), 0.0).entries {
+                            *entries.entry(index).or_insert(0.0) += value;
+                        }
+                    }
+                    rows.push(Row { entries: entries.into_iter().collect(), rhs: 0.0 });
+                }
+            }
+        }
+        // Pull physical guide points back through the fixed projected map.
+        // Bounded Newton steps skip points outside this fan sector; they never
+        // extrapolate a chart or relax its boundary/certificate checks.
+        for p in if singular.iter().any(|s| *s) { radial_guide(boundaries)? } else { Vec::new() } {
+            let target = p - origin;
+            let (mut u, mut v) = (0.5, 0.5);
+            for _ in 0..40 {
+                let (bu, du, _) = basis(&knots, u, n)?;
+                let (bv, dv, _) = basis(&knots, v, n)?;
+                let q = project(&bu, &bv) - target;
+                let (pu, pv) = (project(&du, &bv), project(&bu, &dv));
+                let (aa, ab, ba, bb) = (pu.dot(x), pv.dot(x), pu.dot(y), pv.dot(y));
+                let det = aa * bb - ab * ba;
+                if !det.is_finite() || det.abs() < 1e-20 {
+                    break;
+                }
+                let a = (q.dot(x) * bb - q.dot(y) * ab) / det;
+                let b = (q.dot(y) * aa - q.dot(x) * ba) / det;
+                if !a.is_finite() || !b.is_finite() {
+                    break;
+                }
+                u = (u - a.clamp(-0.15, 0.15)).clamp(1e-8, 1.0 - 1e-8);
+                v = (v - b.clamp(-0.15, 0.15)).clamp(1e-8, 1.0 - 1e-8);
+                if a.abs() + b.abs() < 1e-10 {
+                    break;
+                }
+            }
+            let (bu, _, _) = basis(&knots, u, n)?;
+            let (bv, _, _) = basis(&knots, v, n)?;
+            let delta = project(&bu, &bv) - target;
+            if delta.dot(x).hypot(delta.dot(y)) < size * 1e-8 {
+                // Fade the positional guide at constrained boundaries, where
+                // the neighboring face already determines position and tangent.
+                let fade = (16.0 * u * (1.0 - u) * v * (1.0 - v)).powi(2);
+                rows.push(tensor(&bu, &bv, 1.25 * fade, target.dot(z)));
             }
         }
         for i in 1..2 * n {
@@ -193,7 +255,20 @@ pub(crate) fn fit(
                 let derivatives =
                     [project(&du, &bv), project(&bu, &dv), project(&ddu, &bv), project(&du, &dv), project(&bu, &ddv)].map(|p| [p.dot(x), p.dot(y)]);
                 let (area, weights) = physical_curvature_weights(derivatives).ok_or_else(|| unsupported("singular smoothing map"))?;
-                let w = 1e-4 * size * area.sqrt() / (2 * n) as f64;
+                let w = (if singular.iter().any(|s| *s) { 1e-4 } else { 1e-3 }) * size * area.sqrt() / (2 * n) as f64;
+                if !singular.iter().any(|s| *s)
+                    && let Some((ax, ay)) = axial
+                {
+                    let directional: [f64; 5] =
+                        std::array::from_fn(|k| ax * ax * weights[0][k] + 2.0 * ax * ay * weights[1][k] + ay * ay * weights[2][k]);
+                    let mut entries = std::collections::BTreeMap::new();
+                    for ((aa, bb), c) in [(&ddu, &bv), (&du, &dv), (&bu, &ddv), (&du, &bv), (&bu, &dv)].into_iter().zip(directional) {
+                        for (index, value) in tensor(aa, bb, c * w * 3.0, 0.0).entries {
+                            *entries.entry(index).or_insert(0.0) += value;
+                        }
+                    }
+                    rows.push(Row { entries: entries.into_iter().collect(), rhs: 0.0 });
+                }
                 // The radial chart collapses at the tip. Penalize curvature in
                 // physical projected coordinates, not derivatives of that chart.
                 for ([a, b, c, cu, cv], factor) in weights.into_iter().zip([1.0, 2.0_f64.sqrt(), 1.0]) {
@@ -209,11 +284,10 @@ pub(crate) fn fit(
         }
         for i in 0..n {
             for j in 0..n {
-                let u = knots.iter().skip(i + 1).take(5).sum::<f64>() / 5.0;
-                let v = knots.iter().skip(j + 1).take(5).sum::<f64>() / 5.0;
-                // A weak positional regularizer leaves the physical bending
-                // objective in control of the interior shape.
-                rows.push(Row { entries: vec![(i * n + j, 1e-7)], rhs: guide(u, v)?.dot(z) * 1e-7 });
+                // Regularize toward the fitted guide controls, not its point
+                // values at Greville parameters (which are not spline controls).
+                // This anchors weak modes without importing control-polygon bias.
+                rows.push(Row { entries: vec![(i * n + j, guide_weight)], rhs: cz[i * n + j] * guide_weight });
             }
         }
         let mut fixed: std::collections::HashMap<_, _> = jets.iter().map(|(i, p)| (*i, p.dot(z))).collect();
