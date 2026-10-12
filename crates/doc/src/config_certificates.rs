@@ -148,6 +148,13 @@ pub(crate) fn extrude_cap_bindings(sketch: &SolvedSketch, bodies: &[solvecraft_k
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FaceContribution {
+    pub producer: u64,
+    pub source: Box<FaceCertificate>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FaceCertificate {
     Box { axis: u8, high: bool },
@@ -155,15 +162,43 @@ pub enum FaceCertificate {
     ExtrudeSide { sketch: u64, curve: String },
     Imported { payload_sha256: String, item: u64, face: u64 },
     ShellPlanar { source_producer: u64, source: Box<FaceCertificate>, inner: bool },
+    PlanarUnion { sources: Vec<FaceContribution> },
 }
 
 impl FaceCertificate {
+    pub(crate) fn union_leaf(&self) -> bool {
+        matches!(self, Self::Box { .. } | Self::ExtrudeCap { .. } | Self::ExtrudeSide { .. })
+    }
+    /// A canonical diagnostic name independent of contribution vector order.
+    pub fn union_role(&self) -> Option<String> {
+        use sha2::{Digest, Sha256};
+        let Self::PlanarUnion { sources } = self else { return None };
+        self.validate().ok()?;
+        let mut keys = sources.iter().map(serde_json::to_vec).collect::<std::result::Result<Vec<_>, _>>().ok()?;
+        keys.sort();
+        let mut hash = Sha256::new();
+        for key in keys {
+            hash.update((key.len() as u64).to_le_bytes());
+            hash.update(key);
+        }
+        Some(format!("union:{:x}", hash.finalize()))
+    }
     pub fn remap_features(&mut self, features: &std::collections::BTreeMap<u64, u64>) {
+        if let Self::PlanarUnion { sources } = self {
+            for part in sources.iter_mut().take(64) {
+                if let Some(mapped) = features.get(&part.producer) {
+                    part.producer = *mapped;
+                }
+                if part.source.union_leaf() {
+                    part.source.remap_features(features);
+                }
+            }
+        }
         if let Self::ShellPlanar { source_producer, source, .. } = self {
             if let Some(mapped) = features.get(source_producer) {
                 *source_producer = *mapped;
             }
-            if !matches!(source.as_ref(), Self::ShellPlanar { .. }) {
+            if !matches!(source.as_ref(), Self::ShellPlanar { .. } | Self::PlanarUnion { .. }) {
                 source.remap_features(features);
             }
         }
@@ -185,7 +220,13 @@ impl FaceCertificate {
                     && payload_sha256.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             }
             Self::ShellPlanar { source_producer, source, .. } => {
-                *source_producer != 0 && !matches!(source.as_ref(), Self::ShellPlanar { .. }) && source.validate().is_ok()
+                *source_producer != 0 && !matches!(source.as_ref(), Self::ShellPlanar { .. } | Self::PlanarUnion { .. }) && source.validate().is_ok()
+            }
+            Self::PlanarUnion { sources } => {
+                (2..=64).contains(&sources.len())
+                    && sources.iter().enumerate().all(|(i, p)| {
+                        p.producer != 0 && p.source.union_leaf() && p.source.validate().is_ok() && !sources.iter().take(i).any(|q| p == q)
+                    })
             }
         };
         if valid { Ok(()) } else { Err(DocError::Invalid("invalid face source certificate".into())) }
@@ -234,8 +275,28 @@ pub(crate) fn validate_certificate_json(value: &serde_json::Value) -> Result<()>
                 && nonzero("source_producer")
                 && fields.get("inner").and_then(serde_json::Value::as_bool).is_some()
                 && fields.get("source").is_some_and(|source| {
-                    source.as_object().is_some_and(|source| source.get("kind").and_then(serde_json::Value::as_str) != Some("shell_planar"))
-                        && validate_certificate_json(source).is_ok()
+                    source.as_object().is_some_and(|source| {
+                        !matches!(source.get("kind").and_then(serde_json::Value::as_str), Some("shell_planar" | "planar_union"))
+                    }) && validate_certificate_json(source).is_ok()
+                })
+        }
+        Some("planar_union") => {
+            fields.len() == 2
+                && fields.get("sources").and_then(serde_json::Value::as_array).is_some_and(|sources| {
+                    (2..=64).contains(&sources.len())
+                        && sources.iter().enumerate().all(|(i, part)| {
+                            if sources.iter().take(i).any(|previous| previous == part) {
+                                return false;
+                            }
+                            part.as_object().is_some_and(|p| {
+                                p.len() == 2
+                                    && p.get("producer").and_then(serde_json::Value::as_u64).is_some_and(|id| id != 0)
+                                    && p.get("source").is_some_and(|s| {
+                                        matches!(s.get("kind").and_then(serde_json::Value::as_str), Some("box" | "extrude_cap" | "extrude_side"))
+                                            && validate_certificate_json(s).is_ok()
+                                    })
+                            })
+                        })
                 })
         }
         _ => false,
@@ -254,7 +315,9 @@ pub(crate) fn shell_certificate_role(source: &FaceCertificate, inner: bool) -> R
         FaceCertificate::ExtrudeSide { curve, .. } => format!("side:{curve}"),
         FaceCertificate::ExtrudeCap { high, outer, holes, .. } => format!("cap:{}:{}", if *high { "high" } else { "low" }, cap_key(outer, holes)),
         FaceCertificate::Imported { payload_sha256, item, face } => format!("import:{payload_sha256}:{item}:{face}"),
-        FaceCertificate::ShellPlanar { .. } => return Err(DocError::Invalid("nested shell source certificates are unsupported".into())),
+        FaceCertificate::ShellPlanar { .. } | FaceCertificate::PlanarUnion { .. } => {
+            return Err(DocError::Invalid("nested shell source certificates are unsupported".into()));
+        }
     };
     Ok(format!("shell:{}:{role}", if inner { "inner" } else { "outer" }))
 }
@@ -391,6 +454,7 @@ impl Document {
             | Some(solvecraft_kernel::FaceSource::CertifiedExtrudeSide { producer, .. })
             | Some(solvecraft_kernel::FaceSource::CertifiedExtrudeCap { producer, .. })
             | Some(solvecraft_kernel::FaceSource::ShellPlanar { producer: Some(producer), .. })
+            | Some(solvecraft_kernel::FaceSource::PlanarUnion { producer: Some(producer), .. })
             | Some(solvecraft_kernel::FaceSource::Box { producer: Some(producer), .. }) => *producer,
             _ => name
                 .strip_prefix('F')
@@ -403,6 +467,8 @@ impl Document {
             name = format!("F{origin}:side:{curve}");
         } else if let Some(FaceCertificate::ShellPlanar { source, inner, .. }) = &certificate {
             name = format!("F{origin}:{}", shell_certificate_role(source, *inner)?);
+        } else if let Some(role) = certificate.as_ref().and_then(FaceCertificate::union_role) {
+            name = format!("F{origin}:{role}");
         } else if !name.starts_with(&format!("F{origin}:")) {
             name = format!("F{origin}:face:{index}");
         }
@@ -419,6 +485,21 @@ impl Document {
         let Some(source) = body.body.face_sources().and_then(|sources| sources.get(index)).and_then(Option::as_ref) else {
             return Ok(None);
         };
+        if let solvecraft_kernel::FaceSource::PlanarUnion { producer: Some(producer), sources, .. } = source {
+            let sources = sources
+                .iter()
+                .map(|s| {
+                    let (producer, source) = flat_source_certificate(s).ok_or_else(|| DocError::Invalid("invalid union source".into()))?;
+                    Ok(FaceContribution { producer, source: Box::new(source) })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if !self.union_certificate_producer_matches(*producer, &sources) {
+                return Err(DocError::Invalid("planar union source producer missing".into()));
+            }
+            let certificate = FaceCertificate::PlanarUnion { sources };
+            certificate.validate()?;
+            return Ok(Some(certificate));
+        }
         if let solvecraft_kernel::FaceSource::ShellPlanar { producer: Some(producer), source, inner, .. } = source {
             if !self.feature(*producer).is_some_and(|feature| matches!(feature.kind, FeatureKind::Shell { .. })) {
                 return Err(DocError::Invalid("shell source producer missing".into()));

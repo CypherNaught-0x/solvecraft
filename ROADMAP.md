@@ -166,7 +166,9 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   circular/rectangular extrusion-cap sections, including explicit Join targets. Source
   dimensions, parent heights, plane dependencies and suppression remain editable.
   Three coaxial circular sections also retain editable chord-length interpolation.
-  Twelve original loft recipes extend the editable-history suite to 55 files.
+  Thirteen original loft recipes extend the editable-history suite to 56 files.
+  Finite planar Join certificates retain contributing extrusion identities for
+  editable side-face loft attachments; native composite selector decoding is next.
   General multi-section interpolation, other native face recipes and the larger supplied
   designs remain incomplete.
 - Native F3D investigation: bounded archive/index inspection via `file.inspect_f3d`

@@ -491,6 +491,12 @@ pub(super) fn paste(
             face.body = new.clone();
             if let Some(certificate) = &mut face.certificate {
                 certificate.remap_features(&features);
+                if let Some(role) = certificate.union_role()
+                    && let Some(name) = &mut face.name
+                    && let Some((prefix, _)) = name.split_once(':')
+                {
+                    *name = format!("{prefix}:{role}");
+                }
             }
             scratch.doc_mut().appearances.faces.push(face);
         }

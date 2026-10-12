@@ -420,6 +420,7 @@ fn certified_planar_construction(body: &crate::ModelBody, index: usize) -> bool 
                     | solvecraft_kernel::FaceSource::Box { producer: Some(_), .. }
                     | solvecraft_kernel::FaceSource::CertifiedExtrudeSide { plane: Some(_), .. }
                     | solvecraft_kernel::FaceSource::CertifiedExtrudeCap { .. }
+                    | solvecraft_kernel::FaceSource::PlanarUnion { .. }
             )
         )
     })

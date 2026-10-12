@@ -1361,3 +1361,45 @@ The local native loft controls pass independent volume and 0.01 mm bounds checks
 including the three-section baseline, source edit and plane edit. Kernel tests
 also distinguish both interpolation modes with an independent polynomial volume
 integral and reject degenerate, noncircular, offset and non-finite sections.
+
+
+## Finite planar Join provenance
+
+SolidCraft now preserves ordinary construction identities through a planar Join.
+For supported convex planar faces with exact linear boundaries, the kernel clips
+finite source polygons against each output face and proves complete coverage.
+Only contributors with positive-area overlap enter the identity. Uncovered gaps,
+unknown overlapping sources, opposing faces and ambiguous source frames revoke
+the certificate. An unrelated disjoint face on the same infinite plane is neither
+a contributor nor a blocker. Work, face, fragment and metadata limits bound this
+optional provenance calculation; exhausting them drops identity, not geometry.
+
+Multiple contributions form a flat, bounded `PlanarUnion` descriptor. Repeated
+joins retain all contributors without nesting. Rigid transforms update their
+planes, and the first contributing operand supplies the canonical attachment
+frame. Unchanged faces retain their original identity. Untrimmed untapered Join
+extrusions now stamp their generated source curves and cap signatures.
+
+Format 20 saves the joining feature and each original construction contribution
+in face certificates. Resolution checks all producers and exact current identities.
+Independent component copies remap these producers and source sketches, including
+certificate names used by attachments and face styles. Missing, suppressed or
+changed contributors cannot be replaced by a geometrically nearby face.
+
+The original `loft-face-joined-side` recipe is a 10 x 20 mm footprint extruded 5 mm,
+then joined from the same sketch up to 10 mm. Its +X face lofts 30 mm to a 20 x 30 mm
+rectangle. The analytic total volume is 14000 mm3. Width, Join height and upper-
+plane edits expect 13000, 16500 and 18000 mm3 respectively. The 56-fixture suite
+checks saved history, volume, bounds, reopen and undo. Focused tests cover repeated
+unions, unrelated coplanar faces, gaps, transformations, independent copies,
+changed producers and malformed certificates.
+
+This is the construction-history foundation for the supplied adapter's side
+faces. Native composite face selectors still require decoding their source-curve
+roles and bounded incidence; this milestone does not claim the adapter imports.
+
+Validation: `cargo xtask ci` passed all 30 test binaries, including 572 engine,
+114 document, 112 I/O and 319 UI tests, all 56 original saved fixtures, wasm,
+and the HardEdgeBasin opening regression. All 34 local native-import groups
+also passed. The historical lost-patch regression still retains its original
+200 mm3 material, and fully consumed strong face attachments still fail closed.

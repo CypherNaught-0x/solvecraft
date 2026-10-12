@@ -1744,20 +1744,21 @@ mod naming {
         let mut legacy = Session::new(solvecraft_doc::Document::from_json(&old.to_json()).unwrap());
         assert_eq!(attached(&legacy), Some(10.));
         assert!((top(&mut legacy) - 15.).abs() < 1e-6);
-        // The upstream join consumes the certified body; new attachments cannot follow its substitute roof.
+        // Cover the entire original roof: a surviving finite patch can now
+        // retain its construction identity, but a substitute roof cannot.
         for target in [&mut s, &mut legacy] {
             run(target, "timeline.roll_to", json!({"feature": "Block"}));
             run(target, "sketch.create", json!({"plane": "XY", "name": "B"}));
-            run(target, "sketch.rectangle.two_point", json!({"p0": [8, -5], "p1": [45, 35]}));
+            run(target, "sketch.rectangle.two_point", json!({"p0": [-5, -5], "p1": [45, 35]}));
             run(target, "sketch.finish", json!({}));
             run(target, "solid.extrude", json!({"sketch": "B", "distance": 20, "operation": "join", "name": "Boss"}));
             run(target, "timeline.roll_to", json!({}));
         }
-        assert_eq!(attached(&legacy), Some(10.), "historical weak naming retains its saved geometry behavior");
-        assert!((top(&mut legacy) - 20.).abs() < 1e-6);
+        assert_eq!(attached(&legacy), Some(20.), "historical weak naming may follow the substitute roof");
+        assert!((top(&mut legacy) - 25.).abs() < 1e-6);
         let legacy_reopened = Session::new(solvecraft_doc::Document::from_json(&legacy.doc.to_json()).unwrap());
-        assert_eq!(attached(&legacy_reopened), Some(10.));
-        assert!((legacy_reopened.model.state().bodies[0].mesh().bounds().max.z - 20.).abs() < 1e-6);
+        assert_eq!(attached(&legacy_reopened), Some(20.));
+        assert!((legacy_reopened.model.state().bodies[0].mesh().bounds().max.z - 25.).abs() < 1e-6);
         let solvecraft_doc::FeatureKind::Sketch { plane: solvecraft_doc::PlaneRef::Face { anchor, .. }, .. } =
             &legacy_reopened.doc.find_feature("Top").unwrap().kind
         else {

@@ -526,7 +526,13 @@ fn saved_stepped_tab_cut_piece_projection_is_lost_without_expanding_material() {
     let stem = crate::naming::strip_piece(&former);
     let current_names = crate::naming::face_names(current);
     let merged = current_names.iter().position(|name| name == stem).unwrap();
-    assert!(current.body.face_was_coalesced(merged), "new exact generated-wall construction supplies the loss-only witness");
+    assert!(
+        matches!(
+            doc.strong_face_target(current, merged, at).unwrap().certificate,
+            Some(crate::config::FaceCertificate::Box { axis: 0, high: false })
+        ),
+        "the unchanged outer wall retains its exact box construction as a loss-only witness"
+    );
     assert!(!current_names.contains(&former));
     let mut sketch = Sketch::new();
     sketch.add_link(LinkKind::Project, LinkSource::Face { body: "Case".into(), at }, &resolved.geom).unwrap();

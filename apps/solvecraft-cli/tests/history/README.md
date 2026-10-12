@@ -151,3 +151,12 @@ integrals of `pi * r(u)^2 * z'(u)` for the quadratic interpolants, not values
 captured from either CAD application's tessellation. Each recipe checks diameter
 and middle-plane edits independently, then reopen and undo. These fixtures bring
 the suite to 55 original saved designs.
+
+
+`loft-face-joined-side` adds a side-face attachment after two same-profile
+extrusions, the second a Join. Its footprint is 10 x 20 mm and its final height
+10 mm. A loft from the +X face to a 20 x 30 mm rectangle 30 mm away contributes
+12000 mm³; the pedestal contributes 2000 mm³. Width, Join-height and destination-
+plane edits check volumes 13000, 16500 and 18000 mm³ and exact bounding boxes.
+The saved face certificate retains both contributing operations. There are now
+56 original saved designs.

@@ -142,7 +142,9 @@ fn legacy_internal_capture_refuses_an_uncaptured_source_in_another_component() {
     let component = run(&mut s, "component.create", json!({"name":"Source"}));
     let occurrence = component["occurrence"].as_u64().unwrap();
     run(&mut s, "solid.box", json!({"length":40,"width":30,"height":20,"body_name":"Stock"}));
-    run(&mut s, "solid.press_pull", json!({"face":[5,5,20],"distance":5}));
+    // A straight joined cap now has an exact certificate. A tapered tool
+    // deliberately retains the legacy-only path exercised by this test.
+    run(&mut s, "solid.extrude", json!({"face":[5,5,20],"distance":5,"taper":"5 deg","operation":"join"}));
     run(&mut s, "component.activate", json!({"component":0}));
     run(&mut s, "occurrence.move", json!({"occurrence":occurrence,"translate":[30,0,0],"capture":false}));
     let state = s.model.state();

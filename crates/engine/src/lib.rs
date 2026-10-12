@@ -665,6 +665,8 @@ mod extent_tests;
 #[cfg(test)]
 mod loft_face_tests;
 #[cfg(test)]
+mod loft_union_tests;
+#[cfg(test)]
 mod pattern_suppress_tests;
 #[cfg(test)]
 mod profile_curves_tests;

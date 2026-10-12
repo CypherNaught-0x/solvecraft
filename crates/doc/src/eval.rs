@@ -951,7 +951,7 @@ fn apply_op(state: &mut ModelState, f: &Feature, tools: Vec<Body>, op: Operation
                 }
                 let absorbed: std::collections::BTreeSet<String> = met.into_iter().skip(1).collect();
                 if let Some(mb) = state.bodies.iter_mut().find(|b| b.name == keep) {
-                    *mb = ModelBody::new(mb.name.clone(), acc, mb.feature);
+                    *mb = ModelBody::new(mb.name.clone(), acc.with_union_certificate(f.id)?, mb.feature);
                 }
                 state.bodies.retain(|b| !absorbed.contains(&b.name));
                 for t in state.threads.iter_mut().filter(|t| absorbed.contains(&t.body)) {
@@ -1767,7 +1767,7 @@ fn feature_tools_with_constructor(
             if untrimmed {
                 *constructor = Some(ExtrudeConstructor { plane: ss.plane, interval: (lo + off, hi + off) });
             }
-            if *operation == Operation::NewBody && taper.is_none() {
+            if (*operation == Operation::NewBody || (*operation == Operation::Join && untrimmed)) && taper.is_none() {
                 let cap_bindings = crate::config::extrude_cap_bindings(&ss, &tools, 10_000_000);
                 tools = tools
                     .into_iter()
