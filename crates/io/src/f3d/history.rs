@@ -304,9 +304,10 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
         }
         let offset = r.reference()?;
         require_class(classes, offset, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
-        // Minimum (1) and maximum (2) solutions coincide for the single parallel
-        // plane accepted by reconstruction; multi-intersection targets still fail.
-        if !matches!(r.u32()?, 1 | 2) {
+        // Older planar-face extents retain 0; explicit minimum (1) and maximum (2)
+        // are relevant only to body targets in the public API. Reconstruction accepts
+        // only one parallel plane, so these observed modes share one exact endpoint.
+        if !matches!(r.u32()?, 0..=2) {
             return Err(invalid("unsupported To Object extrusion end flags"));
         }
         zeros(r, 31)?;
@@ -487,6 +488,9 @@ mod endpoint_tests {
         let mut hinted = crate::f3d::import_tests::Fixture(f.0.clone());
         hinted.0.get_mut(&9).unwrap().2[25] = 1;
         assert!(hinted.design().history().is_ok());
+        let mut legacy = crate::f3d::import_tests::Fixture(f.0.clone());
+        legacy.0.get_mut(&9).unwrap().2[107] = 0;
+        assert!(legacy.design().history().is_ok());
         let mut maximum = crate::f3d::import_tests::Fixture(f.0.clone());
         maximum.0.get_mut(&9).unwrap().2[107] = 2;
         assert!(maximum.design().history().is_ok());

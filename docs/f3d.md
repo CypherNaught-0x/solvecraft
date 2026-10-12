@@ -1678,3 +1678,21 @@ Validation on upstream `ed102b5` passed all 30 CI binaries, 577 engine tests,
 All 36 local native-import groups passed, including 56 endpoint controls and the
 existing face-loft controls. The reversed rectangular model was rendered and
 visually checked; the image stays local. The larger corpus remains incomplete.
+### Legacy single-plane solution modes
+
+The original and resaved adapter retain solution mode 0 for ten planar-face To
+Object cuts. Public API inspection confirms these are faces, and Autodesk's
+[solution-mode API documentation](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/ToEntityExtentDefinition_isMinimumSolution.htm)
+limits minimum/maximum selection to body targets. The importer therefore accepts
+observed modes 0, 1 and 2 for its existing unique parallel-plane endpoint path.
+This does not relax target ownership, face certificates or the rejection of
+ambiguous body and curved/nonparallel targets. Other mode values are rejected.
+A local regression compares all ten decoded entries and dependencies between the
+original and resaved adapter; the timeline coverage becomes 39 of 49 entries.
+Twelve additional controls authored through the retired public To Object API
+exercise source, target and offset edits; modern Fusion writes mode 1 for these.
+
+Validation passed all 30 CI test binaries, the 68 original editable-history
+fixtures, 68 local native endpoint controls and all 14 local inspection tests.
+The HardEdgeBasin opening regression passed in 0.87 seconds. The additional
+decoded adapter entries do not imply that its complete geometry imports yet.

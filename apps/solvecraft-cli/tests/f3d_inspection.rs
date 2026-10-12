@@ -287,7 +287,7 @@ fn legacy_timeline_preserves_every_entry_and_decodes_versioned_sketches() {
     let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
     let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-corpus-measurements.json")).unwrap()).unwrap();
     for (name, count, decoded, sketch_count) in
-        [("adapter-x20-makita.f3d", 49, 25, 12), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 35, 17, 3), ("R36S Grip.f3d", 53, 8, 2)]
+        [("adapter-x20-makita.f3d", 49, 39, 12), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 35, 17, 3), ("R36S Grip.f3d", 53, 8, 2)]
     {
         let mut s = Session::default();
         let before = s.doc.clone();
@@ -531,7 +531,7 @@ fn analytic_legacy_profile_boundaries_match_resaved_records() {
             }
         }
     }
-    assert_eq!(successes, 16, "analytic legacy profile coverage changed");
+    assert_eq!(successes, 20, "analytic legacy profile coverage changed");
 }
 
 #[test]
@@ -565,6 +565,41 @@ fn legacy_offset_planes_match_public_api_dependencies_and_placements() {
             assert_eq!(&planes, expected);
         } else {
             original = Some(planes);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the local original/resaved adapter and public API extent measurements"]
+fn legacy_planar_endpoints_preserve_timeline_names_and_dependencies() {
+    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-adapter-extents.json")).unwrap()).unwrap();
+    let names: Vec<_> = api
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["extentOne"]["type"] == "adsk::fusion::ToEntityExtentDefinition")
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 10);
+    let mut original = None;
+    for path in [corpus.join("adapter-x20-makita.f3d"), probes.join("corpus-adapter-x20-makita.f3d")] {
+        let ds = solvecraft_engine::io::f3d::read_f3d(&std::fs::read(path).unwrap()).unwrap();
+        let decoded: Vec<_> =
+            ds[0].timeline().unwrap().into_iter().filter_map(|entry| entry.feature.ok()).filter(|f| names.contains(&f.name.as_str())).collect();
+        assert_eq!(decoded.len(), 10);
+        for feature in &decoded {
+            assert!(matches!(
+                feature.kind,
+                solvecraft_engine::io::f3d::HistoryKind::Extrude { operation: solvecraft_engine::doc::Operation::Cut, .. }
+            ));
+            assert!(!feature.dependencies.is_empty());
+        }
+        if let Some(original) = &original {
+            assert_eq!(&decoded, original);
+        } else {
+            original = Some(decoded);
         }
     }
 }
