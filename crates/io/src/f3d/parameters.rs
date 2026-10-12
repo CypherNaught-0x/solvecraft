@@ -63,7 +63,7 @@ impl Design {
                 p.owner = Some(owner);
                 r.take(5)?; // property ordinal and flags
                 let value = if integer {
-                    if r.take(1)? != [1] || solvecraft_doc::expr::Kind::from_unit(&p.display_unit) != solvecraft_doc::expr::Kind::Unitless {
+                    if r.take(1)? != [1] || solidcraft_doc::expr::Kind::from_unit(&p.display_unit) != solidcraft_doc::expr::Kind::Unitless {
                         return Err(invalid("unsupported integer parameter binding"));
                     }
                     f64::from(r.u32()?)

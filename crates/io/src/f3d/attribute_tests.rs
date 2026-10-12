@@ -71,7 +71,7 @@ fn native_centerlines_stay_out_of_profiles_and_keep_parameter_edits() {
     reference(&mut secondary, 3);
     f.0.get_mut(&70).unwrap().3 = Some(secondary);
     let mut doc = f.design().to_document("Centerline prism").unwrap();
-    let solvecraft_doc::FeatureKind::Sketch { sketch, .. } = &doc.features[0].kind else { panic!("sketch") };
+    let solidcraft_doc::FeatureKind::Sketch { sketch, .. } = &doc.features[0].kind else { panic!("sketch") };
     let axis = sketch.curves.iter().find(|c| c.id == "c81").unwrap();
     assert!(axis.centerline && !axis.construction);
     volume(&doc, 30. * 20. * 17.);

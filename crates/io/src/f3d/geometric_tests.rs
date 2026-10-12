@@ -52,7 +52,7 @@ fn constraint_kind_arity_and_operand_classes_must_agree() {
         assert!(f.design().sketch_constraints().is_err());
     }
     // An arc midpoint is not a chord midpoint; that operand combination cannot
-    // use SolveCraft's line-only midpoint constraint.
+    // use SolidCraft's line-only midpoint constraint.
     let mut f = fixture(false);
     relation(&mut f, 55, 0x1000, &[41, 31]);
     assert!(f.design().sketch_constraints().is_err());

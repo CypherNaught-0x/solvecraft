@@ -1,6 +1,6 @@
 //! Shared section parameter for the verified three-circle interpolation mode.
 use crate::{KernelError, Result};
-use solvecraft_geom::{Loop2, Plane, Seg2, Vec3};
+use solidcraft_geom::{Loop2, Plane, Seg2, Vec3};
 
 fn invalid() -> KernelError {
     KernelError::Invalid("circular chord loft requires three complete coaxial circles with a monotone axial span".into())
@@ -77,7 +77,7 @@ pub(crate) fn middle_parameter(sections: &[&(Plane, Loop2)]) -> Result<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use solvecraft_geom::Vec2;
+    use solidcraft_geom::Vec2;
 
     fn sections() -> Vec<(Plane, Loop2)> {
         [(0., 7.), (23., 16.), (71., 11.)]

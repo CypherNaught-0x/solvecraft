@@ -1,5 +1,5 @@
 use serde::Serialize;
-use solvecraft_geom::{Mesh, Vec3};
+use solidcraft_geom::{Mesh, Vec3};
 use truck_meshalgo::prelude::*;
 use truck_modeling as mt;
 
@@ -45,20 +45,20 @@ pub struct Body {
 #[derive(Clone, Debug, PartialEq)]
 pub enum FaceSource {
     ExtrudeSide {
-        segment: solvecraft_geom::Seg2,
-        plane: Option<solvecraft_geom::Plane>,
+        segment: solidcraft_geom::Seg2,
+        plane: Option<solidcraft_geom::Plane>,
         coalesced: bool,
     },
     CertifiedExtrudeSide {
         producer: u64,
         sketch: u64,
         curve: String,
-        plane: Option<solvecraft_geom::Plane>,
+        plane: Option<solidcraft_geom::Plane>,
     },
     ExtrudeCap {
         high: bool,
-        region: solvecraft_geom::Region2,
-        plane: solvecraft_geom::Plane,
+        region: solidcraft_geom::Region2,
+        plane: solidcraft_geom::Plane,
     },
     CertifiedExtrudeCap {
         producer: u64,
@@ -66,26 +66,26 @@ pub enum FaceSource {
         high: bool,
         outer: Vec<String>,
         holes: Vec<Vec<String>>,
-        plane: solvecraft_geom::Plane,
+        plane: solidcraft_geom::Plane,
     },
     Box {
         producer: Option<u64>,
         axis: u8,
         high: bool,
-        plane: solvecraft_geom::Plane,
+        plane: solidcraft_geom::Plane,
     },
     ShellPlanar {
         producer: Option<u64>,
         source: Box<FaceSource>,
         inner: bool,
-        plane: solvecraft_geom::Plane,
+        plane: solidcraft_geom::Plane,
     },
     /// Finite planar union with all contributing construction identities.
     /// Contributions are bounded, canonical, flat leaves; never nested unions.
     PlanarUnion {
         producer: Option<u64>,
         sources: Vec<FaceSource>,
-        plane: solvecraft_geom::Plane,
+        plane: solidcraft_geom::Plane,
     },
     Imported {
         item: u64,
@@ -99,7 +99,7 @@ pub type CapSignature = (Vec<String>, Vec<Vec<String>>);
 type FaceSources = std::sync::Arc<Vec<Option<FaceSource>>>;
 
 impl FaceSource {
-    fn plane_mut(&mut self) -> Option<&mut solvecraft_geom::Plane> {
+    fn plane_mut(&mut self) -> Option<&mut solidcraft_geom::Plane> {
         match self {
             Self::ExtrudeSide { plane, .. } | Self::CertifiedExtrudeSide { plane, .. } => plane.as_mut(),
             Self::ExtrudeCap { plane, .. }
@@ -540,7 +540,7 @@ impl Body {
     }
 
     /// An exact construction/import plane; never inferred from tessellation.
-    pub fn face_plane(&self, index: usize) -> Option<solvecraft_geom::Plane> {
+    pub fn face_plane(&self, index: usize) -> Option<solidcraft_geom::Plane> {
         if index >= 50_000 {
             return None;
         }
@@ -557,7 +557,7 @@ impl Body {
     }
 
     /// Exact current planar surface for an explicitly fixed snapshot, without source lineage.
-    pub fn planar_face(&self, index: usize) -> Option<solvecraft_geom::Plane> {
+    pub fn planar_face(&self, index: usize) -> Option<solidcraft_geom::Plane> {
         if index >= 50_000 {
             return None;
         }
@@ -566,7 +566,7 @@ impl Body {
                 mt::Surface::Plane(plane) => {
                     let u = plane.u_axis();
                     let v = plane.v_axis();
-                    solvecraft_geom::Plane::new(from_p3(plane.origin()), Vec3::new(u.x, u.y, u.z), Vec3::new(v.x, v.y, v.z))
+                    solidcraft_geom::Plane::new(from_p3(plane.origin()), Vec3::new(u.x, u.y, u.z), Vec3::new(v.x, v.y, v.z))
                 }
                 _ => None,
             });
@@ -655,9 +655,9 @@ impl Body {
         let translation = Vec3::new(m[3][0], m[3][1], m[3][2]);
         let reflected = vector(Vec3::X).dot(vector(Vec3::Y).cross(vector(Vec3::Z))) < 0.;
         let mut sources = sources.as_ref().clone();
-        let transform_plane = |plane: &mut solvecraft_geom::Plane| -> Result<()> {
+        let transform_plane = |plane: &mut solidcraft_geom::Plane| -> Result<()> {
             *plane =
-                solvecraft_geom::Plane::new(vector(plane.origin) + translation, vector(plane.x), vector(plane.y) * if reflected { -1. } else { 1. })
+                solidcraft_geom::Plane::new(vector(plane.origin) + translation, vector(plane.x), vector(plane.y) * if reflected { -1. } else { 1. })
                     .ok_or_else(|| KernelError::Invalid("degenerate transformed face plane".into()))?;
             Ok(())
         };
@@ -799,7 +799,7 @@ impl Body {
 
     /// Characteristic size (bounding box diagonal) for tolerances.
     pub fn size(&self) -> f64 {
-        let mut b = solvecraft_geom::Aabb3::EMPTY;
+        let mut b = solidcraft_geom::Aabb3::EMPTY;
         if let Some(m) = &self.mesh {
             for p in &m.positions {
                 b.add(*p);

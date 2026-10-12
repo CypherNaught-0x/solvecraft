@@ -3,7 +3,7 @@
 use super::from_p3;
 use super::planar_sources::{actual_plane, certified_plane, descriptor_cost, same_support};
 use crate::{Body, FaceSource, KernelError, Result, guard};
-use solvecraft_geom::{Plane, Vec2};
+use solidcraft_geom::{Plane, Vec2};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use truck_modeling as mt;
@@ -85,7 +85,7 @@ fn polygon(face: &mt::Face, plane: &Plane, work: &mut usize) -> Result<Option<Ve
             return Ok(None);
         }
         let (a, b) = if edge.orientation() { (a, b) } else { (b, a) };
-        if last.is_some_and(|previous: solvecraft_geom::Vec3| previous.dist(a) > tolerance) {
+        if last.is_some_and(|previous: solidcraft_geom::Vec3| previous.dist(a) > tolerance) {
             return Ok(None);
         }
         result.push(plane.to_local(a));
@@ -332,7 +332,7 @@ impl Body {
 mod tests {
     use super::*;
     use crate::{BoolOp, boolean, box_solid, measure};
-    use solvecraft_geom::Vec3;
+    use solidcraft_geom::Vec3;
 
     fn block(x: f64, z: f64, width: f64, height: f64, producer: u64) -> Body {
         box_solid(Vec3::new(x, 0., z), Vec3::new(x + width, 20., z + height)).unwrap().with_box_certificate(producer).unwrap()

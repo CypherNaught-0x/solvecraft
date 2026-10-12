@@ -1,6 +1,6 @@
 use super::relationship_tests::{reference, refs, string, u32, u64, wide};
 use super::*;
-use solvecraft_doc::{Document, FeatureKind, Model};
+use solidcraft_doc::{Document, FeatureKind, Model};
 
 // Original, field-authored records extending the relationship fixture. Values,
 // identities, strings and archive framing are authored here, not copied exports.
@@ -176,7 +176,7 @@ pub(super) fn volume(doc: &Document, want: f64) {
     for result in &model.results {
         assert!(result.error.is_none(), "{result:?}");
     }
-    let got = model.state().bodies.iter().map(|b| solvecraft_kernel::measure(&b.body).unwrap().volume).sum::<f64>();
+    let got = model.state().bodies.iter().map(|b| solidcraft_kernel::measure(&b.body).unwrap().volume).sum::<f64>();
     assert!((got - want).abs() < want.max(1.) * 1e-3, "volume {got} != {want}");
 }
 #[test]

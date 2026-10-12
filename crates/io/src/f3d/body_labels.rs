@@ -286,8 +286,8 @@ mod tests {
     #[test]
     #[ignore = "requires local original adapter and unchanged public API resave"]
     fn original_adapter_extrusion_and_loft_targets_own_each_body_label() {
-        let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
-        let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+        let corpus = std::path::PathBuf::from(solidcraft_geom::env::var_os("F3D_CORPUS").unwrap());
+        let probes = std::path::PathBuf::from(solidcraft_geom::env::var_os("F3D_PROBES").unwrap());
         let mut results = Vec::new();
         for path in [corpus.join("adapter-x20-makita.f3d"), probes.join("corpus-adapter-x20-makita.f3d")] {
             let designs = read_f3d(&std::fs::read(&path).unwrap()).unwrap();

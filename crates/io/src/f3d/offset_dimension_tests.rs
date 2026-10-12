@@ -1,7 +1,7 @@
 use super::import_tests::{Fixture, volume};
 use super::polygon_tests::rectangle;
 use super::relationship_tests::{reference, refs, u32, u64, wide};
-use solvecraft_doc::sketch::ConstraintKind;
+use solidcraft_doc::sketch::ConstraintKind;
 
 fn offset(entities: [u64; 2], flags: u64) -> Fixture {
     let mut f = rectangle();

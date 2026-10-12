@@ -1,8 +1,8 @@
 use super::import_tests::{Fixture, common, volume};
 use super::polygon_tests::rectangle;
 use super::relationship_tests::{reference, refs, u32, u64, wide};
-use solvecraft_doc::sketch::{ConstraintKind, Sketch};
-use solvecraft_geom::Vec2;
+use solidcraft_doc::sketch::{ConstraintKind, Sketch};
+use solidcraft_geom::Vec2;
 
 fn angle_record(quadrants: [u32; 2]) -> Vec<u8> {
     let mut b = vec![0; 4];
@@ -97,7 +97,7 @@ fn angular_quadrants_keep_distinct_edit_directions_at_ninety_degrees() {
         volume(&doc, 30. * 20. * 17.);
         doc.change_param("angle", "60 deg", None, None).unwrap();
         volume(&doc, 30. * 20. * 17. * 3_f64.sqrt() / 2.);
-        let mut model = solvecraft_doc::Model::new();
+        let mut model = solidcraft_doc::Model::new();
         model.evaluate(&doc);
         let state = model.state();
         let sketch = &state.sketches[0].sketch;
@@ -146,7 +146,7 @@ fn angular_direction_mapping_preserves_clockwise_and_reversed_lines() {
         let kind = super::import::angle_constraint(&s, a, b, value, quadrant).unwrap();
         assert!(matches!(kind, ConstraintKind::Angle { flip, .. } if flip == (quadrant % 2 == 1)));
         s.add_constraint(kind, None).unwrap();
-        assert!(solvecraft_doc::sketch::solve(&mut s).max_residual < 1e-6);
+        assert!(solidcraft_doc::sketch::solve(&mut s).max_residual < 1e-6);
     }
 }
 

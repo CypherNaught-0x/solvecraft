@@ -2,11 +2,11 @@
 use super::import_tests::{Fixture, common, fixture, volume};
 use super::relationship_tests::{reference, refs, u32, wide};
 use super::*;
-use solvecraft_doc::{Document, FeatureKind, Model, PlaneRef};
+use solidcraft_doc::{Document, FeatureKind, Model, PlaneRef};
 
 #[test]
 fn rotated_sketch_basis_retains_live_origin_plane_offset_dependencies() {
-    use solvecraft_geom::{Plane, Vec3};
+    use solidcraft_geom::{Plane, Vec3};
     for (name, origin) in [("XY", Plane::XY), ("XZ", Plane::XZ), ("YZ", Plane::YZ)] {
         let mut doc = Document::default();
         doc.set_param("height", "20 mm", Some("mm"), None).unwrap();
@@ -59,7 +59,7 @@ fn legacy_origin_geometry_retains_exact_root_plane_identity() {
         let d = f.design();
         let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
         let records = Records::new(&d);
-        assert_eq!(planes::origin(&records, &classes, 1000, 3).unwrap(), ("XY".into(), solvecraft_geom::Plane::XY));
+        assert_eq!(planes::origin(&records, &classes, 1000, 3).unwrap(), ("XY".into(), solidcraft_geom::Plane::XY));
         assert!(planes::origin(&records, &classes, 1000, 4).is_err());
     }
 }
@@ -67,8 +67,8 @@ fn legacy_origin_geometry_retains_exact_root_plane_identity() {
 #[test]
 #[ignore = "requires local original adapter and unchanged public API resave"]
 fn original_adapter_origin_planes_match_modern_resave() {
-    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
-    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let corpus = std::path::PathBuf::from(solidcraft_geom::env::var_os("F3D_CORPUS").unwrap());
+    let probes = std::path::PathBuf::from(solidcraft_geom::env::var_os("F3D_PROBES").unwrap());
     let mut original = None;
     for path in [corpus.join("adapter-x20-makita.f3d"), probes.join("corpus-adapter-x20-makita.f3d")] {
         let designs = read_f3d(&std::fs::read(path).unwrap()).unwrap();
@@ -88,9 +88,9 @@ fn original_adapter_origin_planes_match_modern_resave() {
             assert_eq!(
                 *plane,
                 match name.as_str() {
-                    "XY" => solvecraft_geom::Plane::XY,
-                    "XZ" => solvecraft_geom::Plane::XZ,
-                    "YZ" => solvecraft_geom::Plane::YZ,
+                    "XY" => solidcraft_geom::Plane::XY,
+                    "XZ" => solidcraft_geom::Plane::XZ,
+                    "YZ" => solidcraft_geom::Plane::YZ,
                     _ => panic!("unexpected origin plane"),
                 }
             );
@@ -236,7 +236,7 @@ fn compact_identity_plane_transform_matches_explicit_matrix() {
         let records = Records::new(&d);
         let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
         let definition = planes::definition(&records, &classes, 3000, 8).unwrap();
-        assert_eq!(definition.plane, solvecraft_geom::Plane::XY);
+        assert_eq!(definition.plane, solidcraft_geom::Plane::XY);
     }
     let mut f = planes_fixture();
     f.0.get_mut(&3000).unwrap().2[50] = 2;

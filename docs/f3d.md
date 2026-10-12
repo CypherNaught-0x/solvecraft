@@ -13,14 +13,14 @@ public API; no proprietary or GPL/LGPL/AGPL implementation was used.
 object index against its bulk records, leaving the current design untouched:
 
 ```sh
-cargo run --profile ci -p solvecraft-cli -- exec file.inspect_f3d '{"path":"/path/to/part.f3d"}'
+cargo run --profile ci -p solidcraft-cli -- exec file.inspect_f3d '{"path":"/path/to/part.f3d"}'
 ```
 
 `doc.open` reconstructs supported sketches, constraints, offset planes and extrusions and
 regenerates the model before replacing the current document. Unsupported schemas
 or regeneration failures leave the current document/model/undo state intact.
 An imported document is unsaved with no source path: saving it uses a new
-`.solvecraft` file, never JSON written over the original F3D. The desktop open
+`.solidcraft` file, never JSON written over the original F3D. The desktop open
 dialog and browser fallback picker include F3D, and the CLI supports opening,
 measuring and benchmarking it. Browser file pickers reject oversized F3D files
 before allocating their buffers; engine reads enforce the same archive limit.
@@ -176,7 +176,7 @@ Point class `C2CEDAE7-1716-47C1-B7B1-07B70081D0FB` version 11 stores local coord
 fixation and origin identity. Five independent point/circle fixation controls
 establish that fixed state is distinct from derived constraint state. Treating the
 latter as a Fix would make the supplied diameter dimension uneditable. The origin
-maps to SolveCraft's existing fixed origin instead of creating a duplicate point.
+maps to SolidCraft's existing fixed origin instead of creating a duplicate point.
 Taper volume measurements establish the same positive sign in both applications.
 
 Independent API inspection of the three larger designs found loft, fillet,
@@ -202,11 +202,11 @@ corpus test checks all four files, expected counts, a five-second budget, and
 unchanged document state:
 
 ```sh
-SOLVECRAFT_F3D_CORPUS=/path/to/test_files cargo test --profile ci -p solvecraft-cli --test f3d_inspection supplied_f3d_indexes -- --ignored --nocapture
-SOLVECRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solvecraft-cli --test f3d_inspection controlled_parameter_edits_match_fusion_api -- --ignored
-SOLVECRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solvecraft-cli --test f3d_inspection controlled_history_matches_fusion_api -- --ignored
-SOLVECRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solvecraft-cli --test f3d_inspection controlled_construction_and_constraint_removal -- --ignored
-SOLVECRAFT_F3D_PROBES=/path/to/probes SOLVECRAFT_F3D_CORPUS=/path/to/test_files cargo test --profile ci -p solvecraft-cli --test f3d_import -- --ignored
+SOLIDCRAFT_F3D_CORPUS=/path/to/test_files cargo test --profile ci -p solidcraft-cli --test f3d_inspection supplied_f3d_indexes -- --ignored --nocapture
+SOLIDCRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solidcraft-cli --test f3d_inspection controlled_parameter_edits_match_fusion_api -- --ignored
+SOLIDCRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solidcraft-cli --test f3d_inspection controlled_history_matches_fusion_api -- --ignored
+SOLIDCRAFT_F3D_PROBES=/path/to/probes cargo test --profile ci -p solidcraft-cli --test f3d_inspection controlled_construction_and_constraint_removal -- --ignored
+SOLIDCRAFT_F3D_PROBES=/path/to/probes SOLIDCRAFT_F3D_CORPUS=/path/to/test_files cargo test --profile ci -p solidcraft-cli --test f3d_import -- --ignored
 ```
 
 Observed inspection times were under 8 ms per archive. The controlled-variant
@@ -214,7 +214,7 @@ test compares expressions, units, values, circle centers and radii directly to
 the separately recorded Fusion API measurements. Actual Fusion files remain
 outside the repository; ordinary CI uses original synthetic records.
 
-Twenty-seven [small editable SolveCraft fixtures](../apps/solvecraft-cli/tests/history/README.md)
+Twenty-seven [small editable SolidCraft fixtures](../apps/solidcraft-cli/tests/history/README.md)
 provide command recipes, saved documents and independent analytic volume/bounds
 checks. They exercise parameter edits, signed heights, placement, all four body
 operations, reordering, suppression, reopening and undo. These native fixtures run
@@ -290,7 +290,7 @@ was also rendered and visually checked; local generated evidence stays outside G
 ## Native feature input identities
 
 For mm/degree inputs, an extrusion's distance and taper use their native names
-directly in SolveCraft's feature parameter table. The original expressions live
+directly in SolidCraft's feature parameter table. The original expressions live
 on the feature, and the duplicate stored parameters are removed. Parameter edits
 and timeline edits therefore affect the same definition. The local rectangle
 test makes width depend on the native extrusion height, edits the extrusion via
@@ -313,7 +313,7 @@ per loop, one outer/inner flag per loop, then a zero trailer. Curve entries reta
 orientation separately from boundary role. Five controls cover an annulus with
 independent inner/outer diameter changes, two disjoint holes, and a rectangular
 outer loop with a circular hole. Exactly one outer loop and disjoint complete
-curve identities are required. The importer uses SolveCraft's `WholeBoundaries`
+curve identities are required. The importer uses SolidCraft's `WholeBoundaries`
 selection, with canonical outer/hole IDs, so missing holes cannot become solid disks.
 
 Circular geometry class `F0130424-8B7E-4092-93C9-1CA807482534` version 0 also
@@ -322,7 +322,7 @@ followed by a 42-byte flag/presentation section (full circles use 44 bytes).
 Independent fixation/construction controls locate the arc flags; their offsets
 must not be borrowed from the full-circle layout. Endpoint positions are checked
 against the native center, radius, normal, local X axis and angle limits before
-constructing a shared-point SolveCraft arc. Quarter, half, major, rotated negative
+constructing a shared-point SolidCraft arc. Quarter, half, major, rotated negative
 sweep and changed-radius controls check volume and actual API endpoints.
 Fusion's documented
 [arc creation behavior](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/fusion_SketchArcs_addByCenterStartSweep.htm)
@@ -353,7 +353,7 @@ Nine independent radius/arc-diameter controls establish the circular dimension
 schemas: radial class `8EDAC24D-35D4-4591-B8E7-B3EA081C9DF0` version 0, diameter
 class `664AD49F-207F-4CD5-8555-DD269E9F09EA` version 0. The trailing dimension flag
 is respectively `0x20000` or `0x10000`, and must agree with the class. Both bind
-native parameters to SolveCraft dimensions on circles or arcs. The importer checks
+native parameters to SolidCraft dimensions on circles or arcs. The importer checks
 length units. Reference dimensions still fail explicitly until their measurement
 dependencies can be represented, rather than becoming frozen driving parameters.
 
@@ -391,7 +391,7 @@ Missing, forward, cyclic, foreign-owner and unsupported-method references fail.
 
 The cached definition matrix validates reconstructed origin/normal, but does not
 replace the dependency. Native surface axes can differ from the attached sketch
-axes (observed on XZ). The supported origin frames use SolveCraft's matching
+axes (observed on XZ). The supported origin frames use SolidCraft's matching
 sketch axes and validate each attached sketch's full frame. Unverified relative
 frames fail explicitly. Nonzero or expression-dependent internal `ExtraOffset`
 slots are unsupported; the observed literal-zero slot is not a public Fusion
@@ -399,7 +399,7 @@ parameter and is excluded from the imported parameter table.
 
 Two original field-authored tests cover chained plane edits, native input names,
 reopening, invalid references and every truncated interpreted record. Three new
-native `.solvecraft` fixtures bring the editable history set to sixteen. Their
+native `.solidcraft` fixtures bring the editable history set to sixteen. Their
 radius-10 mm, height-15 mm cylinders have analytic volume 1500π mm³; bounds must
 move after parent parameter and timeline edits, including negative offsets.
 The shared fixture runner now checks bounds after edits, reopening and undo as
@@ -541,7 +541,7 @@ the first curve flag after fixation identifies reference curves. These flags
 are exposed by the native reader. Import still rejects unresolved linked source
 dependencies; cached positions are not a substitute for the dependency graph.
 The construction byte distinguishes normal (0), construction (1) and centerline
-(2). Imported centerlines retain SolveCraft's centerline property and stay out of
+(2). Imported centerlines retain SolidCraft's centerline property and stay out of
 profiles. The original centerline-extrude fixture checks the unchanged prism,
 width/depth/height edits, analytic volume, bounds, reopening and undo.
 
@@ -567,9 +567,9 @@ a source selector and a tracking identity. Both identities must agree on the
 source sketch geometry and curve tag; the importer validates versions, owners,
 member entities, unique tags, coordinate transforms and cached geometry.
 
-Line and circle projections now become SolveCraft sketch links to an earlier
+Line and circle projections now become SolidCraft sketch links to an earlier
 source feature. Points and curves retain native identities. Adjacent projected
-lines can share a native corner: each SolveCraft link owns an internal point
+lines can share a native corner: each SolidCraft link owns an internal point
 alias, all aliases must resolve to the same native source vertex, and dimensions
 and constraints use the canonical point. Independent cached points are never
 substituted for a missing relationship. Body-edge/face projections, multi-entity
@@ -578,7 +578,7 @@ mappings and projected arcs still require additional native schemas.
 Local controls cover a projected circle extrusion, diameter and height edits,
 reopening, a second source edit after reopening and undo; a projected rectangle
 covers four linked edges and shared source vertices. The original projected-circle
-SolveCraft recipe and fixture add source-diameter edits with analytic volume and
+SolidCraft recipe and fixture add source-diameter edits with analytic volume and
 bounds. Original synthetic records exercise reconstruction and reject damaged
 ownership, target membership, missing/forward sources and truncated records.
 
@@ -602,7 +602,7 @@ Tags are not bulk-record IDs and no geometry matching is used for this inspectio
 The additional populated list in legacy files and the version 0 map remain
 unsupported; their meaning is not inferred from empty modern controls.
 
-New SolveCraft edge projection links also retain a persistent edge name and resolve
+New SolidCraft edge projection links also retain a persistent edge name and resolve
 that exact edge on the specified body. This prepares the document layer for native
 body-edge references. Large radius/height edits cannot reselect a nearby edge or
 an overlapping body. A missing or ambiguous name marks the link lost and keeps its
@@ -639,7 +639,7 @@ trees, multi-body outputs, mismatched references and unsupported producers fail
 atomically. Cached native circles are validation data, never replacement solids.
 
 The importer resolves the source profile's persistent side/cap identities on the
-regenerated body. SolveCraft's two semicircular edges become one circular sketch
+regenerated body. SolidCraft's two semicircular edges become one circular sketch
 link, retaining the native curve and center IDs. Every recompute follows the same
 named edges, joins them by endpoint incidence and requires one closed circular
 projection. Lost members or changed shapes retain cached geometry with a lost-link
@@ -918,7 +918,7 @@ For an extrusion height of 10 mm the independent volume changes from
 1296.6766909 to 430.7070513 mm³. Native acceptance checks compare center, start,
 end, volume and bounds after editing, reopening and undo. Original field-authored
 records exercise the same reconstruction in ordinary CI, including a third
-endpoint position. The twenty-eighth original `.solvecraft` fixture,
+endpoint position. The twenty-eighth original `.solidcraft` fixture,
 `fixed-arc-support`, checks the analytic circular-segment volume and bounds for
 two endpoint edits and a height edit. No Fusion-generated data is committed.
 
@@ -1110,7 +1110,7 @@ with the observed positive-X seam. The later controls below extend it to partial
 arcs, rotated native circle seams and cuts on the seam. Free-form tessellation
 still cannot acquire an analytic-piece certificate.
 
-Five original command recipes and `.solvecraft` fixtures cover the lens, both
+Five original command recipes and `.solidcraft` fixtures cover the lens, both
 crescents and both divided-rectangle regions. Expected circle areas use the
 analytic two-circle intersection formula; rectangle volumes use width × depth ×
 height. They exercise source edits, height edits, save/reopen and undo. Original
@@ -1160,7 +1160,7 @@ retaining the referenced endpoint, and rejects larger geometric disagreement.
 Normal vectors within 10⁻¹⁰ of positive Z are accepted. These tolerances do not
 permit arbitrary off-plane sketch geometry.
 
-Five original `pieces-*` recipes and saved `.solvecraft` files bring the suite to
+Five original `pieces-*` recipes and saved `.solidcraft` files bring the suite to
 42 projects. They cover a rotated-seam lens and crescent, an exact-seam quarter,
 and both portions of a split semicircle. Volumes use analytic sector and circle
 intersection formulas; source and height edits, reopening and undo are exercised.
@@ -1239,7 +1239,7 @@ close to Fusion's measured 59,038.4 mm³, but its maximum radius differs by abou
 sections and their persistent parent dependencies are also still required by the
 supplied adapter, so this does not yet enable importing that complete file.
 
-Three original circular/reversed/rectangular loft recipes and `.solvecraft`
+Three original circular/reversed/rectangular loft recipes and `.solidcraft`
 fixtures bring the ordinary editable-history suite to 46 designs. Tests use
 analytic frustum volumes and check dimension/plane edits, reopening and undo.
 The native decoder tests use original field-authored records, owner/section
@@ -1279,7 +1279,7 @@ resampling discarded the winding chosen for an opposing section plane, twisting
 the loft. Resampling now preserves that winding, with a separate analytic
 frustum regression for both section orders and positive/negative heights.
 
-Three additional original face-loft recipes and `.solvecraft` files bring the
+Three additional original face-loft recipes and `.solidcraft` files bring the
 regular editable-history suite to 49 designs. The decoder suite authors its own
 records and tests cap roles, producer identities, Join targets, corrupted fields
 and truncated prefixes. Fusion exports and measurements remain local only.
@@ -1352,7 +1352,7 @@ unsupported. The adapter's modified side-face provenance is still outstanding.
 Format 19 records this choice explicitly. Existing files with no interpolation
 field retain the previous uniform mode. The `solid.loft` command accepts
 `interpolation: "circular_chord"`, and feature editing retains the saved choice.
-Three original recipes and saved `.solvecraft` files cover forward/reversed order
+Three original recipes and saved `.solidcraft` files cover forward/reversed order
 and legacy uniform behavior, with analytic volumes, source-size/plane edits,
 reopen and undo. The suite now contains 55 editable-history files. No Fusion
 exports or measured assets are committed.
@@ -1914,3 +1914,30 @@ paired-edge SolidCraft fixture was rendered and visually checked.
 
 A final remote check found newer upstream `f538eeb5`. It is not included in
 these validation results and remains for the next integration pass.
+
+### SolidCraft rename integration
+
+Upstream `daed268` is merged, including the full crate/binary rename and the
+explicit legacy compatibility shims. Native archive opening remains connected
+in the CLI, desktop picker and browser picker. Imported fillets use the new
+exact-fit default explicitly; radius reduction is never inferred during import.
+Local control tests use `SOLIDCRAFT_F3D_PROBES` and `SOLIDCRAFT_F3D_CORPUS` through
+the shared environment helper, retaining its legacy-name fallback.
+
+The 108 history fixtures and HardEdgeBasin now use `.solidcraft` filenames and
+the `solidcraft/N` prefix. A structural comparison with every committed
+predecessor verified that only the prefix changed: original format versions,
+geometry, parameter expressions and feature identities remain intact. Existing
+legacy design and CLI-alias tests still pass. The command reference was refreshed
+from the compiled registry (320 commands).
+
+The full gate passed 34 of 35 test binaries, including 145 I/O tests, 685 engine
+tests, 302 kernel tests, 373 UI tests, all 108 editable histories, and the opening
+guard in 1.00 seconds. The remaining localhost socket test passed separately with
+socket permission. Formatting, assets, licences, layering, Clippy and WASM passed,
+as did all 41 local native-import groups and 18 inspection tests. The renamed CLI
+also imported and rendered the supplied Minimal archive: two editable features,
+one body, exact 100 mm diameter/height bounds and volume within 0.1% of the
+analytic cylinder. A final upstream check found `0154572`, left for the next
+integration pass; it is not part of these results. Multiple-radius and tangent
+chain reconstruction remain unfinished.

@@ -11,7 +11,7 @@ use std::f64::consts::TAU;
 use std::{collections::BTreeMap, sync::Arc};
 
 use serde::{Deserialize, Serialize};
-use solvecraft_geom::{Loop2, Region2, Seg2, Vec2};
+use solidcraft_geom::{Loop2, Region2, Seg2, Vec2};
 
 use crate::model::{CurveKind, Sketch};
 use crate::shape::{Shape, intersections};

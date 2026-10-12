@@ -115,10 +115,10 @@ pub(super) fn projected_circle() -> Fixture {
 fn projected_circle_keeps_source_dependency_and_curve_ids_through_edits() {
     let mut doc = projected_circle().design().to_document("Original projection").unwrap();
     volume(&doc, 900. * std::f64::consts::PI * 17.);
-    let solvecraft_doc::FeatureKind::Sketch { sketch, .. } = &doc.features[1].kind else { panic!("sketch") };
+    let solidcraft_doc::FeatureKind::Sketch { sketch, .. } = &doc.features[1].kind else { panic!("sketch") };
     assert_eq!(sketch.curves[0].id, "c131");
     assert_eq!(sketch.links.len(), 1);
-    assert!(matches!(&sketch.links[0].source, solvecraft_doc::sketch::LinkSource::SketchCurve { sketch: 1, curve } if curve == "c31"));
+    assert!(matches!(&sketch.links[0].source, solidcraft_doc::sketch::LinkSource::SketchCurve { sketch: 1, curve } if curve == "c31"));
     doc.change_param("d7", "40 mm", None, None).unwrap();
     volume(&doc, 400. * std::f64::consts::PI * 17.);
     let mut reopened = crate::read_design(&crate::write_design(&doc)).unwrap();

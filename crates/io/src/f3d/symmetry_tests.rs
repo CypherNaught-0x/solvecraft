@@ -1,8 +1,8 @@
 use super::import_tests::{Fixture, fixture, volume};
 use super::relationship_tests::{reference, refs, u32, u64, wide};
 use super::*;
-use solvecraft_doc::sketch::{ConstraintKind, Sketch};
-use solvecraft_geom::Vec2;
+use solidcraft_doc::sketch::{ConstraintKind, Sketch};
+use solidcraft_geom::Vec2;
 
 fn relation(f: &mut Fixture, operands: &[u64], ordered: &[u64]) {
     let mut b = vec![0; 4];
@@ -85,7 +85,7 @@ fn native_circle_symmetry_keeps_equal_radius_during_parameter_edits() {
     assert!(sketch.constraints.iter().any(|c| matches!(c.kind, ConstraintKind::Equal { .. })));
     doc.change_param("d7", "40 mm", None, None).unwrap();
     volume(&doc, 400. * std::f64::consts::PI * 17.);
-    let mut model = solvecraft_doc::Model::new();
+    let mut model = solidcraft_doc::Model::new();
     model.evaluate(&doc);
     let state = model.state();
     let sketch = &state.sketches[0].sketch;
@@ -120,7 +120,7 @@ fn symmetry_roles_are_independent_of_graph_registration_order() {
             let mut doc = design.to_document("Ordered symmetry roles").unwrap();
             doc.change_param("d7", "40 mm", None, None).unwrap();
             volume(&doc, 400. * std::f64::consts::PI * 17.);
-            let mut model = solvecraft_doc::Model::new();
+            let mut model = solidcraft_doc::Model::new();
             model.evaluate(&doc);
             let state = model.state();
             let sketch = &state.sketches[0].sketch;
@@ -144,7 +144,7 @@ fn line_symmetry_uses_reflected_endpoint_incidence_in_both_orientations() {
         for c in constraints {
             s.add_constraint(c, None).unwrap();
         }
-        assert!(solvecraft_doc::sketch::solve(&mut s).max_residual < 1e-6);
+        assert!(solidcraft_doc::sketch::solve(&mut s).max_residual < 1e-6);
     }
 }
 

@@ -209,9 +209,9 @@ fn aligned_dimensions_retain_diagonal_distance_and_dependency_edits() {
     for reversed in [false, true] {
         let d = rectangle_with_dimensions(true, reversed).design();
         let mut doc = d.to_document("Original diagonal rectangle").unwrap();
-        let solvecraft_doc::FeatureKind::Sketch { sketch, .. } = &doc.features[0].kind else { panic!("sketch") };
+        let solidcraft_doc::FeatureKind::Sketch { sketch, .. } = &doc.features[0].kind else { panic!("sketch") };
         let constraint = sketch.constraints.iter().find(|c| c.param.as_deref() == Some("heightSketch")).unwrap();
-        assert!(matches!(constraint.kind, solvecraft_doc::sketch::ConstraintKind::Distance { .. }));
+        assert!(matches!(constraint.kind, solidcraft_doc::sketch::ConstraintKind::Distance { .. }));
         volume(&doc, 30. * 40. * 17.);
         doc.params.iter_mut().find(|p| p.name == "heightSketch").unwrap().expr = "width * 2".into();
         volume(&doc, 30. * 2700_f64.sqrt() * 17.);

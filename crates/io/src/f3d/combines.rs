@@ -1,7 +1,7 @@
 //! Whole-body Combine inputs verified with operation, retention and suppression controls.
 use super::history::{empty, finish, payload, references, require_class, zeros};
 use super::*;
-use solvecraft_doc::Operation;
+use solidcraft_doc::Operation;
 
 pub(super) const CLASS: &str = "2A94257F-2020-4B19-9A68-103A2672F1B7";
 const HELPER: &str = "2E3AC990-483D-4A55-8662-C064B976A957";

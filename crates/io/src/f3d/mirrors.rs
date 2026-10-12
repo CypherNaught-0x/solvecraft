@@ -150,8 +150,8 @@ pub(super) fn inputs(
                 return Err(invalid("To Object mirrored feature computation is not supported yet"));
             }
             match input.operation {
-                solvecraft_doc::Operation::NewBody if bodies == [feature] => new_bodies += 1,
-                solvecraft_doc::Operation::Join | solvecraft_doc::Operation::Cut if !targets.is_empty() && bodies == targets => {}
+                solidcraft_doc::Operation::NewBody if bodies == [feature] => new_bodies += 1,
+                solidcraft_doc::Operation::Join | solidcraft_doc::Operation::Cut if !targets.is_empty() && bodies == targets => {}
                 _ => return Err(invalid("mirrored feature operation disagrees with its target bodies")),
             }
             features.push(feature);

@@ -1,11 +1,11 @@
-//! Reconstruct verified native feature schemas as editable SolveCraft history.
+//! Reconstruct verified native feature schemas as editable SolidCraft history.
 //! Unsupported schemas fail before a caller replaces its current document.
 use super::history::{empty, finish, payload, references, zeros};
 use super::*;
-use solvecraft_doc::expr::Kind;
-use solvecraft_doc::sketch::{ConstraintKind, Sketch};
-use solvecraft_doc::{Direction, Document, Extent, FeatureKind, Operation, Param, PlaneRef, ProfileSel};
-use solvecraft_geom::{Plane, Vec2, Vec3};
+use solidcraft_doc::expr::Kind;
+use solidcraft_doc::sketch::{ConstraintKind, Sketch};
+use solidcraft_doc::{Direction, Document, Extent, FeatureKind, Operation, Param, PlaneRef, ProfileSel};
+use solidcraft_geom::{Plane, Vec2, Vec3};
 
 pub fn import_f3d(bytes: &[u8], name: &str) -> Result<Document> {
     let designs = read_f3d(bytes)?;
@@ -19,7 +19,7 @@ impl Design {
     pub fn to_document(&self, name: &str) -> Result<Document> {
         let history = self.history()?;
         let has_offset_planes = history.iter().any(|f| matches!(f.kind, HistoryKind::OffsetPlane { .. }));
-        if history.len() > solvecraft_doc::MAX_FEATURES {
+        if history.len() > solidcraft_doc::MAX_FEATURES {
             return Err(invalid("too many imported features"));
         }
         let components = self.classes.iter().find(|c| c.id == "E03784ED-5E19-4E14-B9F2-3B07017018CD");
@@ -34,7 +34,7 @@ impl Design {
         if parameters.iter().any(|p| p.driven) {
             return Err(invalid("driven parameter measurement dependencies are not supported yet"));
         }
-        if parameters.len() > solvecraft_doc::MAX_PARAMS {
+        if parameters.len() > solidcraft_doc::MAX_PARAMS {
             return Err(invalid("too many imported parameters"));
         }
         let bindings: BTreeMap<_, _> = parameters.iter().filter_map(|p| p.binding.map(|binding| (binding, p))).collect();
@@ -71,7 +71,7 @@ impl Design {
             if internal_offsets.contains(&p.id) {
                 continue;
             }
-            if solvecraft_doc::expr::unit_info(&p.display_unit).is_none() {
+            if solidcraft_doc::expr::unit_info(&p.display_unit).is_none() {
                 return Err(invalid(&format!("unsupported parameter unit: {}", p.display_unit)));
             }
             if p.name.is_empty() || !names.insert(p.name.clone()) {
@@ -95,12 +95,12 @@ impl Design {
         let mut feature_ids = BTreeMap::new();
         let mut source_profiles = BTreeMap::new();
         let mut operation_owners = None;
-        let mut projection_model = solvecraft_doc::Model::new();
+        let mut projection_model = solidcraft_doc::Model::new();
         for f in history {
             let mut new_body = None;
             let mut new_plane = None;
             let mut new_edge_names = Vec::new();
-            let mut import_face = |object| -> Result<solvecraft_doc::FaceAnchor> {
+            let mut import_face = |object| -> Result<solidcraft_doc::FaceAnchor> {
                 let face = super::loft_faces::face(&records, &classes, object, f.id)?;
                 if operation_owners.is_none() {
                     operation_owners = Some(self.operation_owners()?);
@@ -183,7 +183,7 @@ impl Design {
                         let source_id = *feature_ids.get(&edge.feature).ok_or_else(|| invalid("fillet precedes its source"))?;
                         let source = doc.feature(source_id).filter(|f| !f.suppressed).ok_or_else(|| invalid("fillet source is suppressed"))?;
                         let FeatureKind::Extrude { extent, .. } = &source.kind else { return Err(invalid("unsupported fillet source feature")) };
-                        if extent.direction != solvecraft_doc::Direction::Positive
+                        if extent.direction != solidcraft_doc::Direction::Positive
                             || extent.start_offset.is_some()
                             || extent.taper.as_ref().map(|e| doc.eval(e, Kind::Angle)).transpose()?.is_some_and(|a| a.abs() > 1e-12)
                             || doc.eval(&extent.distance, Kind::Length)? <= 0.
@@ -215,10 +215,10 @@ impl Design {
                             .iter()
                             .map(|label| face_names.get(label).map(String::as_str).ok_or_else(|| invalid("missing fillet side")))
                             .collect::<Result<BTreeSet<_>>>()?;
-                        let selected: Vec<_> = solvecraft_doc::naming::edge_names(target)
+                        let selected: Vec<_> = solidcraft_doc::naming::edge_names(target)
                             .into_iter()
                             .enumerate()
-                            .filter(|(_, name)| name.split('|').map(solvecraft_doc::naming::strip_piece).collect::<BTreeSet<_>>() == adjacent)
+                            .filter(|(_, name)| name.split('|').map(solidcraft_doc::naming::strip_piece).collect::<BTreeSet<_>>() == adjacent)
                             .collect();
                         let [(index, selected)] = selected.as_slice() else { return Err(invalid("fillet edge incidence is missing or ambiguous")) };
                         if new_edge_names.contains(selected) {
@@ -237,7 +237,13 @@ impl Design {
                         edges.push((*start + *end) * 0.5);
                         new_edge_names.push(selected.clone());
                     }
-                    FeatureKind::Fillet { edges, radius: radius.name.clone(), body, style: solvecraft_doc::FilletStyle::Constant }
+                    FeatureKind::Fillet {
+                        edges,
+                        radius: radius.name.clone(),
+                        body,
+                        style: solidcraft_doc::FilletStyle::Constant,
+                        fit: solidcraft_doc::FilletFit::Exact,
+                    }
                 }
                 HistoryKind::Combine { operation, keep_tools, operation_tag, tool_containers, target_container, consumed_handles } => {
                     if operation_owners.is_none() {
@@ -743,7 +749,7 @@ impl Design {
                                     *p
                                 } else {
                                     let c = curve_indices.get(entity).copied().ok_or_else(|| invalid("missing offset dimension entity"))?;
-                                    let Some(solvecraft_doc::sketch::CurveKind::Line { a, .. }) = sketch.curves.get(c).map(|c| &c.kind) else {
+                                    let Some(solidcraft_doc::sketch::CurveKind::Line { a, .. }) = sketch.curves.get(c).map(|c| &c.kind) else {
                                         return Err(invalid("offset dimension requires a line or point"));
                                     };
                                     let p = *a;
@@ -758,7 +764,7 @@ impl Design {
                                 let a = curve_indices.get(a).copied().ok_or_else(|| invalid("missing angular dimension line"))?;
                                 let b = curve_indices.get(b).copied().ok_or_else(|| invalid("missing angular dimension line"))?;
                                 let p = bindings.get(binding).ok_or_else(|| invalid("missing angular dimension parameter"))?;
-                                if solvecraft_doc::expr::Kind::from_unit(&p.display_unit) != solvecraft_doc::expr::Kind::Angle
+                                if solidcraft_doc::expr::Kind::from_unit(&p.display_unit) != solidcraft_doc::expr::Kind::Angle
                                     || (p.value - cached_radians).abs() > 1e-10
                                 {
                                     return Err(invalid("angular dimension parameter disagrees with its cached value or units"));
@@ -792,7 +798,7 @@ impl Design {
                         };
                         if classes.get(object).is_some_and(|c| c.id == super::body_projections::SELECTOR) {
                             let anchor = import_face(*object)?;
-                            sections.push(solvecraft_doc::LoftSection {
+                            sections.push(solidcraft_doc::LoftSection {
                                 sketch: 0,
                                 profiles: ProfileSel::All,
                                 point: None,
@@ -820,7 +826,7 @@ impl Design {
                             }
                         }
                         let (sketch, _) = sketches.get(&profile.geometry).ok_or_else(|| invalid("loft section must precede its feature"))?;
-                        sections.push(solvecraft_doc::LoftSection {
+                        sections.push(solidcraft_doc::LoftSection {
                             sketch: *sketch,
                             profiles: profile_selection(profile, &circles)?,
                             point: None,
@@ -889,9 +895,9 @@ impl Design {
                         }
                         // The kernel validates coaxial complete circles on every
                         // evaluation, including after parameter/plane edits.
-                        solvecraft_doc::LoftInterpolation::CircularChord
+                        solidcraft_doc::LoftInterpolation::CircularChord
                     } else {
-                        solvecraft_doc::LoftInterpolation::Uniform
+                        solidcraft_doc::LoftInterpolation::Uniform
                     };
                     FeatureKind::Loft { sections, interpolation, operation, targets }
                 }
@@ -962,10 +968,10 @@ impl Design {
             let mut transferred = BTreeSet::new();
             for (name, (_, expression, kind)) in feature.param_names.iter_mut().zip(feature.kind.inputs_mut()) {
                 let Some(p) = named_parameters.get(expression.as_str()).filter(|p| p.owner == Some(f.id)) else { continue };
-                // SolveCraft feature inputs use mm/degrees. Preserve the existing
+                // SolidCraft feature inputs use mm/degrees. Preserve the existing
                 // unit-bearing parameter indirection for other display units until
                 // feature inputs support their own unit contexts.
-                if solvecraft_doc::expr::unit_info(&p.display_unit) != solvecraft_doc::expr::unit_info(kind.default_unit()) {
+                if solidcraft_doc::expr::unit_info(&p.display_unit) != solidcraft_doc::expr::unit_info(kind.default_unit()) {
                     continue;
                 }
                 *name = p.name.clone();
@@ -990,9 +996,9 @@ impl Design {
             if internal_offsets.contains(&p.id) {
                 continue;
             }
-            let kind = solvecraft_doc::expr::Kind::from_unit(&p.display_unit);
+            let kind = solidcraft_doc::expr::Kind::from_unit(&p.display_unit);
             let value = values.get(&p.name).ok_or_else(|| invalid("missing imported parameter"))?.to_kind(kind)?;
-            let expected = p.value * if kind == solvecraft_doc::expr::Kind::Length { 10. } else { 1. };
+            let expected = p.value * if kind == solidcraft_doc::expr::Kind::Length { 10. } else { 1. };
             if (value - expected).abs() > 1e-8 * expected.abs().max(1.) {
                 return Err(invalid(&format!("parameter {} changed value during import", p.name)));
             }
@@ -1003,7 +1009,7 @@ impl Design {
 
 fn length_parameter<'a>(bindings: &BTreeMap<u64, &'a Parameter>, binding: u64) -> Result<&'a Parameter> {
     let p = bindings.get(&binding).copied().ok_or_else(|| invalid("missing dimension parameter"))?;
-    if solvecraft_doc::expr::Kind::from_unit(&p.display_unit) != solvecraft_doc::expr::Kind::Length {
+    if solidcraft_doc::expr::Kind::from_unit(&p.display_unit) != solidcraft_doc::expr::Kind::Length {
         return Err(invalid("dimension requires a length parameter"));
     }
     Ok(p)
@@ -1011,7 +1017,7 @@ fn length_parameter<'a>(bindings: &BTreeMap<u64, &'a Parameter>, binding: u64) -
 
 pub(super) fn angle_constraint(sketch: &Sketch, a: usize, b: usize, value: f64, quadrant: u32) -> Result<ConstraintKind> {
     let direction = |i: usize| {
-        let Some(solvecraft_doc::sketch::CurveKind::Line { a, b }) = sketch.curves.get(i).map(|c| &c.kind) else {
+        let Some(solidcraft_doc::sketch::CurveKind::Line { a, b }) = sketch.curves.get(i).map(|c| &c.kind) else {
             return Err(invalid("angular dimension requires finite lines"));
         };
         let start = sketch.point(*a).ok_or_else(|| invalid("missing angular line endpoint"))?;
@@ -1034,7 +1040,7 @@ pub(super) fn angle_constraint(sketch: &Sketch, a: usize, b: usize, value: f64, 
 }
 
 fn fix_line_support(sketch: &mut Sketch, line: usize, id: u64) -> Result<()> {
-    let Some(solvecraft_doc::sketch::CurveKind::Line { a, b }) = sketch.curves.get(line).map(|c| &c.kind) else {
+    let Some(solidcraft_doc::sketch::CurveKind::Line { a, b }) = sketch.curves.get(line).map(|c| &c.kind) else {
         return Err(invalid("fixed support requires a line"));
     };
     let start = sketch.point(*a).ok_or_else(|| invalid("missing fixed line endpoint"))?;
@@ -1051,7 +1057,7 @@ fn fix_line_support(sketch: &mut Sketch, line: usize, id: u64) -> Result<()> {
 
 pub(super) fn line_midpoints(sketch: &mut Sketch, lines: [usize; 2], id: u64) -> Result<()> {
     let center = |line: usize| {
-        let Some(solvecraft_doc::sketch::CurveKind::Line { a, b }) = sketch.curves.get(line).map(|c| &c.kind) else {
+        let Some(solidcraft_doc::sketch::CurveKind::Line { a, b }) = sketch.curves.get(line).map(|c| &c.kind) else {
             return Err(invalid("common midpoint requires two lines"));
         };
         let a = sketch.point(*a).ok_or_else(|| invalid("missing midpoint endpoint"))?;
@@ -1078,10 +1084,10 @@ fn xy_normal(normal: &[f64; 3]) -> bool {
 
 fn profile_selection(profile: &SketchProfile, circles: &BTreeMap<u64, SketchCircle>) -> Result<ProfileSel> {
     if profile.regions.iter().flatten().flat_map(|boundary| &boundary.pieces).any(|(_, count)| *count != 1) {
-        let boundary = |boundary: &ProfileLoop| -> Result<Vec<solvecraft_doc::sketch::ProfilePiece>> {
+        let boundary = |boundary: &ProfileLoop| -> Result<Vec<solidcraft_doc::sketch::ProfilePiece>> {
             let mut pieces = Vec::new();
             for ((id, (piece, count)), reversed) in boundary.curves.iter().zip(&boundary.pieces).zip(&boundary.reversed) {
-                pieces.push(solvecraft_doc::sketch::ProfilePiece { curve: format!("c{id}"), piece: *piece, count: *count, reversed: *reversed });
+                pieces.push(solidcraft_doc::sketch::ProfilePiece { curve: format!("c{id}"), piece: *piece, count: *count, reversed: *reversed });
             }
             pieces.sort();
             Ok(pieces)
@@ -1091,7 +1097,7 @@ fn profile_selection(profile: &SketchProfile, circles: &BTreeMap<u64, SketchCirc
             let outer = loops.iter().find(|l| l.outer).ok_or_else(|| invalid("missing outer profile boundary"))?;
             let mut holes = loops.iter().filter(|l| !l.outer).map(boundary).collect::<Result<Vec<_>>>()?;
             holes.sort();
-            profiles.push(solvecraft_doc::PieceProfileBoundary { outer: boundary(outer)?, holes });
+            profiles.push(solidcraft_doc::PieceProfileBoundary { outer: boundary(outer)?, holes });
         }
         let mut circle_seams = BTreeMap::new();
         for id in profile.regions.iter().flatten().flat_map(|boundary| &boundary.curves) {
@@ -1114,7 +1120,7 @@ fn profile_selection(profile: &SketchProfile, circles: &BTreeMap<u64, SketchCirc
         let outer = loops.iter().find(|l| l.outer).ok_or_else(|| invalid("missing outer profile boundary"))?;
         let mut holes: Vec<_> = loops.iter().filter(|l| !l.outer).map(ids).collect();
         holes.sort();
-        profiles.push(solvecraft_doc::WholeProfileBoundary { outer: ids(outer), holes });
+        profiles.push(solidcraft_doc::WholeProfileBoundary { outer: ids(outer), holes });
     }
     Ok(ProfileSel::WholeBoundaries { profiles })
 }
@@ -1219,7 +1225,7 @@ fn extent(
                 .get(&binding)
                 .filter(|p| p.owner == Some(id) && p.label == "ProfileOffset")
                 .ok_or_else(|| invalid("missing extrusion start-offset binding"))?;
-            if solvecraft_doc::expr::Kind::from_unit(&p.display_unit) != solvecraft_doc::expr::Kind::Length {
+            if solidcraft_doc::expr::Kind::from_unit(&p.display_unit) != solidcraft_doc::expr::Kind::Length {
                 return Err(invalid("extrusion start offset requires a length parameter"));
             }
             Ok(p.name.clone())
@@ -1235,8 +1241,8 @@ fn extent(
         .get(&input.taper)
         .filter(|p| p.owner == Some(id) && p.label == "TaperAngle")
         .ok_or_else(|| invalid("missing extrusion taper binding"))?;
-    if solvecraft_doc::expr::Kind::from_unit(&distance.display_unit) != solvecraft_doc::expr::Kind::Length
-        || solvecraft_doc::expr::Kind::from_unit(&taper.display_unit) != solvecraft_doc::expr::Kind::Angle
+    if solidcraft_doc::expr::Kind::from_unit(&distance.display_unit) != solidcraft_doc::expr::Kind::Length
+        || solidcraft_doc::expr::Kind::from_unit(&taper.display_unit) != solidcraft_doc::expr::Kind::Angle
     {
         return Err(invalid("extrusion parameter units do not match their input roles"));
     }
@@ -1265,7 +1271,7 @@ pub(super) fn symmetry(
     axis: u64,
     entities: [u64; 2],
 ) -> Result<Vec<ConstraintKind>> {
-    use solvecraft_doc::sketch::CurveKind;
+    use solidcraft_doc::sketch::CurveKind;
     let [a, b] = entities;
     let l = curves.get(&axis).copied().ok_or_else(|| invalid("missing symmetry axis"))?;
     if let (Some(p), Some(q)) = (points.get(&a), points.get(&b)) {
@@ -1273,14 +1279,14 @@ pub(super) fn symmetry(
     }
     let ca = curves.get(&a).copied().ok_or_else(|| invalid("missing symmetric curve"))?;
     let cb = curves.get(&b).copied().ok_or_else(|| invalid("missing symmetric curve"))?;
-    let kind = |i| sketch.curves.get(i).map(|c: &solvecraft_doc::sketch::Curve| &c.kind).ok_or_else(|| invalid("missing symmetry curve"));
+    let kind = |i| sketch.curves.get(i).map(|c: &solidcraft_doc::sketch::Curve| &c.kind).ok_or_else(|| invalid("missing symmetry curve"));
     match (kind(ca)?, kind(cb)?) {
         (CurveKind::Circle { c: p, .. }, CurveKind::Circle { c: q, .. }) => {
             Ok(vec![ConstraintKind::Symmetric { p: *p, q: *q, l }, ConstraintKind::Equal { a: ca, b: cb }])
         }
         (CurveKind::Line { a: p0, b: p1 }, CurveKind::Line { a: q0, b: q1 }) => {
             let CurveKind::Line { a: la, b: lb } = kind(l)? else { return Err(invalid("symmetry axis is not a line")) };
-            let point = |i| sketch.points.get(i).map(|p: &solvecraft_doc::sketch::SPoint| p.pos).ok_or_else(|| invalid("missing symmetry point"));
+            let point = |i| sketch.points.get(i).map(|p: &solidcraft_doc::sketch::SPoint| p.pos).ok_or_else(|| invalid("missing symmetry point"));
             let start = point(*la)?;
             let direction = point(*lb)? - start;
             let length2 = direction.len2();

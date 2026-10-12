@@ -11,7 +11,7 @@ pub(super) fn inputs(
     records: &Records<'_>,
     classes: &BTreeMap<u64, &Class>,
     feature: u64,
-) -> Result<(solvecraft_doc::Operation, Vec<u64>)> {
+) -> Result<(solidcraft_doc::Operation, Vec<u64>)> {
     empty(r)?;
     zeros(r, 1)?;
     if !super::attributes::read(r)?.is_empty() {

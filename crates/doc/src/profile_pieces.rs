@@ -175,7 +175,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
     use serde_json::json;
-    use solvecraft_geom::Vec2;
+    use solidcraft_geom::Vec2;
 
     #[test]
     fn piece_references_are_bounded_canonical_and_disjoint() {

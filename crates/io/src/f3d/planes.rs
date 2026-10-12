@@ -1,7 +1,7 @@
 //! Offset-plane dependencies verified by signed, chained and XZ Fusion controls.
 use super::history::{empty, finish, payload, references, require_class, zeros};
 use super::*;
-use solvecraft_geom::{Plane, Vec3};
+use solidcraft_geom::{Plane, Vec3};
 
 pub(super) const GEOMETRY: &str = "8D424E29-DE23-4B1F-A3AD-84C52A497D1A";
 pub(super) const DEFINITION: &str = "7B6C3C2D-4096-4E6D-B225-699E8C2D9355";

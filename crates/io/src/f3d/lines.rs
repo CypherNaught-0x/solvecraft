@@ -1,7 +1,7 @@
 //! Finite sketch lines, verified with rectangle edits and isolated flag controls.
 use super::history::{empty, finish, payload, zeros};
 use super::*;
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 
 #[derive(Debug, PartialEq)]
 pub struct SketchLine {

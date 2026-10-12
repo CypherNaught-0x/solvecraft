@@ -1,7 +1,7 @@
 //! Reconstruct offset dependencies only after checking their complete native geometry.
 use super::constraints::SketchOffset;
 use super::*;
-use solvecraft_doc::sketch::{CurveKind, OffsetChain, Sketch};
+use solidcraft_doc::sketch::{CurveKind, OffsetChain, Sketch};
 
 pub(super) fn metadata(native: &projections::Geometry<'_>, constraints: &BTreeMap<u64, SketchConstraints>) -> Result<()> {
     let mut relationships: BTreeMap<u64, BTreeSet<u64>> = BTreeMap::new();

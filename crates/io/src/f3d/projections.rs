@@ -48,11 +48,11 @@ impl Geometry<'_> {
         p: &Projection,
         geometry: u64,
         source_feature: u64,
-        planes: (solvecraft_geom::Plane, solvecraft_geom::Plane),
-        sketch: &mut solvecraft_doc::sketch::Sketch,
+        planes: (solidcraft_geom::Plane, solidcraft_geom::Plane),
+        sketch: &mut solidcraft_doc::sketch::Sketch,
     ) -> Result<Entities> {
-        use solvecraft_doc::sketch::{LinkGeom, LinkKind, LinkSource};
-        use solvecraft_geom::Vec2;
+        use solidcraft_doc::sketch::{LinkGeom, LinkKind, LinkSource};
+        use solidcraft_geom::Vec2;
         let Source::Sketch { geometry: source_geometry, .. } = &p.source else { return Err(invalid("expected projected sketch source")) };
         let source = self.source(p)?;
         let point = |id, expected: [f64; 3]| -> Result<Vec2> {

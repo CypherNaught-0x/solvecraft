@@ -1,7 +1,7 @@
 //! Schemas verified with local reorder, rename, suppression and operation controls.
 //! These are inspected relationships, not a complete feature reconstruction.
 use super::*;
-use solvecraft_doc::Operation;
+use solidcraft_doc::Operation;
 
 const TIMELINE: &str = "2F4C1849-1A5A-4F6C-A086-8DD445CBF94B";
 const SKETCH: &str = "8DA771B7-52ED-42FC-94E2-2353FE141373";
@@ -111,7 +111,7 @@ impl Design {
         require_class(&classes, owner, "C3423E04-7E85-4B44-8E31-A5FA9C100052", 2)?;
         let ids = references(&mut r)?;
         finish(&r)?;
-        if ids.len() > solvecraft_doc::MAX_FEATURES {
+        if ids.len() > solidcraft_doc::MAX_FEATURES {
             return Err(invalid("too many native timeline features"));
         }
         let inherited_version = self
@@ -285,7 +285,7 @@ pub(super) enum ExtrudeLimit {
 
 pub(super) struct ExtrudeInputs {
     pub operation: Operation,
-    pub axis: solvecraft_geom::Vec3,
+    pub axis: solidcraft_geom::Vec3,
     pub limit: ExtrudeLimit,
     pub taper: u64,
     pub start_offset: Option<u64>,
@@ -325,7 +325,7 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
         _ => return Err(invalid("unsupported extrusion start-offset flag")),
     };
     zeros(r, 3)?;
-    let axis = solvecraft_geom::Vec3::new(f64::from_bits(r.u64()?), f64::from_bits(r.u64()?), f64::from_bits(r.u64()?));
+    let axis = solidcraft_geom::Vec3::new(f64::from_bits(r.u64()?), f64::from_bits(r.u64()?), f64::from_bits(r.u64()?));
     if !axis.is_finite() {
         return Err(invalid("non-finite extrusion axis"));
     }

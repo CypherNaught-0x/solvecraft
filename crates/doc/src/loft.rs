@@ -1,6 +1,6 @@
 //! Loft sections retain the same certified face identity used by attached sketches.
 use crate::{DocError, Document, LoftSection, ModelState, ProfileSel, Result};
-use solvecraft_geom::{Plane, Region2};
+use solidcraft_geom::{Plane, Region2};
 
 impl LoftSection {
     pub(crate) fn region(&self, doc: &Document, state: &ModelState, author: u64) -> Result<(Plane, Region2)> {
@@ -83,10 +83,10 @@ mod tests {
         .unwrap();
         let mut old: serde_json::Value = serde_json::from_str(&doc.to_json()).unwrap();
         assert!(old["features"][0].get("interpolation").is_none());
-        old["format"] = serde_json::json!("solvecraft/18");
+        old["format"] = serde_json::json!("solidcraft/18");
         doc.features[0].shell_piece_order = true;
         assert_eq!(Document::from_json(&old.to_string()).unwrap(), doc);
-        old["format"] = serde_json::json!("solvecraft/19");
+        old["format"] = serde_json::json!("solidcraft/19");
         old["features"][0]["interpolation"] = serde_json::json!("circular_chord");
         let changed = Document::from_json(&old.to_string()).unwrap();
         assert!(matches!(changed.features[0].kind, FeatureKind::Loft { interpolation: LoftInterpolation::CircularChord, .. }));

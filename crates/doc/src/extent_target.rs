@@ -1,6 +1,6 @@
 //! Exact planar extrusion endpoints, without positional recovery of lost targets.
 use crate::{DocError, Document, Extent, ModelState, PlaneRef, Result};
-use solvecraft_geom::Plane;
+use solidcraft_geom::Plane;
 
 impl Extent {
     pub(crate) fn has_to(&self) -> bool {

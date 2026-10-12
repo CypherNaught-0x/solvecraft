@@ -1,6 +1,6 @@
 use crate::Session;
 use serde_json::json;
-use solvecraft_doc::{Document, FeatureKind};
+use solidcraft_doc::{Document, FeatureKind};
 
 fn model(face: bool) -> Session {
     let mut s = Session::default();
@@ -63,7 +63,7 @@ fn exact_endpoints_reject_ambiguous_records_and_remap_face_producers() {
     let source = s.doc.find_feature("Base").unwrap().id;
     copied.remap_clone(&[(source, 123)].into(), &Default::default(), &[("Base".into(), "Copy".into())].into(), &Default::default()).unwrap();
     let FeatureKind::Extrude { extent, .. } = copied.kind else { panic!("extrude") };
-    let solvecraft_doc::PlaneRef::Face { anchor: Some(anchor), .. } = *extent.to_plane.unwrap() else { panic!("face") };
+    let solidcraft_doc::PlaneRef::Face { anchor: Some(anchor), .. } = *extent.to_plane.unwrap() else { panic!("face") };
     assert_eq!(anchor.target.origin_feature, 123);
     assert_eq!(anchor.target.body, "Copy");
 }
@@ -90,7 +90,7 @@ fn endpoint_plane_copy_names_are_mapped_once() {
     let names = [("Stop".into(), "Stop copy".into()), ("Stop copy".into(), "Stop copy 2".into())].into();
     copied.remap_clone(&Default::default(), &names, &Default::default(), &Default::default()).unwrap();
     let FeatureKind::Extrude { extent, .. } = copied.kind else { panic!("extrude") };
-    let solvecraft_doc::PlaneRef::Construction { name } = *extent.to_plane.unwrap() else { panic!("plane") };
+    let solidcraft_doc::PlaneRef::Construction { name } = *extent.to_plane.unwrap() else { panic!("plane") };
     assert_eq!(name, "Stop copy");
 }
 
@@ -146,10 +146,10 @@ fn logical_caps_follow_signed_height_and_keep_exact_producer_identity() {
         copy.remap_clone(&[(source, 123), (sketch, 124)].into(), &Default::default(), &[("Base".into(), "Copy".into())].into(), &Default::default())
             .unwrap();
         let FeatureKind::Extrude { extent, .. } = copy.kind else { panic!("extrude") };
-        let solvecraft_doc::PlaneRef::Face { anchor: Some(anchor), .. } = *extent.to_plane.unwrap() else { panic!("face") };
+        let solidcraft_doc::PlaneRef::Face { anchor: Some(anchor), .. } = *extent.to_plane.unwrap() else { panic!("face") };
         assert_eq!(anchor.target.origin_feature, 123);
         assert_eq!(anchor.target.body, "Copy");
-        assert!(matches!(anchor.target.certificate, Some(solvecraft_doc::config::FaceCertificate::ExtrudeTravelCap { sketch: 124, end: true, .. })));
+        assert!(matches!(anchor.target.certificate, Some(solidcraft_doc::config::FaceCertificate::ExtrudeTravelCap { sketch: 124, end: true, .. })));
         assert!(anchor.target.name.starts_with("F123:cap:end:"));
     }
 }

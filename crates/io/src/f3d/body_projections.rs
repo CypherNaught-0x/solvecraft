@@ -19,21 +19,21 @@ pub(super) struct Edge {
     pub body: u64,
     pub feature: u64,
     pub recipe: Recipe,
-    pub line: Option<[solvecraft_geom::Vec3; 2]>,
+    pub line: Option<[solidcraft_geom::Vec3; 2]>,
 }
 
 pub(super) struct Context<'a> {
     pub native: &'a super::projections::Geometry<'a>,
     pub profiles: &'a BTreeMap<u64, &'a SketchProfile>,
-    pub doc: &'a solvecraft_doc::Document,
-    pub model: &'a solvecraft_doc::ModelState,
+    pub doc: &'a solidcraft_doc::Document,
+    pub model: &'a solidcraft_doc::ModelState,
     pub features: &'a BTreeMap<u64, u64>,
     pub operations: &'a BTreeMap<u64, u64>,
 }
 
 impl Context<'_> {
-    fn rectangle_curve(&self, edge: &Edge, plane: solvecraft_geom::Plane, height: f64) -> Result<u64> {
-        use solvecraft_geom::{Vec2, Vec3};
+    fn rectangle_curve(&self, edge: &Edge, plane: solidcraft_geom::Plane, height: f64) -> Result<u64> {
+        use solidcraft_geom::{Vec2, Vec3};
         let profile = self.profiles.get(&edge.feature).ok_or_else(|| invalid("missing native body profile"))?;
         let [loops] = profile.regions.as_slice() else {
             return Err(invalid("projected rectangle has multiple regions"));
@@ -82,15 +82,15 @@ impl Context<'_> {
         &self,
         projection: &super::projections::Projection,
         geometry: u64,
-        plane: solvecraft_geom::Plane,
-        sketch: &mut solvecraft_doc::sketch::Sketch,
+        plane: solidcraft_geom::Plane,
+        sketch: &mut solidcraft_doc::sketch::Sketch,
         selection: (&str, &[String], u64),
     ) -> Result<super::projections::Entities> {
         let (body, selected, source_id) = selection;
-        use solvecraft_doc::sketch::{LinkGeom, LinkKind, LinkSource};
-        use solvecraft_geom::{Vec2, Vec3};
+        use solidcraft_doc::sketch::{LinkGeom, LinkKind, LinkSource};
+        use solidcraft_geom::{Vec2, Vec3};
         let [name] = selected else { return Err(invalid("rectangular side requires exactly one named edge")) };
-        let resolved = solvecraft_doc::project::resolve_named_edge(
+        let resolved = solidcraft_doc::project::resolve_named_edge(
             self.model,
             &plane,
             LinkKind::Project,
@@ -107,7 +107,7 @@ impl Context<'_> {
         let super::projections::Source::Body(edge) = &projection.source else { return Err(invalid("missing projected body")) };
         let source = self.native.lines.get(&source_id).ok_or_else(|| invalid("missing native source line"))?;
         let feature = self.features.get(&edge.feature).and_then(|id| self.doc.feature(*id)).ok_or_else(|| invalid("missing producer"))?;
-        let solvecraft_doc::FeatureKind::Extrude { sketch: source_sketch, .. } = feature.kind else { return Err(invalid("missing source sketch")) };
+        let solidcraft_doc::FeatureKind::Extrude { sketch: source_sketch, .. } = feature.kind else { return Err(invalid("missing source sketch")) };
         let source_plane = self.model.sketch(source_sketch).ok_or_else(|| invalid("missing source plane"))?.plane;
         let projected = |p: [f64; 3]| plane.to_local(source_plane.to_world(Vec2::new(p[0] * 10., p[1] * 10.)));
         let source_points = [projected(source.start), projected(source.end)];
@@ -171,11 +171,11 @@ impl Context<'_> {
         &self,
         projection: &super::projections::Projection,
         geometry: u64,
-        plane: solvecraft_geom::Plane,
-        sketch: &mut solvecraft_doc::sketch::Sketch,
+        plane: solidcraft_geom::Plane,
+        sketch: &mut solidcraft_doc::sketch::Sketch,
     ) -> Result<super::projections::Entities> {
-        use solvecraft_doc::sketch::{CurveKind, LinkGeom, LinkKind};
-        use solvecraft_doc::{Direction, FeatureKind, Operation, ProfileSel, expr::Kind};
+        use solidcraft_doc::sketch::{CurveKind, LinkGeom, LinkKind};
+        use solidcraft_doc::{Direction, FeatureKind, Operation, ProfileSel, expr::Kind};
         let super::projections::Source::Body(edge) = &projection.source else { return Err(invalid("expected body-edge projection")) };
         if self.operations.get(&edge.recipe.operation) != Some(&edge.feature) {
             return Err(invalid("body-edge operation disagrees with its producer"));
@@ -224,17 +224,17 @@ impl Context<'_> {
         let target = self.model.body(body).filter(|b| b.feature == id).ok_or_else(|| invalid("projected body has changed producer"))?;
         let side = format!("F{id}:side:{curve}");
         let cap = format!("F{id}:{}", if edge.recipe.end { "top" } else { "start" });
-        let selected: Vec<_> = solvecraft_doc::naming::edge_names(target)
+        let selected: Vec<_> = solidcraft_doc::naming::edge_names(target)
             .into_iter()
             .filter(|name| {
-                let faces: BTreeSet<_> = name.split('|').map(solvecraft_doc::naming::strip_piece).collect();
+                let faces: BTreeSet<_> = name.split('|').map(solidcraft_doc::naming::strip_piece).collect();
                 faces == BTreeSet::from([side.as_str(), cap.as_str()])
             })
             .collect();
         if let Some(curve) = native_curve {
             return self.attach_line(projection, geometry, plane, sketch, (body, &selected, curve));
         }
-        let resolved = solvecraft_doc::project::resolve_edge_circle(self.model, &plane, body, &selected)?;
+        let resolved = solidcraft_doc::project::resolve_edge_circle(self.model, &plane, body, &selected)?;
         let [LinkGeom::Circle(center, radius)] = resolved.geom.as_slice() else { return Err(invalid("projected cap is not a circle")) };
         let circle = self
             .native
@@ -248,7 +248,7 @@ impl Context<'_> {
             .get(&circle.center_point)
             .filter(|p| p.sketch == geometry && p.linked && !p.origin)
             .ok_or_else(|| invalid("missing linked circle center"))?;
-        let expected = solvecraft_geom::Vec2::new(circle.center[0] * 10., circle.center[1] * 10.);
+        let expected = solidcraft_geom::Vec2::new(circle.center[0] * 10., circle.center[1] * 10.);
         if center.dist(expected) > 1e-5
             || (radius - circle.radius * 10.).abs() > 1e-5
             || circle.center[2].abs() > 1e-10
@@ -387,8 +387,8 @@ fn recipe_tree(end: bool, side: Option<u32>) -> Vec<i32> {
     }
 }
 
-fn cached_line(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, recipe: Recipe) -> Result<[solvecraft_geom::Vec3; 2]> {
-    use solvecraft_geom::Vec3;
+fn cached_line(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, recipe: Recipe) -> Result<[solidcraft_geom::Vec3; 2]> {
+    use solidcraft_geom::Vec3;
     let mut r = payload(records.primary(id)?, id)?;
     empty(&mut r)?;
     zeros(&mut r, 2)?;
@@ -475,7 +475,7 @@ pub(super) fn selector(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, i
     // role list is the single new-body output handle in the observed schema.
     let mut r = payload(records.primary(feature)?, feature)?;
     let input = super::history::extrude_inputs(&mut r, classes)?;
-    if input.operation != solvecraft_doc::Operation::NewBody || input.start_offset.is_some() {
+    if input.operation != solidcraft_doc::Operation::NewBody || input.start_offset.is_some() {
         return Err(invalid("body-edge import requires an independent profile-plane extrusion"));
     }
     references(&mut r)?;
@@ -677,7 +677,7 @@ mod tests {
             cached_line(&rs, &classes, 1, Recipe { operation, end: true, side: Some(3) })
         };
         let points = check(b.clone(), 9001).unwrap();
-        assert_eq!(points, [solvecraft_geom::Vec3::new(0., 20., 17.), solvecraft_geom::Vec3::new(0., 0., 17.)]);
+        assert_eq!(points, [solidcraft_geom::Vec3::new(0., 20., 17.), solidcraft_geom::Vec3::new(0., 0., 17.)]);
         assert!(check(b.clone(), 9002).is_err());
         for keep in 0..b.len() {
             assert!(check(b[..keep].to_vec(), 9001).is_err(), "prefix {keep}");
@@ -696,11 +696,11 @@ mod tests {
 
     #[test]
     fn rectangular_edges_follow_native_profile_order_and_shared_corners() {
-        use solvecraft_doc::{FeatureKind, PlaneRef, sketch::Sketch};
+        use solidcraft_doc::{FeatureKind, PlaneRef, sketch::Sketch};
         for end in [false, true] {
             let design = super::super::polygon_tests::rectangle().design();
             let mut doc = design.to_document("Original projected rectangle").unwrap();
-            let mut model = solvecraft_doc::Model::new();
+            let mut model = solidcraft_doc::Model::new();
             model.evaluate(&doc);
             let state = model.state();
             let mut profiles = design.sketch_profiles().unwrap();
@@ -744,12 +744,12 @@ mod tests {
                         recipe: Recipe { operation: 9001, end, side: Some(3 + i as u32) },
                         line: Some({
                             let line = &lines[&curve];
-                            let world = |p: [f64; 3]| solvecraft_geom::Vec3::new(p[0] * 10., p[1] * 10., if end { 17. } else { 0. });
+                            let world = |p: [f64; 3]| solidcraft_geom::Vec3::new(p[0] * 10., p[1] * 10., if end { 17. } else { 0. });
                             [world(line.start), world(line.end)]
                         }),
                     }),
                 };
-                let entities = context.attach(&projection, 170, solvecraft_geom::Plane::XY, &mut sketch).unwrap();
+                let entities = context.attach(&projection, 170, solidcraft_geom::Plane::XY, &mut sketch).unwrap();
                 for (id, index, key) in entities.points {
                     if let Some(previous) = corners.insert(id, key) {
                         assert_eq!(previous, key);
@@ -760,8 +760,8 @@ mod tests {
             assert_eq!(corners.len(), 4);
             let id =
                 doc.add_feature(FeatureKind::Sketch { plane: PlaneRef::Origin { name: "XY".into() }, sketch }, Some("Projected rectangle")).unwrap();
-            let verify = |doc: &solvecraft_doc::Document, width: f64| {
-                let mut m = solvecraft_doc::Model::new();
+            let verify = |doc: &solidcraft_doc::Document, width: f64| {
+                let mut m = solidcraft_doc::Model::new();
                 m.evaluate(doc);
                 assert!(m.results.iter().all(|r| r.error.is_none()), "{:?}", m.results);
                 let st = m.state();
@@ -782,15 +782,15 @@ mod tests {
     fn native_body_circle_remains_one_curve_across_source_edits_and_reopening() {
         for end in [false, true] {
             let mut doc = body_circle(end).design().to_document("Original body projection").unwrap();
-            let verify = |doc: &solvecraft_doc::Document, radius: f64| {
-                let mut model = solvecraft_doc::Model::new();
+            let verify = |doc: &solidcraft_doc::Document, radius: f64| {
+                let mut model = solidcraft_doc::Model::new();
                 model.evaluate(doc);
                 assert!(model.results.iter().all(|r| r.error.is_none()), "{:?}", model.results);
                 let state = model.state();
                 let projected = state.sketch(3).unwrap();
                 assert_eq!(projected.sketch.curves.len(), 1);
                 assert_eq!(projected.sketch.curves[0].id, "c131");
-                assert!(matches!(projected.sketch.curves[0].kind, solvecraft_doc::sketch::CurveKind::Circle {r,..} if (r-radius).abs()<1e-6));
+                assert!(matches!(projected.sketch.curves[0].kind, solidcraft_doc::sketch::CurveKind::Circle {r,..} if (r-radius).abs()<1e-6));
                 assert!(!projected.sketch.links[0].lost);
                 assert_eq!(projected.sketch.links[0].edge_circle.len(), 2);
                 assert!(projected.sketch.links[0].edge_circle.iter().all(|n| n.contains(if end { "F2:top" } else { "F2:start" })));

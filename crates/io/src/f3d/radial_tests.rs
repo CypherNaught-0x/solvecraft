@@ -1,7 +1,7 @@
 use super::import_tests::{Fixture, fixture, volume};
 use super::relationship_tests::{reference, refs, u32, u64, wide};
 use super::round_profile_tests::{arc, geometry};
-use solvecraft_doc::{FeatureKind, sketch::ConstraintKind};
+use solidcraft_doc::{FeatureKind, sketch::ConstraintKind};
 use std::f64::consts::PI;
 
 // Original field-authored records, independently constructed from the observed

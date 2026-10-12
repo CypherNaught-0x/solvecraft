@@ -26,7 +26,7 @@ are not mixed into the upstream-based F3D branch.
 ## Regression coverage
 
 ```sh
-cargo test --profile ci -p solvecraft-cli --test open_performance -- --nocapture
+cargo test --profile ci -p solidcraft-cli --test open_performance -- --nocapture
 ```
 
 The test runs `doc.open` and display preparation in a child with a 20-second

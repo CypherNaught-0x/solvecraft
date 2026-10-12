@@ -1,6 +1,6 @@
 use super::import_tests::{Fixture, common, fixture, volume};
 use super::relationship_tests::{reference, refs, string, u32, u64, wide};
-use solvecraft_doc::FeatureKind;
+use solidcraft_doc::FeatureKind;
 use std::f64::consts::{PI, TAU};
 
 // Original field-authored geometry; no native exported byte sequences.
@@ -146,7 +146,7 @@ fn holes_preserve_selected_boundaries_across_edits_and_reopening() {
     // Removing an explicitly selected hole must not silently turn it into a disk.
     let FeatureKind::Sketch { sketch, .. } = &mut doc.features[0].kind else { panic!("sketch") };
     sketch.curves.iter_mut().find(|c| c.id == "c35").unwrap().construction = true;
-    let mut model = solvecraft_doc::Model::new();
+    let mut model = solidcraft_doc::Model::new();
     model.evaluate(&doc);
     assert!(model.results.iter().any(|r| r.error.is_some()));
 }
@@ -218,7 +218,7 @@ fn diameter_graph_slots_do_not_change_dimension_semantics() {
 
 #[test]
 fn fixed_arc_support_preserves_free_endpoint_motion() {
-    use solvecraft_doc::sketch::{ConstraintKind, CurveKind};
+    use solidcraft_doc::sketch::{ConstraintKind, CurveKind};
     let mut f = arc((1_f64 / 3.).acos(), 0.);
     let b = &mut f.0.get_mut(&31).unwrap().2;
     let n = b.len();
@@ -237,7 +237,7 @@ fn fixed_arc_support_preserves_free_endpoint_motion() {
         sketch.constraints.iter_mut().find(|c| c.id == dimension).unwrap().kind = ConstraintKind::DistanceX { p: c, q: b, value: x };
         let angle = (x / 30.).acos();
         volume(&doc, 450. * (angle - angle.sin()) * 17.);
-        let mut model = solvecraft_doc::Model::new();
+        let mut model = solidcraft_doc::Model::new();
         model.evaluate(&doc);
         let state = model.state();
         let solved = &state.sketches[0].sketch;
@@ -300,7 +300,7 @@ fn multiple_profile_regions_keep_separate_bodies_and_editable_dimensions() {
     volume(&doc, 1000. * PI * 17.);
     doc.change_param("d7", "80 mm", None, None).unwrap();
     volume(&doc, 1700. * PI * 17.);
-    let mut model = solvecraft_doc::Model::new();
+    let mut model = solidcraft_doc::Model::new();
     model.evaluate(&doc);
     assert_eq!(model.state().bodies.len(), 2);
     volume(&crate::read_design(&crate::write_design(&doc)).unwrap(), 1700. * PI * 17.);
@@ -371,7 +371,7 @@ fn partial_circles_distinguish_lens_and_crescents_through_edits() {
         volume(&doc, area(35.) * 17.);
         volume(&crate::read_design(&crate::write_design(&doc)).unwrap(), area(35.) * 17.);
         doc.change_param("d7", "10 mm", None, None).unwrap();
-        let mut model = solvecraft_doc::Model::new();
+        let mut model = solidcraft_doc::Model::new();
         model.evaluate(&doc);
         assert!(model.results.last().unwrap().error.is_some());
         assert!(model.state().bodies.is_empty());

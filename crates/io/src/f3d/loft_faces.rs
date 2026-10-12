@@ -55,7 +55,7 @@ impl Face {
         if boundary.curves.len() != 4 {
             return Err(invalid("loft face recipe requires four rectangle sides"));
         }
-        use solvecraft_geom::Vec3;
+        use solidcraft_geom::Vec3;
         let mut sides = Vec::new();
         for id in &boundary.curves {
             let line = lines.get(id).filter(|l| l.sketch == profile.geometry).ok_or_else(|| invalid("missing loft rectangle side"))?;
@@ -82,11 +82,11 @@ impl Face {
 
     pub fn anchor(
         &self,
-        doc: &solvecraft_doc::Document,
-        state: &solvecraft_doc::ModelState,
+        doc: &solidcraft_doc::Document,
+        state: &solidcraft_doc::ModelState,
         id: u64,
         contributions: &[(u64, Option<String>)],
-    ) -> Result<solvecraft_doc::FaceAnchor> {
+    ) -> Result<solidcraft_doc::FaceAnchor> {
         let feature = doc.feature(id).filter(|f| !f.suppressed).ok_or_else(|| invalid("missing loft face producer"))?;
         let [body] = feature.body_names.as_slice() else {
             return Err(invalid("loft face requires one explicitly produced body"));
@@ -101,9 +101,9 @@ impl Face {
         } else {
             self.high
         };
-        let matches = |source: &solvecraft_kernel::FaceSource, (id, curve): &(u64, Option<String>)| match (source, curve) {
-            (solvecraft_kernel::FaceSource::CertifiedExtrudeCap { producer, high, .. }, None) => producer == id && *high == cap_high,
-            (solvecraft_kernel::FaceSource::CertifiedExtrudeSide { producer, curve: current, plane: Some(_), .. }, Some(curve)) => {
+        let matches = |source: &solidcraft_kernel::FaceSource, (id, curve): &(u64, Option<String>)| match (source, curve) {
+            (solidcraft_kernel::FaceSource::CertifiedExtrudeCap { producer, high, .. }, None) => producer == id && *high == cap_high,
+            (solidcraft_kernel::FaceSource::CertifiedExtrudeSide { producer, curve: current, plane: Some(_), .. }, Some(curve)) => {
                 producer == id && current == curve
             }
             _ => false,
@@ -114,7 +114,7 @@ impl Face {
             .filter_map(|(index, source)| {
                 let valid = match (source, contributions) {
                     (Some(source), [only]) => matches(source, only),
-                    (Some(solvecraft_kernel::FaceSource::PlanarUnion { sources, .. }), parts) if parts.len() >= 2 => {
+                    (Some(solidcraft_kernel::FaceSource::PlanarUnion { sources, .. }), parts) if parts.len() >= 2 => {
                         sources.len() == parts.len() && parts.iter().all(|part| sources.iter().any(|source| matches(source, part)))
                     }
                     _ => false,
@@ -351,7 +351,7 @@ fn extrusion_producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, ha
     } else {
         require_class(classes, feature, "DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8)?;
         let input = super::history::extrude_inputs(&mut r, classes)?;
-        if input.operation != solvecraft_doc::Operation::NewBody || input.start_offset.is_some() {
+        if input.operation != solidcraft_doc::Operation::NewBody || input.start_offset.is_some() {
             return Err(invalid("loft face requires an independent profile-plane extrusion"));
         }
         references(&mut r)?;
@@ -1033,8 +1033,8 @@ mod tests {
     #[test]
     #[ignore = "requires local original adapter and unchanged public API resave"]
     fn original_adapter_loft_face_selectors_match_public_api_resave() {
-        let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
-        let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+        let corpus = std::path::PathBuf::from(solidcraft_geom::env::var_os("F3D_CORPUS").unwrap());
+        let probes = std::path::PathBuf::from(solidcraft_geom::env::var_os("F3D_PROBES").unwrap());
         let mut results = Vec::new();
         for path in [corpus.join("adapter-x20-makita.f3d"), probes.join("corpus-adapter-x20-makita.f3d")] {
             let designs = read_f3d(&std::fs::read(&path).unwrap()).unwrap();

@@ -2,8 +2,8 @@ use super::geometric_tests::relation;
 use super::import_tests::{Fixture, volume};
 use super::polygon_tests::rectangle;
 use super::relationship_tests::{reference, refs, u64, wide};
-use solvecraft_doc::sketch::{CurveKind, Sketch};
-use solvecraft_geom::Vec2;
+use solidcraft_doc::sketch::{CurveKind, Sketch};
+use solidcraft_geom::Vec2;
 
 fn fixture() -> Fixture {
     let mut f = rectangle();
@@ -62,7 +62,7 @@ fn line_midpoint_records_follow_dimension_edits_and_reopening() {
         for width in [30., 45., 20.] {
             doc.change_param("width", &format!("{width} mm"), None, None).unwrap();
             volume(&doc, width * 20. * 17.);
-            let mut model = solvecraft_doc::Model::new();
+            let mut model = solidcraft_doc::Model::new();
             model.evaluate(&doc);
             let state = model.state();
             let sk = &state.sketches[0].sketch;
@@ -98,12 +98,12 @@ fn common_line_midpoints_allow_rotation_and_follow_moving_centers() {
         sk.points[p].fixed = true;
     }
     sk.points[a].pos = Vec2::new(4., 1.);
-    assert!(solvecraft_doc::sketch::solve(&mut sk).max_residual < 1e-6);
+    assert!(solidcraft_doc::sketch::solve(&mut sk).max_residual < 1e-6);
     assert!((sk.points[b].pos - Vec2::new(-4., -1.)).len() < 1e-6);
     for p in [oa, ob] {
         sk.points[p].pos += Vec2::new(10., 7.);
     }
-    assert!(solvecraft_doc::sketch::solve(&mut sk).max_residual < 1e-6);
+    assert!(solidcraft_doc::sketch::solve(&mut sk).max_residual < 1e-6);
     assert!((sk.points[b].pos - Vec2::new(16., 13.)).len() < 1e-6);
     let mut inconsistent = sk.clone();
     inconsistent.points[b].pos += Vec2::X;
