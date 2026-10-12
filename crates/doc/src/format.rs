@@ -66,12 +66,15 @@
 //!   Pieces a feature splits a body into are named after their faces; features saved before
 //!   keep the kernel's shell order (`shell_piece_order`), which their stored body names mean.
 
+//! - 24: ordered constant-radius edge groups retain independent expressions in one fillet.
+//!   Older single-radius styles keep their original meaning.
+
 use serde_json::Value;
 
 use crate::{DocError, Document, Result};
 
 /// The format this build writes.
-pub const FORMAT: u32 = 23;
+pub const FORMAT: u32 = 24;
 
 pub fn format_string(n: u32) -> String {
     format!("solidcraft/{n}")
@@ -88,7 +91,7 @@ pub fn version_of(s: &str) -> Option<u32> {
 
 /// JSON-level upgrades: entry `i` turns format `i + 1` into `i + 2`.
 type JsonStep = fn(&mut Value) -> Result<()>;
-const JSON_STEPS: [JsonStep; 22] = [
+const JSON_STEPS: [JsonStep; 23] = [
     |_| Ok(()),
     v2_to_v3,
     v3_to_v4,
@@ -110,6 +113,8 @@ const JSON_STEPS: [JsonStep; 22] = [
     |_| Ok(()),
     |_| Ok(()),
     |_| Ok(()),
+    |_| Ok(()),
+    // 23 -> 24: existing fillets keep their original radius style.
     |_| Ok(()),
 ];
 

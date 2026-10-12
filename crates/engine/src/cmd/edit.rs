@@ -420,6 +420,11 @@ fn input_keys(kind: &FeatureKind) -> Vec<(String, solidcraft_doc::expr::Kind)> {
                 *key = format!("fillet.mid.{}", position.to_bits());
             }
         }
+        if matches!(style, solidcraft_doc::FilletStyle::Grouped { .. }) {
+            for (index, (key, _)) in keys.iter_mut().enumerate().skip(1) {
+                *key = format!("fillet.group.{index}");
+            }
+        }
     }
     keys
 }

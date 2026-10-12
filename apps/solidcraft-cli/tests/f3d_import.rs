@@ -3,6 +3,47 @@ use serde_json::{Value, json};
 use solidcraft_engine::Session;
 
 #[test]
+#[ignore = "requires local independent-radius fillet controls"]
+fn grouped_fillets_preserve_native_radius_parameters_and_source_edits() {
+    use solidcraft_engine::doc::{Document, FeatureKind, FilletStyle};
+    let dir = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
+    let check = |s: &mut Session, radii: [f64; 2], height: f64, suppressed: bool| {
+        let removed = if suppressed { 0. } else { (1. - std::f64::consts::PI / 4.) * radii.iter().map(|r| r * r).sum::<f64>() * height };
+        let expected = 20. * 30. * height - removed;
+        let m = volume(s, expected / 1000., "grouped fillet");
+        assert!((m["total"]["volume_mm3"].as_f64().unwrap() - expected).abs() < removed * 0.005 + 0.01);
+        assert!(s.model.results.iter().all(|r| r.warning.is_none()));
+    };
+    for (suffix, radii, height, suppressed) in [
+        ("baseline", [2., 3.], 40., false),
+        ("radius4", [4., 3.], 40., false),
+        ("height50", [2., 3.], 50., false),
+        ("suppressed", [2., 3.], 40., true),
+        ("restored", [2., 3.], 40., false),
+    ] {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("fillet-sets-{suffix}.f3d"))})).unwrap();
+        assert_eq!(s.doc.features.len(), 3);
+        let feature = &s.doc.features[2];
+        assert!(matches!(&feature.kind, FeatureKind::Fillet { style: FilletStyle::Grouped { groups }, .. } if groups.len()==1 && groups[0].count==1));
+        assert_eq!(feature.param_names, ["d4", "d6"]);
+        assert_eq!(feature.edge_names.len(), 2);
+        assert_eq!(feature.suppressed, suppressed);
+        check(&mut s, radii, height, suppressed);
+        if suffix == "baseline" {
+            let before = s.doc.to_json();
+            for (parameter, value, radii, height) in [("d4", "4 mm", [4., 3.], 40.), ("d6", "5 mm", [2., 5.], 40.), ("d1", "50 mm", [2., 3.], 50.)] {
+                s.execute("parameters.change", &json!({"name":parameter,"expression":value})).unwrap();
+                check(&mut s, radii, height, false);
+                check(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), radii, height, false);
+                s.execute("edit.undo", &json!({})).unwrap();
+                assert_eq!(s.doc.to_json(), before);
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires local constant-radius fillet controls"]
 fn constant_fillets_retain_selected_edges_radius_and_source_edits() {
     use solidcraft_engine::doc::{Document, FeatureKind};
@@ -53,13 +94,11 @@ fn constant_fillets_retain_selected_edges_radius_and_source_edits() {
             }
         }
     }
-    for mode in ["sets", "tangent"] {
-        let mut s = Session::default();
-        s.execute("solid.box", &json!({"length":10,"width":10,"height":10})).unwrap();
-        let before = s.doc.to_json();
-        assert!(s.execute("doc.open", &json!({"path":dir.join(format!("fillet-{mode}-baseline.f3d"))})).is_err());
-        assert_eq!(s.doc.to_json(), before);
-    }
+    let mut s = Session::default();
+    s.execute("solid.box", &json!({"length":10,"width":10,"height":10})).unwrap();
+    let before = s.doc.to_json();
+    assert!(s.execute("doc.open", &json!({"path":dir.join("fillet-tangent-baseline.f3d")})).is_err());
+    assert_eq!(s.doc.to_json(), before);
 }
 
 #[test]

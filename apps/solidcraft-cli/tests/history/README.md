@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These 108 designs and their JSON command recipes are original SolidCraft test
+These 112 designs and their JSON command recipes are original SolidCraft test
 data. They were authored through SolidCraft commands; no Fusion-produced file is
 included. Each `.solidcraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -254,3 +254,11 @@ Radius, source height, width and suppression edits check volume and bounds
 through reopening and undo. The extra volume tolerance scales with removed
 material, so a wrong edge cannot hide within the much larger block volume.
 There are 108 original saved designs.
+
+
+Four `fillet-groups-*` examples retain independent radii within one feature:
+two opposite edges, three corners, two edges per radius, and opposite top/bottom
+edges. Their volume is `width × depth × height − (1 − π/4) × Σ(radius² × edge_length)`.
+Each radius is edited independently; width, height and suppression edits also
+check bounds and volume through reopening and undo. Group parameters retain
+their identity when the feature is redefined. There are 112 original saved designs.

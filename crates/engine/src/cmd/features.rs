@@ -31,7 +31,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "MODIFY")
         .icon("fillet")
         .key("F")
-        .params("edges: [[x,y,z] point on edge | {body, index}]; radius: expr; body?; type?: constant|chord (radius is the width across)|variable (radius at the end nearest start, radius2 at the other); radius2?; start?: [x,y,z]; mid?: [[position 0…1 from start, radius expr], …] (variable radii between the ends); smooth?: bool (smooth instead of straight between the radii); fit?: exact|reduce (exact, the default: a radius too large for the geometry around the edges is refused; reduce: it is reduced to the largest that fits all of them, returned as `radius_applied` and noted in the feature's warning)"),
+        .params("edges: [[x,y,z] point on edge | {body, index}]; radius: expr; body?; type?: constant|chord (radius is the width across)|variable (radius at the end nearest start, radius2 at the other); radius2?; start?: [x,y,z]; mid?: [[position 0…1 from start, radius expr], …] (variable radii between the ends); smooth?: bool (smooth instead of straight between the radii); edge_sets?: [{edges, radius}, …] (2…64 constant-radius groups, instead of edges/radius/type; each group stays independently editable); fit?: exact|reduce (exact, the default: a radius too large for the geometry around the edges is refused; reduce: it is reduced to the largest that fits all of them, returned as `radius_applied` and noted in the feature's warning)"),
     CommandSpec::new("solid.chamfer", "Chamfer", chamfer).at("SOLID", "MODIFY").icon("chamfer").params("edges: [[x,y,z] | {body, index}]; distance: expr; distance2?: expr (along the second face) | angle?: expr (from the first face); flip?: bool (which face is first: by default the one facing up most); body?"),
     CommandSpec::new("solid.combine", "Combine", combine).at("SOLID", "MODIFY").icon("combine").params("target: body; tools: [body]; operation?: join|cut|intersect; keep_tools?: bool; new_component?: bool (the result goes into a new component; component_name?)"),
     CommandSpec::new("solid.pattern.rectangular", "Rectangular Pattern", pattern_rect)
@@ -775,6 +775,43 @@ fn press_pull(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn fillet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.fillet";
+    if let Some(sets) = p.get("edge_sets") {
+        if ["edges", "radius", "type", "radius2", "start", "mid", "smooth"].iter().any(|key| p.get(key).is_some()) {
+            return Err(bad(cmd, "edge_sets cannot also specify a shared edge list or radius style"));
+        }
+        if p.get("fit").is_some_and(|fit| fit.as_str() != Some("exact")) {
+            return Err(bad(cmd, "multiple radius groups require exact fit"));
+        }
+        let sets = sets.as_array().filter(|sets| (2..=64).contains(&sets.len())).ok_or_else(|| bad(cmd, "edge_sets requires 2…64 radius groups"))?;
+        let mut edges = Vec::new();
+        let mut radii = Vec::new();
+        let mut groups = Vec::new();
+        for (index, set) in sets.iter().enumerate() {
+            let selected = edge_points(s, set, cmd)?;
+            if edges.len() + selected.len() > 1000 {
+                return Err(bad(cmd, "select at most 1000 fillet edges"));
+            }
+            let radius = req_expr(cmd, set, "radius")?;
+            check_expr(s, &radius, Kind::Length, cmd, "radius")?;
+            if index > 0 {
+                groups.push(solidcraft_doc::FilletRadiusGroup { count: selected.len(), radius: radius.clone() });
+            }
+            radii.push(radius);
+            edges.extend(selected);
+        }
+        let radius = radii.into_iter().next().ok_or_else(|| bad(cmd, "missing first radius group"))?;
+        return add_feature(
+            s,
+            p,
+            FeatureKind::Fillet {
+                edges,
+                radius,
+                body: str_(p, "body").map(str::to_string),
+                style: solidcraft_doc::FilletStyle::Grouped { groups },
+                fit: solidcraft_doc::FilletFit::Exact,
+            },
+        );
+    }
     let edges = edge_points(s, p, cmd)?;
     let radius = req_expr(cmd, p, "radius")?;
     check_expr(s, &radius, Kind::Length, cmd, "radius")?;
@@ -812,6 +849,9 @@ fn fillet(s: &mut Session, p: &Value) -> Result<Value> {
         Some("reduce") => solidcraft_doc::FilletFit::Reduce,
         Some(o) => return Err(bad(cmd, format!("unknown fit `{o}` (exact or reduce)"))),
     };
+    if fit == solidcraft_doc::FilletFit::Reduce && !style.is_constant() {
+        return Err(bad(cmd, "`fit: reduce` takes a constant radius"));
+    }
     let mut out = add_feature(s, p, FeatureKind::Fillet { edges, radius, body: str_(p, "body").map(str::to_string), style, fit })?;
     // The radius the fillet used, when `fit: reduce` reduced it.
     if let Some(id) = out.get("feature").and_then(Value::as_u64)

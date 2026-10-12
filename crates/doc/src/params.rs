@@ -77,6 +77,10 @@ impl FeatureKind {
             }
             FeatureKind::Fillet { radius, style, .. } => match style {
                 crate::FilletStyle::Constant => v.push(("Radius", radius, L)),
+                crate::FilletStyle::Grouped { groups } => {
+                    v.push(("Radius", radius, L));
+                    v.extend(groups.iter_mut().map(|g| ("Group radius", &mut g.radius, L)));
+                }
                 crate::FilletStyle::Chord => v.push(("Chord length", radius, L)),
                 crate::FilletStyle::Variable { radius2, mid, .. } => {
                     v.push(("Start radius", radius, L));

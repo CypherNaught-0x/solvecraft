@@ -9,6 +9,35 @@ use crate::dialogs::{Dialog, Kind, apply_commands};
 use crate::{Services, SolveApp};
 
 #[test]
+fn grouped_fillet_dialog_preserves_each_selection_and_radius_parameter() {
+    let mut app = app_with(json!([
+        {"command":"solid.box","params":{"length":20,"width":30,"height":40}},
+        {"command":"solid.fillet","params":{"edge_sets":[
+            {"edges":[[0,0,20]],"radius":"2 mm"},{"edges":[[20,30,20]],"radius":"3 mm"}
+        ]}}
+    ]));
+    let feature = app.session.doc.features.last().unwrap();
+    let id = feature.id;
+    let names = feature.param_names.clone();
+    let index = app.session.doc.feature_index(id).unwrap();
+    crate::dialogs::roll_marker(&mut app, Some(index)).unwrap();
+    let mut dialog = crate::dialogs::for_feature(&app, id, None).unwrap();
+    let Kind::GroupedFillet { radii } = &mut dialog.kind else { panic!() };
+    assert_eq!(radii, &["2 mm", "3 mm"]);
+    radii[1] = "5 mm".into();
+    assert_eq!(dialog.inputs.iter().map(|i| i.items.len()).collect::<Vec<_>>(), [1, 1]);
+    for (command, params) in apply_commands(&app, &dialog).unwrap() {
+        app.session.execute(&command, &params).unwrap();
+    }
+    assert_eq!(app.session.doc.feature(id).unwrap().param_names, names);
+    // Closing the edit dialog restores the timeline after applying its command.
+    crate::dialogs::roll_marker(&mut app, None).unwrap();
+    let expected = 24000. - (1. - std::f64::consts::PI / 4.) * 29. * 40.;
+    let v = app.session.execute("inspect.measure", &json!({})).unwrap()["total"]["volume_mm3"].as_f64().unwrap();
+    assert!((v - expected).abs() < 1.3, "{v} != {expected}");
+}
+
+#[test]
 fn path_plane_click_retains_source_and_previews_then_edits_in_place() {
     let mut h = crate::scenario::Harness::new();
     let source = h.app.run("sketch.create", json!({"plane":"XY","name":"Bridge"})).unwrap()["sketch"].as_u64().unwrap();
@@ -543,6 +572,10 @@ fn fillet_radius_fit_reduces_and_shows_the_applied_radius() {
     let fillet = app.session.doc.features.last().unwrap().id;
     let e = crate::dialogs::for_feature(&app, fillet, None).unwrap();
     assert_eq!(e.extra.get("fit"), Some(&json!("reduce")));
+    // Its edit preview shows the radius it uses too.
+    let cmds = apply_commands(&app, &e).unwrap();
+    let job = crate::preview::compute(&app.session, &cmds, crate::preview::Colors::from_tokens(&crate::theme::Tokens::dark())).unwrap();
+    assert_eq!(job.applied, Some(3.0));
 }
 
 /// Apply a dialog's commands to the session; the new feature's id.

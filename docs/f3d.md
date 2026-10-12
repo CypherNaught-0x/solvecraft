@@ -1941,3 +1941,38 @@ one body, exact 100 mm diameter/height bounds and volume within 0.1% of the
 analytic cylinder. A final upstream check found `0154572`, left for the next
 integration pass; it is not part of these results. Multiple-radius and tangent
 chain reconstruction remain unfinished.
+
+
+### Multiple radius groups
+
+Ordered constant-radius edge sets now reconstruct as one editable fillet. The
+first radius and each additional group's radius retain their native model
+parameter identities; each group retains its selected edges and exact face
+names. `solid.fillet` accepts `edge_sets: [{edges, radius}, ...]`, and the edit
+dialog exposes each group's selection and radius. Redefinition, feature-pattern
+replay, saving and reopening preserve group boundaries. Format 24 adds this
+representation without changing existing single-radius fillets.
+
+The kernel applies all selected radii together. Duplicate selections, vanished
+edges, invalid group sizes and radius-reduction requests fail explicitly instead
+of assigning a radius to another group or silently shrinking it. Import still
+requires independent, positive, untapered line-profile extrusions, default
+weights and explicit edges; tangent-chain, face, variable and chord modes remain
+unsupported. This work does not establish complete import of the larger corpus.
+
+Four original `fillet-groups-*` fixtures bring the saved suite to 112. Analytic
+quarter-circle removal volumes check every radius independently, including
+three groups, shared radii and top/bottom edges, as well as source-size edits,
+suppression, reopening and undo. Local native controls separately check the
+two-radius feature and native parameter bindings. No Fusion exports or measured
+reference values are committed.
+
+Validation against upstream `8e0c3d2` passed all 112 editable histories, 42 local
+native-import groups, 145 I/O tests, 695 engine tests, 304 kernel tests, 377 UI
+tests and WASM. HardEdgeBasin's isolated opening guard passed in 0.97 seconds.
+The full gate passed 35 of 36 binaries; its localhost socket test passed
+separately with socket permission. Formatting, assets, licences, layering and
+Clippy passed. The original three-radius model was rendered and visually checked.
+A final remote check found `01bf0e4` (three further upstream commits, including
+new design containers); those are fetched for the next integration pass and
+are not included in these results.

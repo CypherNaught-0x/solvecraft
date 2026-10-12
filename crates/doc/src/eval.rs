@@ -274,6 +274,47 @@ fn fillet_fitted(
     }
 }
 
+/// Add `note` to a feature's warning.
+fn append_warning(warning: &mut Option<String>, note: String) {
+    *warning = Some(match warning.take() {
+        Some(w) => format!("{w}; {note}"),
+        None => note,
+    });
+}
+
+/// Apply independent radius groups in one kernel operation, preserving their edge order.
+fn grouped_fillet(
+    vals: &BTreeMap<String, Value>,
+    body: &kernel::Body,
+    edges: &[Vec3],
+    radius: f64,
+    style: &crate::FilletStyle,
+    fit: crate::FilletFit,
+) -> Result<kernel::Body> {
+    if fit != crate::FilletFit::Exact {
+        return Err(DocError::Invalid("multiple radius groups require exact fit".into()));
+    }
+    let crate::FilletStyle::Grouped { groups } = style else { return Err(DocError::Invalid("missing fillet radius groups".into())) };
+    let sizes = style.group_sizes(edges.len())?;
+    let radii = std::iter::once(Ok(radius)).chain(groups.iter().map(|g| val(vals, &g.radius, Kind::Length))).collect::<Result<Vec<_>>>()?;
+    let mut selected = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut at = 0;
+    for (count, radius) in sizes.into_iter().zip(radii) {
+        let group = edges.get(at..at + count).ok_or_else(|| DocError::Invalid("missing fillet group edges".into()))?;
+        for point in group {
+            let (index, _) =
+                body.nearest_edge(*point, (body.size() * 2e-3).max(1e-3))?.ok_or_else(|| DocError::Invalid("missing fillet edge".into()))?;
+            if !seen.insert(index) {
+                return Err(DocError::Invalid("an edge belongs to more than one fillet selection".into()));
+            }
+            selected.push((*point, radius));
+        }
+        at += count;
+    }
+    Ok(kernel::fillet_radii(body, &selected)?)
+}
+
 /// A length in mm, without trailing zeros.
 fn show_mm(v: f64) -> String {
     let s = format!("{v:.6}");
@@ -284,11 +325,6 @@ impl ModelState {
     /// The radius fillet `feature` used when it reduced a radius too large for its edges.
     pub fn fitted_radius(&self, feature: u64) -> Option<f64> {
         self.fitted.get(&feature).copied()
-    }
-
-    /// Every reduced fillet radius (by feature id).
-    pub fn fitted_radii(&self) -> impl Iterator<Item = (u64, f64)> + '_ {
-        self.fitted.iter().map(|(k, v)| (*k, *v))
     }
 }
 
@@ -948,10 +984,7 @@ impl Model {
             });
             if r.is_ok() {
                 if let Some(note) = boolean_diagnostics.warning() {
-                    warning = Some(match warning {
-                        Some(existing) => format!("{existing}; {note}"),
-                        None => note,
-                    });
+                    append_warning(&mut warning, note);
                 }
             } else {
                 boolean_diagnostics = Default::default();
@@ -1987,7 +2020,11 @@ fn feature_tools_with_constructor(
     let unnamed = |bodies: Vec<Body>| -> Vec<Traced> { bodies.into_iter().map(Traced::unnamed).collect() };
     match &f.kind {
         FeatureKind::Extrude { sketch, profiles, extent, operation, targets } => {
-            let ss = st.sketch(*sketch).ok_or_else(|| DocError::Unknown(format!("sketch {sketch} (it must come earlier in the timeline)")))?.clone();
+            let ss = sketch_in_feature_frame(
+                doc,
+                st.sketch(*sketch).ok_or_else(|| DocError::Unknown(format!("sketch {sketch} (it must come earlier in the timeline)")))?,
+                f.component,
+            )?;
             let regions = solidcraft_sketch::merge_regions(&select_profiles(&ss, profiles)?);
             // From / To Object: where the face or point lies along the normal, measured over the
             // middle of the profiles.
@@ -2133,7 +2170,11 @@ fn feature_tools_with_constructor(
             Ok(tools)
         }
         FeatureKind::Revolve { sketch, profiles, axis, angle, angle2, symmetric, convention, to, .. } => {
-            let ss = st.sketch(*sketch).ok_or_else(|| DocError::Unknown(format!("sketch {sketch} (it must come earlier in the timeline)")))?.clone();
+            let ss = sketch_in_feature_frame(
+                doc,
+                st.sketch(*sketch).ok_or_else(|| DocError::Unknown(format!("sketch {sketch} (it must come earlier in the timeline)")))?,
+                f.component,
+            )?;
             let regions = solidcraft_sketch::merge_regions(&select_profiles(&ss, profiles)?);
             let (o, d) = revolve_axis(&ss, axis)?;
             let angles = if to.is_some() {
@@ -2423,6 +2464,17 @@ fn map_wire(wire: &mut solidcraft_sketch::Wire, matrix: &Mat) {
     for point in wire.pts.iter_mut().chain(&mut wire.fit) {
         *point = crate::apply_point(matrix, *point);
     }
+}
+
+/// A feature's sketch as its component sees it: a sketch of another component that is placed
+/// differently is moved through both placements (as `state_in_frame` does for sketches on faces),
+/// so the tool is built where the sketch is shown. The sketch itself when they share a frame.
+fn sketch_in_feature_frame(doc: &Document, sketch: &SolvedSketch, consumer: u64) -> Result<SolvedSketch> {
+    let owner = doc.feature(sketch.feature).map(|feature| feature.component).unwrap_or(0);
+    if owner == consumer || doc.occurrences.is_empty() {
+        return Ok(sketch.clone());
+    }
+    profile_in_frame(doc, sketch, consumer)
 }
 
 fn profile_in_frame(doc: &Document, sketch: &SolvedSketch, consumer: u64) -> Result<SolvedSketch> {
@@ -2828,7 +2880,14 @@ fn replay(
                 let Some(mb) = st.bodies.get(ti).cloned() else { continue };
                 let nb = match &src.kind {
                     FeatureKind::Chamfer { distance2, angle, flip, .. } => chamfer_with(vals, &mb.body, &moved, r, distance2, angle, *flip)?,
-                    FeatureKind::Fillet { fit, .. } => fillet_fitted(&mb.body, &moved, r, *fit)?.0,
+                    FeatureKind::Fillet { style: style @ crate::FilletStyle::Grouped { .. }, fit, .. } => {
+                        grouped_fillet(vals, &mb.body, &moved, r, style, *fit)?
+                    }
+                    // A copy is congruent to the original: the radius it was reduced to first.
+                    FeatureKind::Fillet { fit, .. } => match st.fitted.get(&src.id).copied() {
+                        Some(used) => kernel::fillet(&mb.body, &moved, used).or_else(|_| fillet_fitted(&mb.body, &moved, r, *fit).map(|x| x.0))?,
+                        None => fillet_fitted(&mb.body, &moved, r, *fit)?.0,
+                    },
                     _ => kernel::fillet(&mb.body, &moved, r)?,
                 };
                 let nb = Traced::step(nb, &[&mb.traced()]);
@@ -2887,52 +2946,62 @@ mod surface;
 pub fn object_height(st: &ModelState, plane: &Plane, centre: Vec3, p: Vec3) -> f64 {
     let n = plane.normal();
     let h = |q: Vec3| (q - plane.origin).dot(n);
-    for b in st.bodies.iter().filter(|b| !b.body.is_mesh()) {
-        let tol = (b.body.size() * 1e-3).max(1e-3);
-        let Ok(faces) = b.body.faces(tol) else { continue };
-        let m = b.mesh();
-        let on: Vec<usize> = faces.iter().filter(|f| crate::appearance::face_index_at(b, p) == Some(f.index)).map(|f| f.index).collect();
-        let Some(&fi) = on.first() else { continue };
-        if let Some(f) = faces.iter().find(|f| f.index == fi)
-            && f.plane_normal.is_some_and(|fnrm| fnrm.cross(n).len() < 1e-6)
+    let Some((bi, fi)) = face_at(st, p) else { return h(p) };
+    let Some(b) = st.bodies.get(bi) else { return h(p) };
+    let tol = (b.body.size() * 1e-3).max(1e-3);
+    let Ok(faces) = b.body.faces(tol) else { return h(p) };
+    if let Some(f) = faces.iter().find(|f| f.index == fi)
+        && f.plane_normal.is_some_and(|fnrm| fnrm.cross(n).len() < 1e-6)
+    {
+        return h(f.centroid);
+    }
+    // A curved or slanted face: where the profile's middle meets it.
+    let m = b.mesh();
+    for dir in [n, n * -1.0] {
+        if let Some((t, tri)) = m.raycast(centre, dir)
+            && m.tri_face.get(tri).is_some_and(|x| *x as usize == fi)
         {
-            return h(f.centroid);
+            return h(centre + dir * t);
         }
-        // A curved or slanted face: where the profile's middle meets it.
-        for dir in [n, n * -1.0] {
-            if let Some((t, tri)) = m.raycast(centre, dir)
-                && m.tri_face.get(tri).is_some_and(|x| *x as usize == fi)
-            {
-                return h(centre + dir * t);
-            }
-        }
-        return h(p);
     }
     h(p)
+}
+
+/// The face a To Object pick is on: the nearest face over every solid body, `(body index,
+/// face index)`, within that body's pick tolerance. Not the first body with any face within
+/// its tolerance: that is 5 % of the body's size, so a large body beside a small target (a
+/// plate under a post, a frame around a pin) would otherwise take a pick made on the target.
+fn face_at(st: &ModelState, p: Vec3) -> Option<(usize, usize)> {
+    st.bodies
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| !b.body.is_mesh())
+        .filter_map(|(bi, b)| {
+            let (d, fi) = crate::appearance::nearest_face(b, p)?;
+            (d <= crate::appearance::pick_tolerance(b)).then_some((d, bi, fi))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, bi, fi)| (bi, fi))
 }
 
 /// The body at `p` when the face there is not a plane square to `n` (To Object must then
 /// follow the face's shape).
 fn curved_target(st: &ModelState, n: Vec3, p: Vec3) -> Option<usize> {
-    for (bi, b) in st.bodies.iter().enumerate().filter(|(_, b)| !b.body.is_mesh()) {
-        let Some(fi) = crate::appearance::face_index_at(b, p) else { continue };
-        let tol = (b.body.size() * 1e-3).max(1e-3);
-        let planar =
-            b.body.faces(tol).ok()?.into_iter().find(|f| f.index == fi).and_then(|f| f.plane_normal).is_some_and(|fnrm| fnrm.cross(n).len() < 1e-6);
-        return (!planar).then_some(bi);
-    }
-    None
+    let (bi, fi) = face_at(st, p)?;
+    let b = st.bodies.get(bi)?;
+    let tol = (b.body.size() * 1e-3).max(1e-3);
+    let planar =
+        b.body.faces(tol).ok()?.into_iter().find(|f| f.index == fi).and_then(|f| f.plane_normal).is_some_and(|fnrm| fnrm.cross(n).len() < 1e-6);
+    (!planar).then_some(bi)
 }
 
 /// The body at `p` when the face there is not planar.
 fn curved_target_any(st: &ModelState, p: Vec3) -> Option<usize> {
-    for (bi, b) in st.bodies.iter().enumerate().filter(|(_, b)| !b.body.is_mesh()) {
-        let Some(fi) = crate::appearance::face_index_at(b, p) else { continue };
-        let tol = (b.body.size() * 1e-3).max(1e-3);
-        let planar = b.body.faces(tol).ok()?.into_iter().find(|f| f.index == fi).is_some_and(|f| f.plane_normal.is_some());
-        return (!planar).then_some(bi);
-    }
-    None
+    let (bi, fi) = face_at(st, p)?;
+    let b = st.bodies.get(bi)?;
+    let tol = (b.body.size() * 1e-3).max(1e-3);
+    let planar = b.body.faces(tol).ok()?.into_iter().find(|f| f.index == fi).is_some_and(|f| f.plane_normal.is_some());
+    (!planar).then_some(bi)
 }
 
 /// Tools run through `target`, cut back to its surface: each tool less the body, keeping the
@@ -3502,6 +3571,7 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             Ok(())
         }
         FeatureKind::Fillet { edges, radius, body, .. } | FeatureKind::Chamfer { edges, distance: radius, body, .. } => {
+            let selected_count = edges.len();
             let r = val(vals, radius, Kind::Length)?;
             let ti = blend_target(st, body, edges)?;
             let Some(mb) = st.bodies.get(ti) else { return Err(DocError::Invalid("body".into())) };
@@ -3544,10 +3614,16 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             } else {
                 resolve_edges(&mb.body, edges, &f.edge_refs, warning)?
             };
+            if matches!(&f.kind, FeatureKind::Fillet { style: crate::FilletStyle::Grouped { .. }, .. }) && edges.len() != selected_count {
+                return Err(DocError::Invalid("a selected edge disappeared from a fillet radius group".into()));
+            }
             st.blend_edges.insert(f.id, edges.clone());
             let input = mb.traced();
             // The blended body, and the lineage of what the last blend started from.
             let (nb, from) = match &f.kind {
+                FeatureKind::Fillet { style: style @ crate::FilletStyle::Grouped { .. }, fit, .. } => {
+                    (grouped_fillet(vals, &mb.body, &edges, r, style, *fit)?, input)
+                }
                 FeatureKind::Fillet { style: crate::FilletStyle::Chord, .. } => (kernel::fillet_chord(&mb.body, &edges, r)?, input),
                 FeatureKind::Fillet { style: crate::FilletStyle::Variable { radius2, start, mid, smooth }, .. } => {
                     let r2 = val(vals, radius2, Kind::Length)?;
@@ -3571,11 +3647,7 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
                     let (b, used) = fillet_fitted(&mb.body, &edges, r, *fit)?;
                     if let Some(used) = used {
                         st.fitted.insert(f.id, used);
-                        let note = format!("the radius is reduced to {} mm, the largest that fits these edges", show_mm(used));
-                        *warning = Some(match warning.take() {
-                            Some(w) => format!("{w}; {note}"),
-                            None => note,
-                        });
+                        append_warning(warning, format!("the radius is reduced to {} mm, the largest that fits these edges", show_mm(used)));
                     }
                     (b, input)
                 }

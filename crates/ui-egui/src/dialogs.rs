@@ -66,6 +66,9 @@ pub enum Kind {
         angle: String,
         flip: bool,
     },
+    GroupedFillet {
+        radii: Vec<String>,
+    },
     Shell {
         thickness: String,
     },
@@ -578,6 +581,7 @@ impl Dialog {
             Kind::Extrude { .. }
                 | Kind::Revolve { .. }
                 | Kind::Fillet { .. }
+                | Kind::GroupedFillet { .. }
                 | Kind::Shell { .. }
                 | Kind::Draft { .. }
                 | Kind::Mirror
@@ -612,6 +616,7 @@ impl Dialog {
             Kind::Extrude { distance, .. } => ("Distance", ValueKind::Length, distance),
             Kind::Revolve { angle, .. } => ("Angle", ValueKind::Angle, angle),
             Kind::Fillet { radius, chamfer, .. } => (if *chamfer { "Distance" } else { "Radius" }, ValueKind::Length, radius),
+            Kind::GroupedFillet { radii } => ("Radius", ValueKind::Length, radii.first_mut()?),
             Kind::Shell { thickness } => ("Thickness", ValueKind::Length, thickness),
             Kind::Draft { angle } => ("Angle", ValueKind::Angle, angle),
             Kind::Hole { diameter, .. } => ("Diameter", ValueKind::Length, diameter),
@@ -832,6 +837,7 @@ fn title(k: &Kind) -> &'static str {
         Kind::Extrude { .. } => "EXTRUDE",
         Kind::Revolve { .. } => "REVOLVE",
         Kind::Fillet { chamfer: false, .. } => "FILLET",
+        Kind::GroupedFillet { .. } => "FILLET",
         Kind::Fillet { chamfer: true, .. } => "CHAMFER",
         Kind::Shell { .. } => "SHELL",
         Kind::Draft { .. } => "DRAFT",
@@ -1085,7 +1091,11 @@ fn input_rows(d: &mut Dialog, ui: &mut egui::Ui) {
     let mut clear: Option<usize> = None;
     let mut activate: Option<usize> = None;
     for (i, inp) in d.inputs.iter().enumerate() {
-        row_label(ui, inp.label);
+        if matches!(d.kind, Kind::GroupedFillet { .. }) {
+            row_label(ui, &format!("Group {} edges", i + 1));
+        } else {
+            row_label(ui, inp.label);
+        }
         ui.horizontal(|ui| {
             let active = i == d.active;
             // A chip: "↖ Select" (outlined) while empty, "N selected" (filled) once picked.
@@ -1350,8 +1360,9 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         ui.set_max_width(if wide { DIALOG_WIDE_MAX_W } else { DIALOG_MAX_W } - margin);
         // Rows that end at the right edge line up with last frame's content width.
         let total = crate::frame::content_width(ui, wkey, min_w);
-        // Header: "−" folds the dialog, the command name, "»" at the right.
-        ui.horizontal(|ui| {
+        // Header: "−" folds the dialog, the command name, "»" at the right, on the title band.
+        crate::frame::heading(ui, crate::frame::Level::Title, total, |ui| {
+            let total = total - 2.0 * crate::frame::HEADING_MARGIN;
             let fold = if d.collapsed { "+" } else { "−" };
             if ui
                 .add(egui::Button::new(RichText::new(fold).size(14.0)).frame(false))
@@ -1542,6 +1553,13 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                         row_label(ui, "Operation");
                         combo(ui, "rv_op", &OP_LABELS, operation);
                         ui.end_row();
+                    }
+                    Kind::GroupedFillet { radii } => {
+                        for (index, radius) in radii.iter_mut().enumerate() {
+                            row_label(ui, &format!("Group {} radius", index + 1));
+                            enter |= field(ui, radius);
+                            ui.end_row();
+                        }
                     }
                     Kind::Fillet { radius, chamfer, chain, ctype, distance2, angle, flip } => {
                         if *chamfer {
@@ -2525,6 +2543,21 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             }
             ("solid.revolve", p)
         }
+        Kind::GroupedFillet { radii } => {
+            let mut sets = Vec::new();
+            for (index, radius) in radii.iter().enumerate() {
+                need(index, "edges for each radius group")?;
+                let edges = sels(d, index)
+                    .iter()
+                    .map(|sel| match sel {
+                        Sel::Edge { point, .. } => Ok(pt(*point)),
+                        _ => Err("select edges for the radius group".to_string()),
+                    })
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                sets.push(json!({"edges":edges,"radius":radius}));
+            }
+            ("solid.fillet", json!({"edge_sets":sets}))
+        }
         Kind::Fillet { radius, chamfer, ctype, distance2, angle, flip, .. } => {
             need(0, "edges")?;
             // Faces stand for all their edges.
@@ -3301,6 +3334,23 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             }
             d
         }
+        FeatureKind::Fillet { edges, radius, style: style @ FilletStyle::Grouped { groups }, body, .. } => {
+            let sizes = style.group_sizes(edges.len()).ok()?;
+            let radii = std::iter::once(radius.clone()).chain(groups.iter().map(|g| g.radius.clone())).collect();
+            let mut inputs = Vec::new();
+            let mut at = 0;
+            for count in sizes {
+                let mut input = SelInput::new("Edges", EDGES, true);
+                input.items = edges.get(at..at + count)?.iter().map(|p| edge_sel(s, *p)).collect::<Option<Vec<_>>>()?;
+                inputs.push(input);
+                at += count;
+            }
+            let mut d = Dialog::new(Kind::GroupedFillet { radii }, inputs);
+            if let Some(body) = body {
+                d.extra.insert("body".into(), json!(body));
+            }
+            d
+        }
         FeatureKind::Fillet { edges, radius, .. } | FeatureKind::Chamfer { edges, distance: radius, .. } => {
             let chamfer = matches!(f.kind, FeatureKind::Chamfer { .. });
             let mut d = start(if chamfer { "solid.chamfer" } else { "solid.fillet" })?;
@@ -3327,6 +3377,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             if let FeatureKind::Fillet { style, .. } = &f.kind {
                 match style {
                     FilletStyle::Constant => {}
+                    FilletStyle::Grouped { .. } => return None,
                     FilletStyle::Chord => {
                         d.extra.insert("type".into(), json!("chord"));
                     }

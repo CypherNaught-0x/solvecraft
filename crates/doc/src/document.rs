@@ -926,6 +926,9 @@ pub enum FeatureKind {
 pub enum FilletStyle {
     #[default]
     Constant,
+    /// The leading edges use `radius`; each additional group consumes its
+    /// ordered trailing edges and owns an independent radius expression.
+    Grouped { groups: Vec<FilletRadiusGroup> },
     /// `radius` is the chord: the width across the blend.
     Chord,
     /// `radius` at the end of each edge nearest `start`, `radius2` at the other; `mid` radii at
@@ -960,6 +963,29 @@ impl FilletStyle {
     pub fn is_constant(&self) -> bool {
         *self == FilletStyle::Constant
     }
+
+    /// Validate the partition before assigning any radius to an edge.
+    pub fn group_sizes(&self, edge_count: usize) -> Result<Vec<usize>> {
+        let Self::Grouped { groups } = self else { return Ok(vec![edge_count]) };
+        if groups.is_empty() || groups.len() > 63 || edge_count == 0 || edge_count > 1000 {
+            return Err(DocError::Invalid("invalid fillet radius groups".into()));
+        }
+        let mut remaining = edge_count;
+        for group in groups {
+            if group.count == 0 || group.count >= remaining {
+                return Err(DocError::Invalid("fillet radius groups do not partition the selected edges".into()));
+            }
+            remaining -= group.count;
+        }
+        Ok(std::iter::once(remaining).chain(groups.iter().map(|g| g.count)).collect())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilletRadiusGroup {
+    pub count: usize,
+    pub radius: String,
 }
 
 /// A face picked by a point on it, on a named body.
@@ -1480,6 +1506,9 @@ impl FeatureKind {
             }
             FeatureKind::Fillet { radius, style, .. } => {
                 v.push(radius);
+                if let FilletStyle::Grouped { groups } = style {
+                    v.extend(groups.iter().map(|g| g.radius.as_str()));
+                }
                 if let FilletStyle::Variable { radius2, mid, .. } = style {
                     v.push(radius2);
                     v.extend(mid.iter().map(|(_, r)| r.as_str()));
