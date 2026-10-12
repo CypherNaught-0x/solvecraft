@@ -143,6 +143,58 @@ impl Design {
                 face.anchor(&doc, &projection_model.state(), id, &contributions)
             };
             let kind = match f.kind {
+                HistoryKind::Combine { operation, keep_tools, operation_tag, tool_containers, target_container, consumed_handles } => {
+                    if operation_owners.is_none() {
+                        operation_owners = Some(self.operation_owners()?);
+                    }
+                    let owners = operation_owners.as_ref().ok_or_else(|| invalid("missing Combine operations"))?;
+                    if owners.get(&operation_tag) != Some(&f.id) {
+                        return Err(invalid("Combine operation belongs to another feature"));
+                    }
+                    let target_objects = super::combines::objects(&records, &classes, target_container, f.id, None)?;
+                    let [target_object] = target_objects.as_slice() else { return Err(invalid("Combine requires one target body")) };
+                    let mut selected_handles = BTreeSet::new();
+                    let mut body = |object| -> Result<(String, u64)> {
+                        let (selected, handle) = super::loft_faces::combine_target(&records, &classes, object, f.id)?;
+                        let [operation] = selected.operations.as_slice() else {
+                            return Err(invalid("Combine sources modified after their extrusion are not supported yet"));
+                        };
+                        if owners.get(&operation.operation) != Some(&selected.feature) || !selected_handles.insert(handle) {
+                            return Err(invalid("duplicate or inconsistent Combine source identity"));
+                        }
+                        super::body_labels::validate(&records, &classes, selected.feature, operation.operation, u64::from(operation.label))?;
+                        let source = feature_ids
+                            .get(&selected.feature)
+                            .and_then(|id| doc.feature(*id))
+                            .filter(|f| !f.suppressed)
+                            .ok_or_else(|| invalid("Combine source follows its selector or is suppressed"))?;
+                        let [body] = source.body_names.as_slice() else { return Err(invalid("Combine source requires one produced body")) };
+                        if !active_bodies.contains(body) {
+                            return Err(invalid("Combine source is no longer available"));
+                        }
+                        Ok((body.clone(), handle))
+                    };
+                    let (target, _) = body(*target_object)?;
+                    let mut tools = Vec::new();
+                    let mut tool_handles = BTreeSet::new();
+                    for container in tool_containers {
+                        for object in super::combines::objects(&records, &classes, container, f.id, Some(operation_tag))? {
+                            let (tool, handle) = body(object)?;
+                            if tools.len() >= 64 || tools.contains(&tool) || tool == target {
+                                return Err(invalid("duplicate or excessive Combine tools"));
+                            }
+                            tools.push(tool);
+                            tool_handles.insert(handle);
+                        }
+                    }
+                    if !keep_tools && tool_handles != consumed_handles.into_iter().collect() {
+                        return Err(invalid("Combine consumed handles disagree with selected tools"));
+                    }
+                    if !f.suppressed && !keep_tools {
+                        active_bodies.retain(|body| !tools.contains(body));
+                    }
+                    FeatureKind::Combine { target, tools, operation, keep_tools }
+                }
                 HistoryKind::MirrorFeatures { plane, sources, targets, output_count } => {
                     let (plane, _) = plane_base(&records, &classes, &planes, plane, root)?;
                     let mut target_bodies = Vec::new();

@@ -289,6 +289,11 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   certificates and migrates legacy projected-edge identities through format 23.
   All 74 original saved editable examples still exercise their original format
   migrations, analytic geometry, parameter edits, reopening and undo.
+  Native Combine Join/Cut/Intersect now preserve explicit target/tool identities,
+  tool retention and suppression for independent extrusion bodies. Six new
+  analytic block examples bring the editable-history suite to 80 designs.
+  Modified or mirror-produced Combine sources and component transfers remain
+  explicit unsupported cases.
 - Persistent naming follows the kernel's exact face history (docs/book/src/dev/naming.md):
   references resolve by name first, follow splits and merges, and warn when the entity split,
   merged or vanished, or was found by geometry only (operations that report no history yet).

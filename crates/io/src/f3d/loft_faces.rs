@@ -313,10 +313,18 @@ fn quadrilateral(r: &mut Reader<'_>) -> Result<()> {
 }
 
 pub(super) fn producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, handle: u64) -> Result<u64> {
+    extrusion_producer(records, classes, handle, false)
+}
+
+fn extrusion_producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, handle: u64, allow_consumed: bool) -> Result<u64> {
     require_class(classes, handle, HANDLE, 2)?;
     let mut r = payload(records.primary(handle)?, handle)?;
     zeros(&mut r, 6)?;
-    if r.wide_string()?.is_empty() || r.take(2)? != [0, 1] {
+    if r.wide_string()?.is_empty() {
+        return Err(invalid("unsupported loft body identity"));
+    }
+    let flags = r.take(2)?;
+    if flags != [0, 1] && !(allow_consumed && flags == [1, 1]) {
         return Err(invalid("unsupported loft body identity"));
     }
     let body = r.reference()?;
@@ -435,6 +443,14 @@ pub(super) fn target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, con
 }
 
 pub(super) fn target_object(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<Target> {
+    selected_body(records, classes, id, owner, false).map(|(target, _)| target)
+}
+
+pub(super) fn combine_target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<(Target, u64)> {
+    selected_body(records, classes, id, owner, true)
+}
+
+fn selected_body(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64, combine: bool) -> Result<(Target, u64)> {
     require_class(classes, id, "9716F783-676D-42E0-93F9-EBF273E7C035", 1)?;
     let mut r = payload(records.primary(id)?, id)?;
     zeros(&mut r, 6)?;
@@ -498,9 +514,16 @@ pub(super) fn target_object(records: &Records<'_>, classes: &BTreeMap<u64, &Clas
     if r.u32()? != 2 {
         return Err(invalid("unsupported loft target selection type"));
     }
-    zeros(&mut r, 8)?;
+    zeros(&mut r, 4)?;
+    if combine {
+        for cached in references(&mut r)? {
+            require_class(classes, cached, "C46D3EEB-40E1-43FA-83DC-9CB204335417", 1)?;
+        }
+    } else {
+        zeros(&mut r, 4)?;
+    }
     let handle = selector_tail(&mut r, records, owner)?;
-    Ok(Target { feature: producer(records, classes, handle)?, operations })
+    Ok((Target { feature: extrusion_producer(records, classes, handle, combine)?, operations }, handle))
 }
 
 #[cfg(test)]

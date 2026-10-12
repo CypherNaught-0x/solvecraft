@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These seventy-one designs and their JSON command recipes are original SolveCraft test
+These eighty designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -229,3 +229,11 @@ contains two cylinders with volume 1500π mm³. Join and Cut operate on an
 Independent diameter, extrusion distance, plane offset and suppression edits
 check analytic volume, body count and bounds through reopening and undo.
 The suite now contains 74 original saved designs.
+
+Six `combine-*` designs use two 20 × 20 × 20 mm blocks overlapping by 10 mm
+along X. Their volumes are 8000 mm³ each and their intersection is 4000 mm³:
+Join gives 12000 mm³, Cut and Intersect give 4000 mm³. Keeping the tool adds
+8000 mm³ and retains a second body. Independent target width and both extrusion
+height edits recalculate the intersection as overlap-width × 20 × min(heights).
+Suppression restores both source bodies. Every case checks exact world bounds,
+body count, volume, reopening and undo. These bring the suite to 80 saved designs.

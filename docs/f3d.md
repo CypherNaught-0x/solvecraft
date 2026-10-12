@@ -1789,3 +1789,33 @@ The integrated CI gate passed, including 619 engine tests, 351 UI tests, 294
 kernel tests, 132 I/O tests, all 74 editable histories and WASM. All 38 local
 native-import groups and 16 inspection tests passed. The public reference suite
 still has 75 passes and its one documented known failure.
+
+### Editable body combinations
+
+Native Combine Join, Cut and Intersect operations now rebuild from explicit
+target and tool body references, retaining the Keep Tools choice and timeline
+suppression. The importer validates operation ownership, source body labels,
+container owners and the consumed-handle list. A consumed tool is available to
+its earlier history; its final cached state does not suppress its extrusion.
+
+The initial reconstruction accepts independent, single-body, profile-plane
+extrusions. Bodies modified by intervening operations, mirror-produced bodies,
+component transfers and other source schemas still fail atomically. It does not
+substitute cached geometry for an unsupported editable source.
+
+Six original `combine-*` fixtures use overlapping 20 mm blocks, with analytically
+derived Join/Cut/Intersect volumes of 12000/4000/4000 mm³. Keeping the tool adds
+8000 mm³ and one body. Target width, both extrusion heights and suppression are
+checked through edits, reopening and undo, bringing the saved fixture suite to
+80 examples. Eight local native controls independently exercise all operation
+and retention combinations plus suppression/restoration. Fusion-generated files
+and measurements remain local; the saved SolidCraft examples are original command
+recipes. The Cut result was rendered and visually checked in SolidCraft.
+
+The [public Combine input API](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/fusion_CombineFeatureInput.htm)
+documents the three operation choices and the separate tool-retention setting.
+
+Validation passed all 33 CI binaries, including 135 I/O tests, 619 engine tests,
+80 editable fixture histories and WASM, plus all 39 local native-import groups
+and 16 inspection tests. HardEdgeBasin's opening guard passed in 0.85 seconds
+at the end of CI (3.26 seconds during concurrent suite execution).

@@ -15,6 +15,7 @@ mod attributes;
 mod body_labels;
 mod body_projections;
 mod circles;
+mod combines;
 mod constraints;
 mod entity;
 #[cfg(test)]

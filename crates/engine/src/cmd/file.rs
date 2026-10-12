@@ -202,6 +202,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                         solvecraft_io::f3d::HistoryKind::OffsetPlane { geometry, definition, extra_offset } => json!({"type":"offset_plane","geometry":geometry,"definition":definition,"extra_offset_binding":extra_offset}),
                         solvecraft_io::f3d::HistoryKind::Mirror { plane, source_container, output_count } => json!({"type":"mirror","plane":plane,"source_container":source_container,"output_count":output_count}),
                         solvecraft_io::f3d::HistoryKind::MirrorFeatures { plane, sources, targets, output_count } => json!({"type":"mirror_features","plane":plane,"sources":sources,"target_producers":targets,"output_count":output_count}),
+                        solvecraft_io::f3d::HistoryKind::Combine { operation, keep_tools, operation_tag, tool_containers, target_container, consumed_handles } => json!({"type":"combine","operation":operation,"keep_tools":keep_tools,"operation_tag":operation_tag,"tool_containers":tool_containers,"target_container":target_container,"consumed_handles":consumed_handles}),
                     };
                     json!({"id":f.id,"name":f.name,"suppressed":f.suppressed,"dependencies":f.dependencies,"kind":kind})
                 }).collect::<Vec<_>>()}),

@@ -20,12 +20,43 @@ pub struct HistoryFeature {
 
 #[derive(Debug, PartialEq)]
 pub enum HistoryKind {
-    Sketch { geometry: u64, placement: SketchPlacement },
-    OffsetPlane { geometry: u64, definition: u64, extra_offset: Option<u64> },
-    Extrude { operation: Operation, profile_containers: Vec<u64> },
-    Loft { operation: Operation, section_containers: Vec<u64>, target_containers: Vec<u64> },
-    Mirror { plane: u64, source_container: u64, output_count: usize },
-    MirrorFeatures { plane: u64, sources: Vec<u64>, targets: Vec<u64>, output_count: usize },
+    Sketch {
+        geometry: u64,
+        placement: SketchPlacement,
+    },
+    OffsetPlane {
+        geometry: u64,
+        definition: u64,
+        extra_offset: Option<u64>,
+    },
+    Extrude {
+        operation: Operation,
+        profile_containers: Vec<u64>,
+    },
+    Loft {
+        operation: Operation,
+        section_containers: Vec<u64>,
+        target_containers: Vec<u64>,
+    },
+    Mirror {
+        plane: u64,
+        source_container: u64,
+        output_count: usize,
+    },
+    MirrorFeatures {
+        plane: u64,
+        sources: Vec<u64>,
+        targets: Vec<u64>,
+        output_count: usize,
+    },
+    Combine {
+        operation: Operation,
+        keep_tools: bool,
+        operation_tag: u64,
+        tool_containers: Vec<u64>,
+        target_container: u64,
+        consumed_handles: Vec<u64>,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -185,6 +216,10 @@ impl Design {
                         }
                         (super::mirrors::CLASS, 0) => {
                             let kind = super::mirrors::inputs(&mut r, &records, &classes, id, body_feature_version)?;
+                            (kind, String::new())
+                        }
+                        (super::combines::CLASS, 1) => {
+                            let kind = super::combines::inputs(&mut r, &records, &classes, id, body_feature_version)?;
                             (kind, String::new())
                         }
                         (EXTRUDE, 8) => {

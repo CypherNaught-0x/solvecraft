@@ -2,6 +2,57 @@
 use serde_json::{Value, json};
 use solvecraft_engine::Session;
 
+#[test]
+#[ignore = "requires local Combine operation and retention controls"]
+fn combine_bodies_keep_editable_sources_operations_and_tool_retention() {
+    use solvecraft_engine::doc::{Document, FeatureKind, Operation};
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    for (mode, operation, base_volume) in [("join", Operation::Join, 12.), ("cut", Operation::Cut, 4.), ("intersect", Operation::Intersect, 4.)] {
+        for keep in [false, true] {
+            let name = format!("combine-{mode}-{}", if keep { "keep" } else { "consume" });
+            let mut s = Session::default();
+            s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap();
+            assert_eq!(s.doc.features.len(), 5);
+            assert!(matches!(&s.doc.features[4].kind, FeatureKind::Combine { target, tools, operation: op, keep_tools }
+                if target == "Body1" && tools == &["Body2"] && *op == operation && *keep_tools == keep));
+            let expected = base_volume + if keep { 8. } else { 0. };
+            assert_eq!(volume(&mut s, expected, &name)["body_count"], if keep { 2 } else { 1 });
+            let original = s.doc.to_json();
+            // Heights remain native parameter references, not cached solid meshes.
+            assert!(matches!(s.doc.features[1].kind, FeatureKind::Extrude { .. }));
+            let distance = s.doc.features[1].param_names[0].clone();
+            s.execute("parameters.change", &json!({"name":distance,"expression":"30 mm"})).unwrap();
+            let edited = match operation {
+                Operation::Join => 16.,
+                Operation::Cut => 8.,
+                _ => 4.,
+            } + if keep { 8. } else { 0. };
+            volume(&mut s, edited, &name);
+            volume(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), edited, &name);
+            s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.doc.to_json(), original);
+            let feature = s.doc.features[4].name.clone();
+            s.execute("timeline.suppress", &json!({"feature":feature,"suppressed":true})).unwrap();
+            assert_eq!(volume(&mut s, 16., &name)["body_count"], 2);
+            s.execute("edit.undo", &json!({})).unwrap();
+            volume(&mut s, expected, &name);
+        }
+    }
+    for (name, expected) in [("combine-suppressed", 16.), ("combine-restored", 12.)] {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap();
+        assert_eq!(s.doc.features[4].suppressed, name.ends_with("suppressed"));
+        volume(&mut s, expected, name);
+    }
+    // A body produced by a mirror requires a different source schema. Refuse it
+    // atomically until that relationship is implemented, rather than dropping it.
+    let mut s = Session::default();
+    s.execute("solid.box", &json!({"length":10,"width":10,"height":10})).unwrap();
+    let before = s.doc.to_json();
+    assert!(s.execute("doc.open", &json!({"path":dir.join("mirror-consumed-after.f3d")})).is_err());
+    assert_eq!(s.doc.to_json(), before);
+}
+
 fn volume(s: &mut Session, want_cm3: f64, label: &str) -> Value {
     for r in &s.model.results {
         assert!(r.error.is_none(), "{label}: {r:?}");

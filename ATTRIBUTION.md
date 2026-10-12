@@ -164,3 +164,9 @@ Vulkan, DirectX 12, Metal and WebGPU retain their requested multisampling.
 | apps/solvecraft-cli/tests/history/mirror-feature-new.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/mirror-feature-join.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solvecraft-cli/tests/history/mirror-feature-cut.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/combine-join-consume.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/combine-join-keep.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/combine-cut-consume.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/combine-cut-keep.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/combine-intersect-consume.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solvecraft-cli/tests/history/combine-intersect-keep.solvecraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
