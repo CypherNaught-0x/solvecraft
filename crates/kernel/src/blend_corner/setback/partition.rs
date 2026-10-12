@@ -148,10 +148,12 @@ pub(crate) fn check(wires: &[Vec<mt::Edge>], direction: Vec3, size: f64) -> Resu
         let mut polygon = Vec::new();
         for edge in wire {
             let curve = edge.oriented_curve();
+            // Degree eight accommodates the exact cylindrical boundary with
+            // cubic angular and quadratic axial progression; budgets stay finite.
             let bounded = match &curve {
                 mt::Curve::Line(_) => true,
-                mt::Curve::BSplineCurve(c) => c.control_points().len() <= 256 && c.degree() <= 7,
-                mt::Curve::NurbsCurve(c) => c.control_points().len() <= 256 && c.degree() <= 7,
+                mt::Curve::BSplineCurve(c) => c.control_points().len() <= 256 && c.degree() <= 8,
+                mt::Curve::NurbsCurve(c) => c.control_points().len() <= 256 && c.degree() <= 8,
                 _ => false,
             };
             if !bounded {
@@ -187,7 +189,7 @@ pub(crate) fn check(wires: &[Vec<mt::Edge>], direction: Vec3, size: f64) -> Resu
             };
             let degree = knots.len().checked_sub(controls.len() + 1).ok_or_else(|| unsupported("patch boundary degree"))?;
             if controls.len() > 256
-                || !(1..=7).contains(&degree)
+                || !(1..=8).contains(&degree)
                 || knots.iter().any(|k| !k.is_finite())
                 || knots.windows(2).any(|w| matches!(w,[a,b] if a>b))
                 || controls.iter().any(|p| !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() || !p.w.is_finite() || p.w <= 0.0)

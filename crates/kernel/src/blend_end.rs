@@ -575,7 +575,7 @@ mod tests {
 
     /// One tenth of the reported basin: 10-degree side/back walls, a shallow front
     /// wall, and a floor dropping 0.4 mm to an 8 mm square drain seat.
-    fn shallow_basin() -> Body {
+    pub(super) fn shallow_basin() -> Body {
         let rect = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
         let inset = 12.0 * 10.0_f64.to_radians().tan();
         let floor = rect(15.0 + inset, 35.0 - inset, 75.0 - inset, 45.0 - inset);
@@ -770,7 +770,7 @@ mod tests {
         let mut checked = 0;
         for face in body.solid.face_iter() {
             let mt::Surface::BSplineSurface(s) = face.surface() else { continue };
-            if s.degrees() != (3, 3) || s.subs(0.5, 0.5).z <= 12.0 {
+            if !matches!(s.degrees(), (3, 3) | (5, 5)) || s.subs(0.5, 0.5).z <= 12.0 {
                 continue;
             }
             let surface = crate::body::evaluation::Surface(face.oriented_surface());
@@ -811,25 +811,28 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, 9, "must check the transition/corner-cylinder section");
-        let patch = body
+        assert!(checked == 9 || checked == 18, "must check all one or two transition/corner-cylinder sections: {checked}");
+        let patches: Vec<_> = body
             .solid
             .face_iter()
-            .find_map(|f| match f.surface() {
-                mt::Surface::BSplineSurface(s) if s.degrees() == (3, 3) && s.subs(0.5, 0.5).z > 12.0 => Some(s),
+            .filter_map(|f| match f.surface() {
+                mt::Surface::BSplineSurface(s) if matches!(s.degrees(), (3, 3) | (5, 5)) && s.subs(0.5, 0.5).z > 12.0 => Some(s),
                 _ => None,
             })
-            .unwrap();
-        let surface = crate::body::evaluation::Surface(mt::Surface::BSplineSurface(patch));
-        // Interior paths through the long, shallow front-rim transition. A
-        // boundary-only G1 check missed its alternating inward/outward puckers.
-        // Permit gradual changes of direction, but no large extra normal travel.
-        for j in (30..=75).step_by(5) {
-            let normals: Vec<_> = (15..=75).map(|i| surface.normal(i as f64 / 100.0, j as f64 / 100.0)).collect();
-            let angle = |a: mt::Vector3, b: mt::Vector3| a.dot(b).clamp(-1.0, 1.0).acos();
-            let travel: f64 = normals.windows(2).map(|n| angle(n[0], n[1])).sum();
-            let net = angle(normals[0], *normals.last().unwrap());
-            assert!(travel < 1.3 * net + 0.03, "rim transition ripples at v={}: normal travel {travel}, net {net}", j as f64 / 100.0);
+            .collect();
+        assert!(!patches.is_empty());
+        for patch in patches {
+            let surface = crate::body::evaluation::Surface(mt::Surface::BSplineSurface(patch));
+            // Interior paths through the long, shallow front-rim transition. A
+            // boundary-only G1 check missed its alternating inward/outward puckers.
+            // Permit gradual changes of direction, but no large extra normal travel.
+            for j in (30..=75).step_by(5) {
+                let normals: Vec<_> = (15..=75).map(|i| surface.normal(i as f64 / 100.0, j as f64 / 100.0)).collect();
+                let angle = |a: mt::Vector3, b: mt::Vector3| a.dot(b).clamp(-1.0, 1.0).acos();
+                let travel: f64 = normals.windows(2).map(|n| angle(n[0], n[1])).sum();
+                let net = angle(normals[0], *normals.last().unwrap());
+                assert!(travel < 1.3 * net + 0.03, "rim transition ripples at v={}: normal travel {travel}, net {net}", j as f64 / 100.0);
+            }
         }
     }
 
@@ -887,6 +890,7 @@ mod tests {
             }
             let surface = crate::body::evaluation::Surface(mt::Surface::BSplineSurface(s));
             let mut max_angle = 0.0_f64;
+            let mut worst = (0.0, 0.0, 0.0, 0.0);
             for i in 1..64 {
                 for j in 1..64 {
                     let (u, v) = (i as f64 / 64.0, j as f64 / 64.0);
@@ -896,11 +900,19 @@ mod tests {
                     }
                     let n = surface.normal(u, v);
                     for (a, b) in [(u + 1.0 / 64.0, v), (u, v + 1.0 / 64.0)] {
-                        max_angle = max_angle.max(n.dot(surface.normal(a, b)).clamp(-1.0, 1.0).acos().to_degrees());
+                        let angle = n.dot(surface.normal(a, b)).clamp(-1.0, 1.0).acos().to_degrees();
+                        if angle > max_angle {
+                            max_angle = angle;
+                            worst = (u, v, a, b);
+                        }
                     }
                 }
             }
-            assert!(max_angle < 45.0, "transition normal wrinkles between adjacent samples: {max_angle} degrees");
+            assert!(
+                max_angle < 45.0,
+                "transition normal wrinkles between adjacent samples: {max_angle} degrees, at {worst:?}, midpoint {:?}",
+                surface.subs(0.5, 0.5)
+            );
         }
         let mesh = body.display_mesh(0.01).unwrap();
         let mut seen = std::collections::HashSet::new();
@@ -1068,3 +1080,7 @@ mod tests {
         assert!(drilled.validity().is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "blend_end/flow_tests.rs"]
+mod flow_tests;

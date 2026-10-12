@@ -838,25 +838,25 @@ impl Body {
     /// Display mesh: like [`Body::tessellate`], with seam edges flagged.
     pub fn display_mesh(&self, tol: f64) -> Result<Mesh> {
         // A body's overall size can make a small transition patch only a few
-        // triangles wide. Give quintic patches local display detail, with a
+        // triangles wide. Give cubic and quintic patches local display detail, with a
         // bounded refinement factor for the shared shell mesh.
         let tol = if tol.is_finite() && tol > 0.0 { tol } else { 0.05 };
         let local = self
             .solid
             .face_iter()
             .filter_map(|f| match f.surface() {
-                mt::Surface::BSplineSurface(s) if s.degrees() == (5, 5) => {
+                mt::Surface::BSplineSurface(s) if matches!(s.degrees(), (3, 3) | (5, 5)) => {
                     let mut bounds = solvecraft_geom::Aabb3::EMPTY;
                     for p in s.control_points().iter().flatten().take(4096) {
                         bounds.add(from_p3(*p));
                     }
                     let size = bounds.diagonal();
-                    (size.is_finite() && size > 0.0).then_some(size * 1e-3)
+                    (size.is_finite() && size > 0.0).then_some(size * 5e-4)
                 }
                 _ => None,
             })
             .fold(tol, f64::min);
-        let tol = local.max(tol / 16.0);
+        let tol = local.max(tol / 32.0);
         let mut m = self.tessellate(tol)?;
         if self.is_mesh() {
             return Ok(m);

@@ -17,6 +17,7 @@ pub(super) fn build(
     size: f64,
     planes: &[(Vec3, Vec3)],
     out: Vec3,
+    singular_fan: bool,
 ) -> Result<(Vec<mt::Edge>, Vec<mt::Face>)> {
     let curve = section.curve();
     let (lo, hi) = curve.range_tuple();
@@ -136,7 +137,17 @@ pub(super) fn build(
             Boundary { curve: end.oriented_curve(), normal: end_normal },
             Boundary { curve: sb.oriented_curve().inverse(), normal: seam_normal(sb, i + 1, true)? },
         ];
-        pieces.push((vec![edge.inverse(), sa.clone(), end.clone(), sb.inverse()], conditions, [i > 0, i + 2 < points.len()]));
+        let terminal = |boundary: &Boundary, end: bool| -> Result<Vec3> {
+            let (lo, hi) = boundary.curve.range_tuple();
+            Ok(boundary.sample(if end { hi } else { lo })?.1)
+        };
+        // Collapse only a genuinely creased tip. Applying the singular map at
+        // a smooth meeting introduces needless stationary modes and wrinkles.
+        let singular = [
+            i > 0 && terminal(&conditions[1], true)?.dot(terminal(&conditions[2], false)?) < 1.0 - 1e-6,
+            i + 2 < points.len() && terminal(&conditions[3], false)?.dot(terminal(&conditions[2], true)?) < 1.0 - 1e-6,
+        ];
+        pieces.push((vec![edge.inverse(), sa.clone(), end.clone(), sb.inverse()], conditions, singular));
         sections.push(edge);
     }
     crate::blend_corner::setback::partition::check(&pieces.iter().map(|(wire, _, _)| wire.clone()).collect::<Vec<_>>(), out, size)?;
@@ -151,6 +162,11 @@ pub(super) fn build(
             .collect::<Result<Vec<_>>>();
         if let Ok(value) = attempt {
             fitted = value;
+            break;
+        }
+        // A smooth fan can use a single trimmed graph when its rectangular
+        // chart does not fit. Avoid repeatedly refining an unsuitable chart.
+        if !singular_fan {
             break;
         }
     }
