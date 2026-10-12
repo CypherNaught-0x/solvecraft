@@ -312,7 +312,7 @@ fn quadrilateral(r: &mut Reader<'_>) -> Result<()> {
     Ok(())
 }
 
-fn producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, handle: u64) -> Result<u64> {
+pub(super) fn producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, handle: u64) -> Result<u64> {
     require_class(classes, handle, HANDLE, 2)?;
     let mut r = payload(records.primary(handle)?, handle)?;
     zeros(&mut r, 6)?;

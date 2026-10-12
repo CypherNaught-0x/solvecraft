@@ -220,3 +220,12 @@ The offset plane moves from Z = 50 to -20 mm, moving the reflected cylinder from
 Z = 70..100 to -70..-40 without changing volume. The XZ case reflects a source
 centered at Y = 20 to Y = -20. Suppression retains only the original cylinder.
 Every case checks exact bounds, body count, volume, reopening and undo.
+
+`mirror-feature-new`, `mirror-feature-join` and `mirror-feature-cut` reflect an
+extrusion recipe across a live YZ offset plane. A circle with radius 5 mm, centered
+at X = 20 mm, creates a 30 mm extrusion or a 10 mm deep cut. The New Body case
+contains two cylinders with volume 1500π mm³. Join and Cut operate on an
+80 x 60 x 20 mm block, giving 96000 + 500π and 96000 − 500π mm³ respectively.
+Independent diameter, extrusion distance, plane offset and suppression edits
+check analytic volume, body count and bounds through reopening and undo.
+The suite now contains 74 original saved designs.

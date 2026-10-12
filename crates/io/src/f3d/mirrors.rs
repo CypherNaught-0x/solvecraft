@@ -1,4 +1,4 @@
-//! Separate body mirrors observed with source, plane, suppression and mode controls.
+//! Body and feature mirrors observed with source, plane, suppression and mode controls.
 //! Source recipes and tracked planes select geometry; evaluation caches do not.
 use super::history::{empty, finish, payload, references, require_class, zeros};
 use super::*;
@@ -14,7 +14,7 @@ pub(super) fn inputs(
     classes: &BTreeMap<u64, &Class>,
     owner: u64,
     body_version: u32,
-) -> Result<(u64, u64, usize, bool)> {
+) -> Result<HistoryKind> {
     empty(r)?;
     zeros(r, 1)?;
     if !super::attributes::read(r)?.is_empty() {
@@ -26,11 +26,10 @@ pub(super) fn inputs(
     require_class(classes, sources, SOURCE, 1)?;
     let roles = super::history::body_roles(r, classes, body_version)?;
     let outputs = roles.get(1).ok_or_else(|| invalid("missing mirror outputs"))?;
-    if !(1..=64).contains(&outputs.len()) || roles.iter().enumerate().any(|(i, ids)| i != 1 && !ids.is_empty()) {
+    if outputs.len() > 64 || roles.iter().enumerate().any(|(i, ids)| i != 1 && !ids.is_empty()) {
         return Err(invalid("unsupported mirror body roles"));
     }
     let mut unique = BTreeSet::new();
-    let mut suppressed = None;
     for output in outputs {
         if !unique.insert(*output) {
             return Err(invalid("duplicate mirror output"));
@@ -41,13 +40,10 @@ pub(super) fn inputs(
         if o.wide_string()?.is_empty() {
             return Err(invalid("unsupported mirror output identity"));
         }
-        let inactive = match o.take(2)? {
-            [0, 1] => false,
-            [1, 1] => true,
-            _ => return Err(invalid("unsupported mirror output state")),
-        };
-        if suppressed.replace(inactive).is_some_and(|previous| previous != inactive) {
-            return Err(invalid("inconsistent mirror output suppression"));
+        // A later feature can consume an output without suppressing its producer.
+        // Suppression comes from the inherited timeline feature record.
+        if !matches!(o.take(2)?, [0, 1] | [1, 1]) {
+            return Err(invalid("unsupported mirror output state"));
         }
         let body = o.reference()?;
         if !classes.get(&body).is_some_and(|c| c.id == "D3937028-C20C-4E65-B010-94AD418A5C20" && matches!(c.version, 18 | 19))
@@ -64,8 +60,31 @@ pub(super) fn inputs(
     }
     require_class(classes, h.reference()?, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
     let plane_container = h.reference()?;
-    zeros(&mut h, 12)?;
-    if h.u32()? != 2 || h.u32()? != 2 || h.u32()? != u32::MAX || h.take(5)? != [1, 1, 0, 0, 0] || h.u32()? != 2 {
+    let handles = references(&mut h)?;
+    if handles.len() > 64 || handles.iter().collect::<BTreeSet<_>>().len() != handles.len() {
+        return Err(invalid("invalid mirror target count"));
+    }
+    let targets = handles.iter().map(|id| super::loft_faces::producer(records, classes, *id)).collect::<Result<Vec<_>>>()?;
+    let pattern_version = records
+        .design
+        .classes
+        .iter()
+        .find(|c| c.id == "3EF91258-FE47-45A5-957D-1295C3679496")
+        .map(|c| c.version)
+        .unwrap_or(if records.design.layout == 8 { 9 } else { 0 });
+    zeros(
+        &mut h,
+        match pattern_version {
+            6 => 0,
+            8 => 4,
+            9 => 8,
+            _ => return Err(invalid("unsupported inherited mirror pattern schema")),
+        },
+    )?;
+    let compute = h.u32()?;
+    let selection = h.u32()?;
+    if compute != 2 || !matches!(selection, 1 | 2) || (pattern_version >= 8 && h.u32()? != u32::MAX) || h.take(5)? != [1, 1, 0, 0, 0] || h.u32()? != 2
+    {
         return Err(invalid("unsupported mirror selection or computation mode"));
     }
     zeros(&mut h, 4)?;
@@ -101,16 +120,42 @@ pub(super) fn inputs(
     zeros(&mut h, 4)?;
     finish(&h)?;
     let objects = super::loft_faces::objects(records, classes, source_container, owner)?;
-    if objects.len() != outputs.len() || objects.iter().collect::<BTreeSet<_>>().len() != objects.len() {
+    if !(1..=64).contains(&objects.len()) || objects.iter().collect::<BTreeSet<_>>().len() != objects.len() {
         return Err(invalid("inconsistent mirror source count"));
     }
+    if selection == 2 && (objects.len() != outputs.len() || !targets.is_empty()) {
+        return Err(invalid("unsupported body mirror target or output count"));
+    }
     let mut s = payload(records.primary(sources)?, sources)?;
-    zeros(&mut s, 10)?;
+    zeros(&mut s, 6)?;
+    for cached in references(&mut s)? {
+        require_class(classes, cached, "C46D3EEB-40E1-43FA-83DC-9CB204335417", 1)?;
+    }
     if s.count(15)? != objects.len() {
         return Err(invalid("inconsistent mirror source relationship count"));
     }
+    let mut features = Vec::new();
+    let mut new_bodies = 0;
     for object in objects {
-        require_class(classes, object, "9716F783-676D-42E0-93F9-EBF273E7C035", 1)?;
+        if selection == 2 {
+            require_class(classes, object, "9716F783-676D-42E0-93F9-EBF273E7C035", 1)?;
+        } else {
+            let (feature, bodies) = feature_source(records, classes, object, owner)?;
+            if features.contains(&feature) {
+                return Err(invalid("duplicate mirrored feature"));
+            }
+            let mut input = payload(records.primary(feature)?, feature)?;
+            let input = super::history::extrude_inputs(&mut input, classes)?;
+            if !matches!(input.limit, super::history::ExtrudeLimit::Distance(_)) {
+                return Err(invalid("To Object mirrored feature computation is not supported yet"));
+            }
+            match input.operation {
+                solvecraft_doc::Operation::NewBody if bodies == [feature] => new_bodies += 1,
+                solvecraft_doc::Operation::Join | solvecraft_doc::Operation::Cut if !targets.is_empty() && bodies == targets => {}
+                _ => return Err(invalid("mirrored feature operation disagrees with its target bodies")),
+            }
+            features.push(feature);
+        }
         if s.reference()? != object {
             return Err(invalid("mirror source relationships disagree"));
         }
@@ -125,7 +170,59 @@ pub(super) fn inputs(
     let planes = super::loft_faces::objects(records, classes, plane_container, owner)?;
     let [plane] = planes.as_slice() else { return Err(invalid("mirror requires one tracked plane")) };
     let plane = super::planes::tracked_plane(records, classes, *plane, owner)?;
-    Ok((plane, source_container, outputs.len(), suppressed.ok_or_else(|| invalid("missing mirror output state"))?))
+    let kind = if selection == 2 {
+        HistoryKind::Mirror { plane, source_container, output_count: outputs.len() }
+    } else {
+        if outputs.len() != new_bodies || (new_bodies == features.len() && !targets.is_empty()) {
+            return Err(invalid("mirrored feature outputs disagree with source operations"));
+        }
+        HistoryKind::MirrorFeatures { plane, sources: features, targets, output_count: outputs.len() }
+    };
+    Ok(kind)
+}
+
+fn feature_source(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<(u64, Vec<u64>)> {
+    require_class(classes, id, "5A1BF548-241F-46FD-9FB5-E4B05126EB9D", 1)?;
+    let mut r = payload(records.primary(id)?, id)?;
+    zeros(&mut r, 6)?;
+    let tracker = r.reference()?;
+    require_class(classes, tracker, "90055C05-546C-4EE7-B3C9-3DD922AD0C9C", 0)?;
+    if r.u32()? != 1 {
+        return Err(invalid("unsupported mirror feature tracker"));
+    }
+    r.wide_string()?;
+    r.wide_string()?;
+    if r.u32()? != 2 {
+        return Err(invalid("unsupported mirror feature selection"));
+    }
+    zeros(&mut r, 8)?;
+    let handles = references(&mut r)?;
+    if !(1..=64).contains(&handles.len()) || handles.iter().collect::<BTreeSet<_>>().len() != handles.len() {
+        return Err(invalid("invalid mirrored feature body handles"));
+    }
+    let inherited_version = records
+        .design
+        .classes
+        .iter()
+        .find(|c| c.id == "A0A15D26-1F3B-4120-A3F1-9CDDA189AB74")
+        .map(|c| c.version)
+        .unwrap_or(if records.design.layout == 8 { 2 } else { 0 });
+    r.take(match inherited_version {
+        1 => 55,
+        2 => 56,
+        _ => return Err(invalid("unsupported inherited mirror selector schema")),
+    })?; // inherited evaluation state; never selects a feature or body
+    if r.reference()? != owner {
+        return Err(invalid("mirror feature selector belongs to another owner"));
+    }
+    finish(&r)?;
+    let bodies = handles.into_iter().map(|id| super::loft_faces::producer(records, classes, id)).collect::<Result<Vec<_>>>()?;
+    let mut r = payload(records.primary(tracker)?, tracker)?;
+    zeros(&mut r, 6)?;
+    let feature = r.u64()?;
+    finish(&r)?;
+    require_class(classes, feature, "DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8)?;
+    Ok((feature, bodies))
 }
 
 fn owner_tail(r: &mut Reader<'_>, owner: u64) -> Result<()> {
@@ -238,11 +335,99 @@ mod tests {
             assert_eq!(mirror.suppressed, suppressed);
             assert_eq!(mirror.kind, HistoryKind::Mirror { plane: 900, source_container: 921, output_count: 1 });
         }
-        let mut inconsistent = authored(false);
-        let output = &mut inconsistent.0.get_mut(&950).unwrap().2;
+        let mut consumed = authored(false);
+        let output = &mut consumed.0.get_mut(&950).unwrap().2;
         let at = output.len() - 24;
         output[at] = 1;
-        assert!(inconsistent.design().history().is_err());
+        assert!(!consumed.design().history().unwrap().last().unwrap().suppressed);
+        let mut consumed = authored(false);
+        consumed.0.get_mut(&950).unwrap().2[at] = 2;
+        assert!(consumed.design().history().is_err());
+    }
+
+    fn authored_feature(suppressed: bool) -> Fixture {
+        let mut f = authored(suppressed);
+        f.0.get_mut(&910).unwrap().2[45] = 1;
+        let mut outputs = Vec::new();
+        refs(&mut outputs, &[80]);
+        f.0.get_mut(&9).unwrap().2.splice(151..155, outputs);
+        let mut b = vec![0; 6];
+        wide(&mut b, "original-source-body");
+        b.extend([0, 1]);
+        reference(&mut b, 81);
+        reference(&mut b, 9);
+        let mut secondary = vec![0; 4];
+        reference(&mut secondary, 4);
+        f.put(80, "D26351F0-5940-4D23-AA20-2C35475A6D9E", 2, b, Some(secondary));
+        f.put(81, "D3937028-C20C-4E65-B010-94AD418A5C20", 19, vec![], None);
+        let mut b = vec![0; 6];
+        reference(&mut b, 940);
+        u32(&mut b, 1);
+        wide(&mut b, "original-feature-selection");
+        wide(&mut b, "original-feature-owner");
+        u32(&mut b, 2);
+        b.extend([0; 8]);
+        refs(&mut b, &[80]);
+        b.extend([0; 56]);
+        reference(&mut b, 19);
+        f.put(920, "5A1BF548-241F-46FD-9FB5-E4B05126EB9D", 1, b, None);
+        let mut b = vec![0; 6];
+        u64(&mut b, 9);
+        f.put(940, "90055C05-546C-4EE7-B3C9-3DD922AD0C9C", 0, b, None);
+        f
+    }
+
+    #[test]
+    fn feature_mirror_uses_explicit_feature_and_body_links() {
+        for suppressed in [false, true] {
+            let history = authored_feature(suppressed).design().history().unwrap();
+            assert_eq!(history.last().unwrap().kind, HistoryKind::MirrorFeatures { plane: 900, sources: vec![9], targets: vec![], output_count: 1 });
+            assert_eq!(history.last().unwrap().suppressed, suppressed);
+        }
+        for id in [80, 920, 940] {
+            for keep in 0..authored_feature(false).0[&id].2.len() {
+                let mut f = authored_feature(false);
+                f.0.get_mut(&id).unwrap().2.truncate(keep);
+                assert!(f.design().history().is_err(), "{id}/{keep}");
+            }
+        }
+        for id in [8_u64, 19, 900, 9999] {
+            let mut f = authored_feature(false);
+            f.0.get_mut(&940).unwrap().2[6..14].copy_from_slice(&id.to_le_bytes());
+            assert!(f.design().history().is_err(), "wrong feature {id}");
+        }
+        // Changing the source's operation without adding its target-body links
+        // must not be accepted as a new-body mirror.
+        for operation in [1, 2, 3] {
+            let mut f = authored_feature(false);
+            f.0.get_mut(&9).unwrap().2[9] = operation;
+            assert!(f.design().history().is_err(), "operation {operation}");
+        }
+    }
+
+    #[test]
+    fn versioned_pattern_headers_preserve_feature_mirror_inputs() {
+        for version in [6, 8, 9] {
+            let mut f = authored_feature(false);
+            let h = &mut f.0.get_mut(&910).unwrap().2;
+            if version == 6 {
+                h.drain(49..53);
+                h.drain(33..41);
+            } else if version == 8 {
+                h.drain(33..37);
+            }
+            let mut d = f.design();
+            d.classes.push(Class {
+                id: "3EF91258-FE47-45A5-957D-1295C3679496".into(),
+                version,
+                parent: String::new(),
+                group: String::new(),
+                objects: vec![],
+            });
+            assert!(d.history().is_ok(), "version {version}");
+            d.classes.last_mut().unwrap().version = 7;
+            assert!(d.history().is_err());
+        }
     }
 
     #[test]

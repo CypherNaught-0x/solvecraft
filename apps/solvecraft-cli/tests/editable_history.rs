@@ -8,7 +8,7 @@ fn recipes() -> Vec<PathBuf> {
     let mut paths: Vec<_> =
         std::fs::read_dir(dir).unwrap().map(|p| p.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
     paths.sort();
-    assert_eq!(paths.len(), 71);
+    assert_eq!(paths.len(), 74);
     paths
 }
 

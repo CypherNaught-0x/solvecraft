@@ -25,6 +25,7 @@ pub enum HistoryKind {
     Extrude { operation: Operation, profile_containers: Vec<u64> },
     Loft { operation: Operation, section_containers: Vec<u64>, target_containers: Vec<u64> },
     Mirror { plane: u64, source_container: u64, output_count: usize },
+    MirrorFeatures { plane: u64, sources: Vec<u64>, targets: Vec<u64>, output_count: usize },
 }
 
 #[derive(Debug, PartialEq)]
@@ -100,7 +101,6 @@ impl Design {
                 let class = classes.get(&id).ok_or_else(|| invalid("missing timeline feature"))?;
                 let feature = (|| {
                     let mut r = payload(records.primary(id)?, id)?;
-                    let mut mirror_suppressed = None;
                     let (kind, custom) = match (class.id.as_str(), class.version) {
                         (SKETCH, version @ 3..=5) => {
                             empty(&mut r)?;
@@ -184,10 +184,8 @@ impl Design {
                             (HistoryKind::Loft { operation, section_containers, target_containers }, String::new())
                         }
                         (super::mirrors::CLASS, 0) => {
-                            let (plane, source_container, output_count, suppressed) =
-                                super::mirrors::inputs(&mut r, &records, &classes, id, body_feature_version)?;
-                            mirror_suppressed = Some(suppressed);
-                            (HistoryKind::Mirror { plane, source_container, output_count }, String::new())
+                            let kind = super::mirrors::inputs(&mut r, &records, &classes, id, body_feature_version)?;
+                            (kind, String::new())
                         }
                         (EXTRUDE, 8) => {
                             let input = extrude_inputs(&mut r, &classes)?;
@@ -223,9 +221,6 @@ impl Design {
                         (Some(1), Some(1)) => true,
                         _ => return Err(invalid("inconsistent feature suppression flags")),
                     };
-                    if mirror_suppressed.is_some_and(|outputs| outputs != suppressed) {
-                        return Err(invalid("mirror output suppression disagrees with its feature"));
-                    }
                     finish(&r)?;
                     let name = if !custom.is_empty() {
                         custom

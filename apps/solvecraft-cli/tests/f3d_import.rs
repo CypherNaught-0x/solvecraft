@@ -89,7 +89,8 @@ fn body_mirrors_preserve_sources_planes_suppression_and_edits() {
         !name.contains("feature-plane") && !name.ends_with("-combine")
     });
     let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
-    for name in ["mirror-feature-plane-baseline", "mirror-mode-combine"] {
+    {
+        let name = "mirror-mode-combine";
         let mut s = Session::default();
         s.execute("solid.box", &json!({"length":5,"width":7,"height":9})).unwrap();
         let before = s.doc.clone();
@@ -107,6 +108,15 @@ fn body_mirrors_preserve_sources_planes_suppression_and_edits() {
     volume(&mut Session::new(reopened), api["mirror-mode-separate"]["volume"].as_f64().unwrap(), "reopened mirror");
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.doc, original);
+}
+
+#[test]
+#[ignore = "requires local public API feature mirror controls"]
+fn feature_mirrors_preserve_new_join_cut_operations_and_edits() {
+    check_selected_histories(
+        &["fusion-mirror-measurements.json", "fusion-feature-mirror-measurements.json", "fusion-feature-mirror-pair-measurements.json"],
+        |name| name.contains("feature-plane") || name.starts_with("feature-mirror-"),
+    );
 }
 
 fn check_selected_histories(files: &[&str], include: impl Fn(&str) -> bool) {

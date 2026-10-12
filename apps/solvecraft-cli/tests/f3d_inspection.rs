@@ -287,7 +287,7 @@ fn legacy_timeline_preserves_every_entry_and_decodes_versioned_sketches() {
     let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
     let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-corpus-measurements.json")).unwrap()).unwrap();
     for (name, count, decoded, sketch_count) in
-        [("adapter-x20-makita.f3d", 49, 39, 12), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 35, 17, 3), ("R36S Grip.f3d", 53, 8, 2)]
+        [("adapter-x20-makita.f3d", 49, 40, 12), ("Gridfinity Storage Box Shelves (Parametric) V1.0.f3d", 35, 18, 3), ("R36S Grip.f3d", 53, 8, 2)]
     {
         let mut s = Session::default();
         let before = s.doc.clone();
@@ -600,6 +600,61 @@ fn legacy_planar_endpoints_preserve_timeline_names_and_dependencies() {
             assert_eq!(&decoded, original);
         } else {
             original = Some(decoded);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the local original adapter and unchanged public API resave"]
+fn legacy_feature_mirror_preserves_join_source_and_targets() {
+    use solvecraft_engine::io::f3d::HistoryKind;
+    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let mut original = None;
+    for path in [corpus.join("adapter-x20-makita.f3d"), probes.join("corpus-adapter-x20-makita.f3d")] {
+        let ds = solvecraft_engine::io::f3d::read_f3d(&std::fs::read(&path).unwrap()).unwrap();
+        let timeline = ds[0].timeline().unwrap();
+        let source = timeline.iter().filter_map(|e| e.feature.as_ref().ok()).find(|f| f.name == "Extrude5").unwrap();
+        let mirror = timeline
+            .iter()
+            .find(|e| e.class == "D1728651-3640-4CCF-8083-AF7703013978")
+            .unwrap()
+            .feature
+            .as_ref()
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert!(
+            matches!(&mirror.kind, HistoryKind::MirrorFeatures { sources, targets, output_count:0, .. } if sources == &[source.id] && targets.len()==1)
+        );
+        assert_eq!(mirror.name, "Mirror1");
+        assert!(!mirror.suppressed);
+        let encoded = format!("{mirror:?}");
+        if let Some(original) = &original {
+            assert_eq!(&encoded, original);
+        } else {
+            original = Some(encoded);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires local public API controls before and after consuming a mirrored body"]
+fn consumed_mirror_output_does_not_suppress_the_timeline_feature() {
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: serde_json::Value = serde_json::from_slice(&std::fs::read(probes.join("fusion-consumed-mirror-measurements.json")).unwrap()).unwrap();
+    let mut original = None;
+    for (name, body_count) in [("mirror-consumed-before", 2), ("mirror-consumed-after", 1)] {
+        assert_eq!(api[name]["body_count"], body_count);
+        assert_eq!(api[name]["timeline"][2]["suppressed"], false);
+        let ds = solvecraft_engine::io::f3d::read_f3d(&std::fs::read(probes.join(format!("{name}.f3d"))).unwrap()).unwrap();
+        let timeline = ds[0].timeline().unwrap();
+        let mirror = timeline.into_iter().nth(2).unwrap().feature.unwrap();
+        assert_eq!(mirror.name, "Mirror1");
+        assert!(!mirror.suppressed);
+        assert!(matches!(mirror.kind, solvecraft_engine::io::f3d::HistoryKind::Mirror { output_count: 1, .. }));
+        if let Some(original) = &original {
+            assert_eq!(&mirror, original);
+        } else {
+            original = Some(mirror);
         }
     }
 }

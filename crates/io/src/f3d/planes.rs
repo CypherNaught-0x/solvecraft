@@ -110,18 +110,18 @@ pub(super) fn definition(records: &Records<'_>, classes: &BTreeMap<u64, &Class>,
     let bases = references(&mut r)?;
     let [base] = bases.as_slice() else { return Err(invalid("unsupported plane base references")) };
     zeros(&mut r, 2)?;
-    evaluation_tail(&mut r, classes, owner)?;
+    evaluation_tail(&mut r, classes, owner, 60)?;
     let base = tracked_plane(records, classes, *base, owner)?;
     Ok(Definition { base, distance, extra, plane })
 }
 
-fn evaluation_tail(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>, owner: u64) -> Result<()> {
+fn evaluation_tail(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>, owner: u64, length: usize) -> Result<()> {
     for id in references(r)? {
         if !classes.contains_key(&id) {
             return Err(invalid("missing plane evaluation reference"));
         }
     }
-    r.take(60)?; // inherited evaluation state, stamps and presentation references
+    r.take(length)?; // inherited evaluation state, stamps and presentation references
     if r.reference()? != owner {
         return Err(invalid("plane definition belongs to another feature"));
     }
@@ -144,40 +144,46 @@ pub(super) fn tracked_plane(records: &Records<'_>, classes: &BTreeMap<u64, &Clas
         return Err(invalid("unsupported plane tracking kind"));
     }
     zeros(&mut r, 4)?;
-    evaluation_tail(&mut r, classes, owner)?;
+    let version = records
+        .design
+        .classes
+        .iter()
+        .find(|c| c.id == "A0A15D26-1F3B-4120-A3F1-9CDDA189AB74")
+        .map(|c| c.version)
+        .unwrap_or(if records.design.layout == 8 { 2 } else { 0 });
+    let length = match version {
+        1 => 59,
+        2 => 60,
+        _ => return Err(invalid("unsupported tracked-plane inherited schema")),
+    };
+    evaluation_tail(&mut r, classes, owner, length)?;
     let mut r = payload(records.primary(tracker)?, tracker)?;
     empty(&mut r)?;
     zeros(&mut r, 2)?;
     let entity = r.u64()?;
     finish(&r)?;
-    require_class(classes, entity, GEOMETRY, 1)?;
+    geometry_version(classes, entity)?;
     Ok(entity)
 }
 
 /// Only root origin planes may terminate an imported offset chain. A cached face
 /// or a later construction plane must never become a frozen custom base plane.
 pub(super) fn origin(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, root: u64) -> Result<(String, Plane)> {
-    require_class(classes, id, GEOMETRY, 1)?;
+    let version = geometry_version(classes, id)?;
     let mut r = payload(records.primary(id)?, id)?;
     empty(&mut r)?;
-    if r.take(2)? != [0, 1] {
-        return Err(invalid("unsupported origin-plane attributes"));
+    zeros(&mut r, 1)?;
+    super::attributes::read(&mut r)?;
+    if version == 1 {
+        zeros(&mut r, 4)?; // explicit origin role added in geometry version 1
     }
-    for _ in 0..r.count(16)? {
-        r.string()?;
-        if r.string()? != "IntrinsicMetaTypeuint64" {
-            return Err(invalid("unsupported origin-plane attribute type"));
-        }
-        r.u64()?;
-    }
-    zeros(&mut r, 4)?; // origin role, distinct from generated plane geometry
     r.take(17)?; // display extents and flags
     let mut vector = || -> Result<Vec3> { Ok(Vec3::new(f64::from_bits(r.u64()?), f64::from_bits(r.u64()?), f64::from_bits(r.u64()?))) };
     let (o, x, y) = (vector()?, vector()?, vector()?);
     if !o.is_finite() || !x.is_finite() || !y.is_finite() {
         return Err(invalid("non-finite origin plane"));
     }
-    r.take(26)?; // presentation extents and origin identity flags
+    r.take(if version == 0 { 21 } else { 26 })?; // presentation extents and origin identity flags
     let name = r.wide_string()?;
     let plane = match name.as_str() {
         "XY" => Plane::XY,
@@ -188,7 +194,7 @@ pub(super) fn origin(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id:
     if o.len() > 1e-10 || (x.cross(y) - plane.normal()).len() > 1e-10 {
         return Err(invalid("origin plane name and geometry disagree"));
     }
-    r.take(37)?;
+    r.take(if version == 0 { 36 } else { 37 })?;
     let group = r.reference()?;
     finish(&r)?;
     require_class(classes, group, "2972A3B8-3627-49BC-8C3D-18707605EC44", 1)?;
@@ -200,6 +206,14 @@ pub(super) fn origin(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id:
     }
     finish(&r)?;
     Ok((name, plane))
+}
+
+fn geometry_version(classes: &BTreeMap<u64, &Class>, id: u64) -> Result<u32> {
+    classes
+        .get(&id)
+        .filter(|c| c.id == GEOMETRY && matches!(c.version, 0 | 1))
+        .map(|c| c.version)
+        .ok_or_else(|| invalid("unsupported plane geometry class or version"))
 }
 
 pub(super) fn same_surface(a: Plane, b: Plane) -> bool {

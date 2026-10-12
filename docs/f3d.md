@@ -1704,7 +1704,9 @@ its version-1 helper, explicit body source relationships and a tracked plane.
 Separate body mirrors now become editable `Mirror` features. Independent
 extrusion bodies are resolved through their persistent handles, operation owners
 and whole-body label tables. The source list must agree with the helper's list;
-output ownership, count, instance roles and suppression must also agree.
+output ownership, count and instance roles must also agree. Suppression is read
+from the timeline feature; a consumed output can be inactive without suppressing
+its producer (see the feature-mirror controls below).
 No cached transform or nearest-body search chooses the source or plane.
 
 Origin planes and already imported offset construction planes stay live. Local
@@ -1729,3 +1731,40 @@ local inspection tests. The native mirror group covers 11 supported exports and
 atomic rejection of the two unsupported modes; the offset-plane result was
 rendered and visually checked. HardEdgeBasin's opening regression passed in
 0.87 seconds.
+
+### Editable extrusion feature mirrors
+
+Native feature mirrors now retain explicit source feature identities and target
+body producers, rebuilding the source extrusion recipes with their original
+New Body, Join or Cut operation. Origin and offset construction planes stay live.
+The reader validates the feature tracker, selected body handles, helper/source
+agreement, instance ownership and resulting body count. Cached shapes and
+transforms do not choose the source or its target. Distance extrusions are
+supported; To Object feature mirrors, other feature kinds, combined body mirrors
+and face support planes still fail explicitly.
+
+Twenty-two local native controls cover single and multiple selected features
+(including reversed selection order), diameter/height edits, offset planes,
+reopening and undo. Three original SolidCraft fixtures use analytic volumes and
+exact bounds for separate cylinders and symmetric joined/cut cylinders on a
+block. They bring the public editable-history suite to 74 saved designs.
+
+Inherited pattern versions 6, 8 and 9 retain the same relationships with
+version-specific headers. Legacy selector metadata and origin-plane geometry
+also have explicit version handling. The original adapter's Join feature mirror
+matches an unchanged modern Fusion resave, bringing its decoded timeline to
+40 of 49 entries. The three original origin planes match their modern resave.
+These decoded entries do not mean the complete adapter imports yet.
+
+A separate control creates two mirrored cylinders, then combines them while
+discarding the tool. The mirror output handle changes from `[0,1]` to `[1,1]`,
+but the public API confirms that the mirror remains unsuppressed. Output
+availability therefore cannot substitute for timeline suppression. The regression
+preserves the mirror inputs before and after consumption, while unknown state
+flags still fail. This also restores decoding of the first Gridfinity mirror,
+bringing that timeline to 18 of 35 entries. All Fusion exports remain local.
+
+Validation against upstream `8c13914` passed all 30 CI binaries, including 132
+I/O tests, 577 engine tests and all 74 editable fixtures, plus WASM. All 38 local
+native-import groups and 16 inspection tests passed. The legacy origin-plane
+comparison also passed, and HardEdgeBasin's opening regression took 0.88 seconds.

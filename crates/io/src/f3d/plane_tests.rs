@@ -44,6 +44,64 @@ fn rotated_sketch_basis_retains_live_origin_plane_offset_dependencies() {
 fn matrix(z: f64) -> [f64; 16] {
     [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., z, 0., 0., 0., 1.]
 }
+
+#[test]
+fn legacy_origin_geometry_retains_exact_root_plane_identity() {
+    for version in [0, 1] {
+        let mut f = planes_fixture();
+        let record = f.0.get_mut(&1000).unwrap();
+        record.1 = version;
+        if version == 0 {
+            record.2.drain(119..124);
+            record.2.drain(10..14);
+            record.2.remove(record.2.len() - 12);
+        }
+        let d = f.design();
+        let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+        let records = Records::new(&d);
+        assert_eq!(planes::origin(&records, &classes, 1000, 3).unwrap(), ("XY".into(), solvecraft_geom::Plane::XY));
+        assert!(planes::origin(&records, &classes, 1000, 4).is_err());
+    }
+}
+
+#[test]
+#[ignore = "requires local original adapter and unchanged public API resave"]
+fn original_adapter_origin_planes_match_modern_resave() {
+    let corpus = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_CORPUS").unwrap());
+    let probes = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let mut original = None;
+    for path in [corpus.join("adapter-x20-makita.f3d"), probes.join("corpus-adapter-x20-makita.f3d")] {
+        let designs = read_f3d(&std::fs::read(path).unwrap()).unwrap();
+        let d = &designs[0];
+        let records = Records::new(d);
+        let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+        let root = d.classes.iter().find(|c| c.id == "E03784ED-5E19-4E14-B9F2-3B07017018CD").unwrap().objects[0];
+        let planes: Vec<_> = d
+            .classes
+            .iter()
+            .filter(|c| c.id == planes::GEOMETRY)
+            .flat_map(|c| &c.objects)
+            .filter_map(|id| planes::origin(&records, &classes, *id, root).ok().map(|plane| (*id, plane)))
+            .collect();
+        assert_eq!(planes.len(), 3);
+        for (_, (name, plane)) in &planes {
+            assert_eq!(
+                *plane,
+                match name.as_str() {
+                    "XY" => solvecraft_geom::Plane::XY,
+                    "XZ" => solvecraft_geom::Plane::XZ,
+                    "YZ" => solvecraft_geom::Plane::YZ,
+                    _ => panic!("unexpected origin plane"),
+                }
+            );
+        }
+        if let Some(original) = &original {
+            assert_eq!(&planes, original);
+        } else {
+            original = Some(planes);
+        }
+    }
+}
 fn definition(f: &mut Fixture, id: u64, owner: u64, base: u64, distance: Option<u64>, extra: Option<u64>, z: f64) {
     let mut b = vec![0; 40];
     b.extend([1, 0]);

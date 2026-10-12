@@ -143,6 +143,47 @@ impl Design {
                 face.anchor(&doc, &projection_model.state(), id, &contributions)
             };
             let kind = match f.kind {
+                HistoryKind::MirrorFeatures { plane, sources, targets, output_count } => {
+                    let (plane, _) = plane_base(&records, &classes, &planes, plane, root)?;
+                    let mut target_bodies = Vec::new();
+                    for target in targets {
+                        let source = feature_ids
+                            .get(&target)
+                            .and_then(|id| doc.feature(*id))
+                            .filter(|f| !f.suppressed)
+                            .ok_or_else(|| invalid("mirrored feature target is unavailable"))?;
+                        let [body] = source.body_names.as_slice() else { return Err(invalid("mirrored feature target requires one body")) };
+                        if !active_bodies.contains(body) || target_bodies.contains(body) {
+                            return Err(invalid("missing or duplicate mirrored feature target"));
+                        }
+                        target_bodies.push(body.clone());
+                    }
+                    let mut features = Vec::new();
+                    for source in sources {
+                        let source = feature_ids
+                            .get(&source)
+                            .and_then(|id| doc.feature(*id))
+                            .filter(|f| !f.suppressed)
+                            .ok_or_else(|| invalid("mirrored feature must precede its mirror and be active"))?;
+                        let FeatureKind::Extrude { operation, targets, .. } = &source.kind else {
+                            return Err(invalid("unsupported mirrored feature kind"));
+                        };
+                        if *operation != Operation::NewBody && *targets != target_bodies {
+                            return Err(invalid("mirrored feature target handles disagree with its operation"));
+                        }
+                        features.push(source.name.clone());
+                    }
+                    let mut outputs = Vec::new();
+                    for _ in 0..output_count {
+                        body_number += 1;
+                        outputs.push(format!("Body{body_number}"));
+                    }
+                    if !f.suppressed {
+                        active_bodies.extend(outputs.iter().cloned());
+                    }
+                    new_body = Some(outputs);
+                    FeatureKind::Mirror { features, plane, bodies: vec![], combine: false }
+                }
                 HistoryKind::Mirror { plane, source_container, output_count } => {
                     let (plane, _) = plane_base(&records, &classes, &planes, plane, root)?;
                     let objects = super::loft_faces::objects(&records, &classes, source_container, f.id)?;
