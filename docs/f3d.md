@@ -1517,3 +1517,47 @@ that the complete design regenerates.
 Validation: full CI passed all 30 binaries, including 122 IO tests, the 59 saved
 history fixtures and WASM. The HardEdgeBasin opening regression passed in 0.92
 seconds. The local original/resaved adapter selector comparison also passed.
+
+
+### Compound extrusion Join targets
+
+A loft Join target can now retain the body's creating extrusion and up to 63
+subsequent extrusion Join operations. The native selector stores an ordered list
+of `(operation tag, flags)` pairs. The bounded body recipe independently names
+the same operations in the same order, with one body label per entry. Entries
+have eight reserved bytes each; four additional reserved bytes follow the list.
+Supported creation/Join flags are checked exactly. Duplicate or zero tags,
+inconsistent recipes, malformed prefixes and excessive counts fail before import.
+
+Reconstruction requires every operation to belong to a distinct, prior,
+unsuppressed feature. The first must own the explicit body handle; later entries
+must be extrusion Joins targeting that same active body. The recipe's integer is
+an allocated body label, not a shape-size code. It resolves through the producer's
+B7F34 label table to an ABA79 whole-body record (version 4), whose stored operation
+must agree. A circle's common label 4 or a rectangle's common label 7 is never
+inferred from its geometry. Authored tests deliberately use label 208.
+
+Whole-body records retain a checked member-label list. Layout 4 stores strings
+individually; layout 8 stores concatenated text and an offset table. Both encodings
+are bounded, validate canonical labels and reject duplicates, invalid offsets,
+unknown layouts and truncation. Their optional cached recipe reference must have
+the expected class; it never chooses a nearby body. A local test checks the first
+compound target in the original adapter and its unchanged public-API resave.
+
+Twenty-one additional public-API controls cover a joined cap, same-position and
+offset joins from separate sketches, and triangle, pentagon and eight-line polygon
+footprints. Import, source and parent edits, destination-plane edits, volume,
+bounds, body count, reopening and undo are compared across 92 face-loft controls.
+Two original saved Join recipes bring ordinary CI to 61 editable designs, with
+independent analytic volumes and bounds and one-body checks throughout edits,
+reopening and undo. Native exports and API measurements remain local.
+
+Targets subsequently modified by lofts use additional operation flags and remain
+under investigation. Those records and the other unsupported adapter features
+still prevent a complete import of the larger supplied design.
+
+Validation after merging upstream `b4491ac`: full CI passed all 30 binaries,
+including 125 IO tests, 61 saved editable fixtures and WASM. The HardEdgeBasin
+opening regression passed in 0.88 seconds. Both local adapter identity checks
+(original versus unchanged resave) passed. The joined polygon fixture was rendered
+and visually inspected; its image remains local.

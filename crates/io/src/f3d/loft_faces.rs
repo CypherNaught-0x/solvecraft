@@ -27,6 +27,7 @@ struct Recipe {
 }
 
 impl Face {
+    #[cfg(test)]
     pub fn cap(feature: u64, operation: u64, high: bool, rectangular: bool) -> Self {
         Self { feature, high, rectangular, side: None, side_roles: BTreeMap::new(), contributions: vec![operation], all_operations: vec![operation] }
     }
@@ -400,7 +401,19 @@ pub(super) fn face(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u
     })
 }
 
-pub(super) fn target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, container: u64, owner: u64) -> Result<(u64, u64, bool)> {
+#[derive(Debug, PartialEq)]
+pub(super) struct TargetOperation {
+    pub operation: u64,
+    pub label: u32,
+}
+
+#[derive(Debug, PartialEq)]
+pub(super) struct Target {
+    pub feature: u64,
+    pub operations: Vec<TargetOperation>,
+}
+
+pub(super) fn target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, container: u64, owner: u64) -> Result<Target> {
     let objects = objects(records, classes, container, owner)?;
     let [id] = objects.as_slice() else {
         return Err(invalid("loft target requires one body"));
@@ -408,33 +421,40 @@ pub(super) fn target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, con
     require_class(classes, *id, "9716F783-676D-42E0-93F9-EBF273E7C035", 1)?;
     let mut r = payload(records.primary(*id)?, *id)?;
     zeros(&mut r, 6)?;
-    if r.u32()? != 1 {
+    let count = r.count(12)?;
+    if !(1..=64).contains(&count) {
         return Err(invalid("unsupported loft target operation count"));
     }
-    let operation = r.u64()?;
-    if operation == 0 || r.u32()? != 33 {
-        return Err(invalid("unsupported loft target flags"));
+    let mut operations = Vec::new();
+    let mut seen = BTreeSet::new();
+    for i in 0..count {
+        let operation = r.u64()?;
+        if operation == 0 || !seen.insert(operation) || r.u32()? != if i == 0 { 33 } else { 4 } {
+            return Err(invalid("unsupported or duplicate loft target operation"));
+        }
+        operations.push(TargetOperation { operation, label: 0 });
     }
     let identity = r.reference()?;
     require_class(classes, identity, IDENTITY, 3)?;
     let mut identity = payload(records.primary(identity)?, identity)?;
     zeros(&mut identity, 6)?;
-    for value in [1, 3, 1, 1] {
+    for value in [1, 3, 1, count as u32] {
         if identity.u32()? != value {
             return Err(invalid("unsupported loft body recipe header"));
         }
     }
-    if identity.string()?.parse::<u64>().ok() != Some(operation) {
-        return Err(invalid("loft target recipe disagrees with operation"));
+    for operation in &mut operations {
+        if identity.string()? != operation.operation.to_string() {
+            return Err(invalid("loft target recipe disagrees with operation"));
+        }
+        // Resolved through the explicit producer label table during import.
+        operation.label = identity.u32()?;
+        if operation.label < 3 {
+            return Err(invalid("invalid loft target body label"));
+        }
+        zeros(&mut identity, 8)?;
     }
-    // Observed producer-shape markers; reconstruction also validates the
-    // explicitly owned profile, so these are not accepted as generic body IDs.
-    let rectangular = match identity.u32()? {
-        4 => false,
-        7 => true,
-        _ => return Err(invalid("unsupported loft target shape marker")),
-    };
-    zeros(&mut identity, 12)?;
+    zeros(&mut identity, 4)?;
     if identity.string()? != "body_recipe_data" || identity.u32()? != 0 || identity.u32()? != u32::MAX {
         return Err(invalid("unsupported loft body recipe"));
     }
@@ -449,7 +469,7 @@ pub(super) fn target(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, con
     }
     zeros(&mut r, 8)?;
     let handle = selector_tail(&mut r, records, owner)?;
-    Ok((producer(records, classes, handle)?, operation, rectangular))
+    Ok(Target { feature: producer(records, classes, handle)?, operations })
 }
 
 #[cfg(test)]
@@ -720,7 +740,10 @@ mod tests {
             let selected = face(&records, &classes, 180, 19).unwrap();
             assert!(selected.rectangular);
             assert_eq!((selected.feature, selected.contributions[0], selected.high), (9, 8001, high));
-            assert_eq!(target(&records, &classes, 192, 19).unwrap(), (9, 8001, true));
+            assert_eq!(
+                target(&records, &classes, 192, 19).unwrap(),
+                Target { feature: 9, operations: vec![TargetOperation { operation: 8001, label: 7 }] }
+            );
             for keep in 0..authored_rectangle(high).0[&181].2.len() {
                 let mut f = authored_rectangle(high);
                 f.0.get_mut(&181).unwrap().2.truncate(keep);
@@ -732,7 +755,7 @@ mod tests {
             bytes[end - 1] ^= 1;
             assert!(decode(f, false).is_err());
             let mut f = authored_rectangle(high);
-            f.0.get_mut(&191).unwrap().2[30..34].copy_from_slice(&6_u32.to_le_bytes());
+            f.0.get_mut(&191).unwrap().2[30..34].copy_from_slice(&0_u32.to_le_bytes());
             assert!(decode(f, true).is_err());
         }
     }
@@ -767,8 +790,8 @@ mod tests {
         let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
         let records = Records::new(d);
         if body {
-            let (producer, operation, _) = target(&records, &classes, 192, 19)?;
-            Ok((producer, operation, false))
+            let target = target(&records, &classes, 192, 19)?;
+            Ok((target.feature, target.operations[0].operation, false))
         } else {
             let face = face(&records, &classes, 180, 19)?;
             Ok((face.feature, face.contributions[0], face.high))
@@ -781,6 +804,69 @@ mod tests {
             assert_eq!(decode(authored(high), false).unwrap(), (9, 8001, high));
             assert_eq!(decode(authored(high), true).unwrap(), (9, 8001, false));
         }
+    }
+
+    fn compound_target(operations: &[(u64, u32, u32)]) -> Fixture {
+        let mut f = authored(true);
+        let suffix = f.0[&190].2[33..].to_vec();
+        let mut selector = vec![0; 6];
+        u32(&mut selector, operations.len() as u32);
+        for (operation, flags, _) in operations {
+            u64(&mut selector, *operation);
+            u32(&mut selector, *flags);
+        }
+        reference(&mut selector, 191);
+        selector.extend(suffix);
+        f.0.get_mut(&190).unwrap().2 = selector;
+        let mut recipe = vec![0; 6];
+        for n in [1, 3, 1, operations.len() as u32] {
+            u32(&mut recipe, n);
+        }
+        for (operation, _, marker) in operations {
+            string(&mut recipe, &operation.to_string());
+            u32(&mut recipe, *marker);
+            recipe.extend([0; 8]);
+        }
+        u32(&mut recipe, 0);
+        string(&mut recipe, "body_recipe_data");
+        u32(&mut recipe, 0);
+        u32(&mut recipe, u32::MAX);
+        f.0.get_mut(&191).unwrap().2 = recipe;
+        f
+    }
+
+    #[test]
+    fn compound_body_target_retains_each_operation_and_its_explicit_label() {
+        let d = compound_target(&[(8001, 33, 7), (9013, 4, 11)]).design();
+        let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+        assert_eq!(
+            target(&Records::new(&d), &classes, 192, 19).unwrap(),
+            Target { feature: 9, operations: vec![TargetOperation { operation: 8001, label: 7 }, TargetOperation { operation: 9013, label: 11 }] }
+        );
+        for operations in [
+            vec![],
+            vec![(8001, 33, 7), (8001, 4, 7)],
+            vec![(0, 33, 4)],
+            vec![(8001, 4, 7)],
+            vec![(8001, 33, 7), (9001, 33, 7)],
+            vec![(8001, 33, 0)],
+            vec![(8001, 33, 2)],
+        ] {
+            assert!(decode(compound_target(&operations), true).is_err(), "{operations:?}");
+        }
+        let operations: Vec<_> = (0..65).map(|i| (8001 + i, if i == 0 { 33 } else { 4 }, 7)).collect();
+        assert!(decode(compound_target(&operations), true).is_err());
+        for id in [190, 191] {
+            let f = compound_target(&[(8001, 33, 7), (9013, 4, 11)]);
+            for keep in 0..f.0[&id].2.len() {
+                let mut truncated = Fixture(f.0.clone());
+                truncated.0.get_mut(&id).unwrap().2.truncate(keep);
+                assert!(decode(truncated, true).is_err(), "{id}/{keep}");
+            }
+        }
+        let mut f = compound_target(&[(8001, 33, 7), (9013, 4, 11)]);
+        f.0.get_mut(&191).unwrap().2[26] = b'9';
+        assert!(decode(f, true).is_err(), "recipe and selector must name the same operations");
     }
 
     fn legacy(mut f: Fixture) -> Design {

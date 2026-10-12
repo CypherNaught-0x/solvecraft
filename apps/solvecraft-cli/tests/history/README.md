@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These fifty-nine designs and their JSON command recipes are original SolveCraft test
+These sixty-one designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -180,3 +180,10 @@ by 10 mm. Its outer +X side is a 10 x 10 mm rectangle at X = 40 mm. A loft to a
 Increasing the pedestal height to 15 mm gives 23833⅓ mm³; moving the destination
 to X = 70 mm gives 24500 mm³. These independent expectations use the rectangular
 transition formula above and include aggregate bounds. There are 59 saved designs.
+
+
+`loft-join-mixed-sketches` and `loft-join-polygon-side` use the same independently
+calculated dimensions and volumes as their two-body counterparts, but fuse the
+transition into the existing body. They must remain one body after width, parent
+height and destination-plane edits, reopening and undo. The suite contains 61
+original saved designs.

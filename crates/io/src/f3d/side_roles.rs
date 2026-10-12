@@ -7,8 +7,13 @@ const LABELS: &str = "B7F34D7B-DAC4-41A5-B67D-D672537C3BFA";
 const WRAPPER: &str = "335CC7BD-BBE5-40AA-9E8C-5EC99D427A3A";
 const CURVE: &str = "2DEE34BE-FA70-4D54-979C-164D86FDA786";
 
-fn curve_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, feature: u64, label: u64) -> Result<(u64, [u64; 2])> {
-    require_class(classes, feature, "DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8)?;
+pub(super) fn label_table(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, feature: u64) -> Result<BTreeMap<u64, u64>> {
+    if !classes
+        .get(&feature)
+        .is_some_and(|c| matches!((c.id.as_str(), c.version), ("DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8) | (super::lofts::CLASS, 9)))
+    {
+        return Err(invalid("unsupported feature label-table owner"));
+    }
     // Abstract inherited classes have no object IDs; consult the class table,
     // not the object-to-class index, when locating this explicit reference.
     let version = records
@@ -51,6 +56,12 @@ fn curve_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, featur
     let mut r = payload(records.secondary(labels)?, labels)?;
     zeros(&mut r, 5)?;
     finish(&r)?;
+    Ok(entries)
+}
+
+fn curve_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, feature: u64, label: u64) -> Result<(u64, [u64; 2])> {
+    require_class(classes, feature, "DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8)?;
+    let entries = label_table(records, classes, feature)?;
     let id = *entries.get(&label).ok_or_else(|| invalid("missing extrusion side label"))?;
     require_class(classes, id, WRAPPER, 0)?;
     let mut r = payload(records.primary(id)?, id)?;

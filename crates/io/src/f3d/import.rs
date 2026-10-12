@@ -593,22 +593,38 @@ impl Design {
                         let [container] = target_containers.as_slice() else {
                             return Err(invalid("loft join requires one explicit target"));
                         };
-                        let (producer, operation, rectangular) = super::loft_faces::target(&records, &classes, *container, f.id)?;
+                        let target = super::loft_faces::target(&records, &classes, *container, f.id)?;
                         if operation_owners.is_none() {
                             operation_owners = Some(self.operation_owners()?);
                         }
-                        if operation_owners.as_ref().and_then(|o| o.get(&operation)) != Some(&producer) {
-                            return Err(invalid("loft target operation disagrees with its producer"));
-                        }
-                        let profile = source_profiles.get(&producer).ok_or_else(|| invalid("missing loft target profile"))?;
-                        super::loft_faces::Face::cap(producer, operation, false, rectangular).validate_profile(profile, &circles, &lines)?;
-                        let source =
-                            feature_ids.get(&producer).and_then(|id| doc.feature(*id)).ok_or_else(|| invalid("loft target precedes its producer"))?;
+                        let owners = operation_owners.as_ref().ok_or_else(|| invalid("missing loft target operations"))?;
+                        let source = feature_ids
+                            .get(&target.feature)
+                            .and_then(|id| doc.feature(*id))
+                            .filter(|f| !f.suppressed)
+                            .ok_or_else(|| invalid("loft target precedes its producer or the producer is suppressed"))?;
                         let [body] = source.body_names.as_slice() else {
                             return Err(invalid("loft target must identify one body"));
                         };
                         if !active_bodies.contains(body) {
                             return Err(invalid("loft target body is no longer active"));
+                        }
+                        let mut producers = BTreeSet::new();
+                        for (i, operation) in target.operations.iter().enumerate() {
+                            let producer = *owners.get(&operation.operation).ok_or_else(|| invalid("missing loft target operation owner"))?;
+                            let feature = feature_ids
+                                .get(&producer)
+                                .and_then(|id| doc.feature(*id))
+                                .filter(|f| !f.suppressed)
+                                .ok_or_else(|| invalid("loft target operation follows its selector or is suppressed"))?;
+                            if !producers.insert(producer)
+                                || (i == 0 && producer != target.feature)
+                                || (i != 0
+                                    && !matches!(&feature.kind, FeatureKind::Extrude { operation: Operation::Join, targets, .. } if targets.as_slice() == [body.clone()]))
+                            {
+                                return Err(invalid("loft target operations disagree with their body ownership"));
+                            }
+                            super::body_labels::validate(&records, &classes, producer, operation.operation, u64::from(operation.label))?;
                         }
                         vec![body.clone()]
                     };

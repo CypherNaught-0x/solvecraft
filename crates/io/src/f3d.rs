@@ -12,6 +12,7 @@ mod archive;
 #[cfg(test)]
 mod attribute_tests;
 mod attributes;
+mod body_labels;
 mod body_projections;
 mod circles;
 mod constraints;
