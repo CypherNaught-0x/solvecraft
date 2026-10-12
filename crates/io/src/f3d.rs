@@ -44,6 +44,7 @@ mod projections;
 mod radial_tests;
 #[cfg(test)]
 mod round_profile_tests;
+mod side_roles;
 pub use circles::{SketchArc, SketchCircle};
 pub use constraints::{CurveRelation, LinearOrientation, SketchConstraint, SketchConstraintGraph, SketchConstraints};
 pub use entity::EntityMetadata;

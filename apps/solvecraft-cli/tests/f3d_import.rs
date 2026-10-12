@@ -17,7 +17,13 @@ fn volume(s: &mut Session, want_cm3: f64, label: &str) -> Value {
 #[ignore = "requires local face-section loft public API controls"]
 fn loft_face_sections_preserve_cap_body_and_parent_dependencies() {
     let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
-    for file in ["fusion-face-loft-measurements.json", "fusion-face-loft-extra-measurements.json", "fusion-face-loft-rectangle-measurements.json"] {
+    for file in [
+        "fusion-face-loft-measurements.json",
+        "fusion-face-loft-extra-measurements.json",
+        "fusion-face-loft-rectangle-measurements.json",
+        "fusion-face-loft-rectangle-joined-measurements.json",
+        "fusion-face-loft-rectangle-side-measurements.json",
+    ] {
         let api: Value = serde_json::from_slice(&std::fs::read(dir.join(file)).unwrap()).unwrap();
         let verify = |s: &mut Session, row: &Value, label: &str| {
             let measured = volume(s, row["volume"].as_f64().unwrap(), label);
@@ -49,7 +55,17 @@ fn loft_face_sections_preserve_cap_body_and_parent_dependencies() {
                 for (suffix, parameter, expr) in [
                     ("source-changed", "source_parameter", if name.contains("rectangle") { "45 mm" } else { "30 mm" }),
                     ("parent-changed", "parent_parameter", "15 mm"),
-                    ("plane-changed", "plane_parameter", if name.contains("bottom") { "-40 mm" } else { "50 mm" }),
+                    (
+                        "plane-changed",
+                        "plane_parameter",
+                        if name.contains("bottom") {
+                            "-40 mm"
+                        } else if name.contains("side") {
+                            "70 mm"
+                        } else {
+                            "50 mm"
+                        },
+                    ),
                 ] {
                     s.execute("parameters.change", &json!({"name":row[parameter],"expression":expr})).unwrap();
                     let expected = &api[name.replace("baseline", suffix)];

@@ -4,6 +4,43 @@ use super::relationship_tests::{reference, refs, u32, wide};
 use super::*;
 use solvecraft_doc::{Document, FeatureKind, Model, PlaneRef};
 
+#[test]
+fn rotated_sketch_basis_retains_live_origin_plane_offset_dependencies() {
+    use solvecraft_geom::{Plane, Vec3};
+    for (name, origin) in [("XY", Plane::XY), ("XZ", Plane::XZ), ("YZ", Plane::YZ)] {
+        let mut doc = Document::default();
+        doc.set_param("height", "20 mm", Some("mm"), None).unwrap();
+        doc.add_feature(
+            FeatureKind::ConstructionPlane {
+                plane: PlaneRef::Offset { base: Box::new(PlaneRef::Origin { name: name.into() }), distance: "height".into() },
+            },
+            Some("Support"),
+        )
+        .unwrap();
+        let cached = origin.offset(20.);
+        let sketch = Plane::new(cached.origin, -cached.y, cached.x).unwrap();
+        let base = PlaneRef::Construction { name: "Support".into() };
+        let attached = super::import::sketch_plane_reference(base.clone(), cached, sketch).unwrap();
+        assert!(matches!(&attached, PlaneRef::AtAngle { base, .. } if matches!(base.as_ref(), PlaneRef::Construction { name } if name == "Support")));
+        for height in [20., 35.] {
+            doc.set_param("height", &format!("{height} mm"), Some("mm"), None).unwrap();
+            let cold = crate::read_design(&crate::write_design(&doc)).unwrap();
+            for doc in [&doc, &cold] {
+                let (values, _) = doc.param_values();
+                let plane = doc.resolve_plane(&values, &attached, 0).unwrap();
+                assert!(plane.origin.dist(origin.normal() * height) < 1e-9);
+                assert!((plane.x - sketch.x).len() < 1e-9 && (plane.y - sketch.y).len() < 1e-9);
+            }
+        }
+        let displaced = Plane { origin: sketch.origin + cached.x, ..sketch };
+        assert!(super::import::sketch_plane_reference(base.clone(), cached, displaced).is_err());
+        let opposite = Plane { y: -sketch.y, ..sketch };
+        assert!(super::import::sketch_plane_reference(base.clone(), cached, opposite).is_err());
+        let nonfinite = Plane { origin: Vec3::new(f64::NAN, 0., 0.), ..sketch };
+        assert!(super::import::sketch_plane_reference(base, cached, nonfinite).is_err());
+    }
+}
+
 fn matrix(z: f64) -> [f64; 16] {
     [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., z, 0., 0., 0., 1.]
 }

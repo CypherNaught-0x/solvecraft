@@ -1403,3 +1403,44 @@ Validation: `cargo xtask ci` passed all 30 test binaries, including 572 engine,
 and the HardEdgeBasin opening regression. All 34 local native-import groups
 also passed. The historical lost-patch regression still retains its original
 200 mm3 material, and fully consumed strong face attachments still fail closed.
+
+## Native rectangular side and joined-cap sections
+
+The version-2 inherited extrusion tail references label-table class
+`B7F34D7B-DAC4-41A5-B67D-D672537C3BFA`, version 2. Entries pair an object
+reference with a numeric label. A side entry uses wrapper
+`335CC7BD-BBE5-40AA-9E8C-5EC99D427A3A`, version 0, pointing to
+`2DEE34BE-FA70-4D54-979C-164D86FDA786`, version 2. The verified whole-line
+variant contains a primary sketch-curve identity, zero secondary identity,
+and two adjacent primary identities. Reconstruction resolves these against the
+selected profile's owned lines and verifies distinct endpoint incidence. Neither
+registration order nor geometric proximity determines a side label.
+
+Bounded face recipes now retain same-label alternatives with distinct topology
+operation IDs. The body handle identifies the original body creator; operation
+ownership identifies each contributing extrusion. Reconstruction checks prior,
+unsuppressed producers, the explicit Join target, and the same complete source
+profile. The observed side-5 rectangular incidence resolves either one certified
+side or an exact planar union of its contributions. Joined top caps resolve their
+later producer on the original body. Other labels, composite caps, mixed profiles,
+unknown incidence, ambiguous identities and unsupported boundaries fail closed.
+
+The side controls also establish a rotated sketch basis on an offset YZ plane.
+For verified origin-plane offset chains, an explicit angle wrapper retains the
+native basis and the live construction-plane reference. Parent distance edits
+therefore move the sketch without freezing its placement. Displaced, oppositely
+oriented or nonrigid frames remain unsupported.
+
+All 44 local face-loft controls pass API volume, body-count, timeline and 0.01 mm
+bounds checks, including source/parent/plane edits, reopen and undo. Original
+field-authored tests cover label/curve ownership, reversed endpoint order,
+truncation, duplicate alternatives, budgets and malformed incidence. The new
+`rotated-offset-sketch` saved fixture brings the original history suite to 57
+files, with analytic 1000/1500/1600 mm3 checks and exact bounds. No Fusion files
+or measurements are committed. The supplied adapter's other modified-face roles
+and general native history remain incomplete.
+
+Validation: `cargo xtask ci` passed all 30 test binaries, including 117 I/O,
+114 document, 572 engine and 211 kernel tests, all 57 original fixtures,
+wasm and the HardEdgeBasin opening regression. All 34 local native-import
+groups passed with the expanded 44-control face-loft comparison.

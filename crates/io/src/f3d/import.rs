@@ -132,14 +132,10 @@ impl Design {
                             return Err(invalid("unsupported sketch support offset"));
                         }
                         let (base, cached) = plane_base(&records, &classes, &planes, definition.base, root)?;
-                        if !super::planes::same_surface(cached, definition.plane)
-                            || !super::planes::same_surface(cached, plane)
-                            || (cached.x - plane.x).len() > 1e-9
-                            || (cached.y - plane.y).len() > 1e-9
-                        {
-                            return Err(invalid("unsupported sketch frame relative to its construction plane"));
+                        if !super::planes::same_surface(cached, definition.plane) {
+                            return Err(invalid("sketch support disagrees with its construction plane"));
                         }
-                        base
+                        sketch_plane_reference(base, cached, plane)?
                     };
                     let relations =
                         constraints.get(&geometry).filter(|c| c.feature == f.id).ok_or_else(|| invalid("missing sketch relationships"))?;
@@ -506,18 +502,51 @@ impl Design {
                             if operation_owners.is_none() {
                                 operation_owners = Some(self.operation_owners()?);
                             }
-                            if operation_owners.as_ref().and_then(|o| o.get(&face.operation)) != Some(&face.feature) {
-                                return Err(invalid("loft face operation disagrees with its producer"));
-                            }
-                            let profile: &&SketchProfile =
-                                source_profiles.get(&face.feature).ok_or_else(|| invalid("loft face precedes its producer"))?;
+                            let owners = operation_owners.as_ref().ok_or_else(|| invalid("missing loft face operations"))?;
+                            let profile = *source_profiles.get(&face.feature).ok_or_else(|| invalid("loft face precedes its body creator"))?;
                             face.validate_profile(profile, &circles, &lines)?;
+                            let id = *feature_ids.get(&face.feature).ok_or_else(|| invalid("missing imported loft body creator"))?;
+                            let creator = doc.feature(id).ok_or_else(|| invalid("missing imported loft body creator"))?;
+                            let [body_name] = creator.body_names.as_slice() else { return Err(invalid("loft face requires one created body")) };
+                            let mut contributions = Vec::new();
+                            let mut producers = BTreeSet::new();
+                            for operation in &face.all_operations {
+                                let native = *owners.get(operation).ok_or_else(|| invalid("missing loft face operation owner"))?;
+                                let imported = *feature_ids.get(&native).ok_or_else(|| invalid("loft face operation follows its selector"))?;
+                                let current =
+                                    doc.feature(imported).filter(|f| !f.suppressed).ok_or_else(|| invalid("loft face operation is suppressed"))?;
+                                if native != face.feature
+                                    && !matches!(&current.kind, FeatureKind::Extrude { operation: Operation::Join, targets, .. } if targets.as_slice() == [body_name.clone()])
+                                {
+                                    return Err(invalid("loft face contributor belongs to another body or operation"));
+                                }
+                                let source = *source_profiles.get(&native).ok_or_else(|| invalid("missing loft face contributor profile"))?;
+                                // Composite identities are currently verified only for
+                                // repeated straight extrusions of the same whole profile.
+                                if source.geometry != profile.geometry || source.regions != profile.regions {
+                                    return Err(invalid("loft face contributors require the same complete source profile"));
+                                }
+                                if face.contributions.contains(operation) {
+                                    if !producers.insert(imported) {
+                                        return Err(invalid("duplicate loft face contribution producer"));
+                                    }
+                                    let curve = face
+                                        .side
+                                        .map(|label| {
+                                            super::side_roles::curve(&records, &classes, native, label, source, &lines).map(|id| format!("c{id}"))
+                                        })
+                                        .transpose()?;
+                                    contributions.push((imported, curve));
+                                }
+                            }
+                            if face.side.is_none() && contributions.len() != 1 {
+                                return Err(invalid("composite cap sections are not supported yet"));
+                            }
                             projection_model.evaluate(&doc);
                             if projection_model.results.iter().any(|r| r.error.is_some()) {
                                 return Err(invalid("cannot regenerate loft face dependencies"));
                             }
-                            let id = *feature_ids.get(&face.feature).ok_or_else(|| invalid("missing imported loft face producer"))?;
-                            let anchor = face.anchor(&doc, &projection_model.state(), id)?;
+                            let anchor = face.anchor(&doc, &projection_model.state(), id, &contributions)?;
                             sections.push(solvecraft_doc::LoftSection {
                                 sketch: 0,
                                 profiles: ProfileSel::All,
@@ -576,8 +605,7 @@ impl Design {
                             return Err(invalid("loft target operation disagrees with its producer"));
                         }
                         let profile = source_profiles.get(&producer).ok_or_else(|| invalid("missing loft target profile"))?;
-                        super::loft_faces::Face { feature: producer, operation, high: false, rectangular }
-                            .validate_profile(profile, &circles, &lines)?;
+                        super::loft_faces::Face::cap(producer, operation, false, rectangular).validate_profile(profile, &circles, &lines)?;
                         let source =
                             feature_ids.get(&producer).and_then(|id| doc.feature(*id)).ok_or_else(|| invalid("loft target precedes its producer"))?;
                         let [body] = source.body_names.as_slice() else {
@@ -818,6 +846,27 @@ pub(super) fn plane(matrix: &[f64; 16]) -> Result<Plane> {
         return Err(invalid("non-rigid sketch placement"));
     }
     Plane::new(Vec3::new(ox, oy, oz) * 10., x, y).ok_or_else(|| invalid("invalid sketch placement"))
+}
+
+/// Offset-only origin-plane chains keep a fixed normal. An in-plane rotation
+/// about that normal preserves their editable position and native sketch basis.
+pub(super) fn sketch_plane_reference(base: PlaneRef, cached: Plane, sketch: Plane) -> Result<PlaneRef> {
+    if !super::planes::same_surface(cached, sketch) {
+        return Err(invalid("unsupported sketch frame relative to its construction plane"));
+    }
+    if (cached.x - sketch.x).len() <= 1e-9 && (cached.y - sketch.y).len() <= 1e-9 {
+        return Ok(base);
+    }
+    let normal = cached.normal();
+    if cached.origin.cross(normal).len() > 1e-7 {
+        return Err(invalid("rotated sketch requires an origin-plane offset chain"));
+    }
+    let angle = sketch.x.dot(cached.y).atan2(sketch.x.dot(cached.x));
+    let (sin, cos) = angle.sin_cos();
+    if (cached.x * cos + cached.y * sin - sketch.x).len() > 1e-9 || (cached.y * cos - cached.x * sin - sketch.y).len() > 1e-9 {
+        return Err(invalid("unsupported sketch basis rotation"));
+    }
+    Ok(PlaneRef::AtAngle { base: Box::new(base), axis_origin: Vec3::default(), axis_dir: normal, angle: format!("{} deg", angle.to_degrees()) })
 }
 
 fn plane_base(

@@ -159,4 +159,11 @@ extrusions, the second a Join. Its footprint is 10 x 20 mm and its final height
 12000 mm³; the pedestal contributes 2000 mm³. Width, Join-height and destination-
 plane edits check volumes 13000, 16500 and 18000 mm³ and exact bounding boxes.
 The saved face certificate retains both contributing operations. There are now
-56 original saved designs.
+56 original saved designs at that milestone.
+
+`rotated-offset-sketch` is a 10 x 20 x 5 mm prism on an offset YZ plane whose
+sketch axes are rotated -90 degrees about X. Its 1000 mm³ volume becomes 1500
+when the width changes to 15 mm, or 1600 when the extrusion changes to 8 mm.
+Moving the support plane from 20 to 30 mm retains volume and translates the
+exact bounds. Reopen and undo preserve all three dependencies. This brings the
+suite to 57 original saved designs.
