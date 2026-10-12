@@ -68,7 +68,12 @@ fn loft_face_sections_preserve_cap_body_and_parent_dependencies() {
 #[test]
 #[ignore = "requires local To Object public API controls"]
 fn to_object_endpoints_preserve_target_source_and_offset_edits() {
-    check_endpoint_histories(&["fusion-to-entity-measurements.json"]);
+    check_endpoint_histories(&[
+        "fusion-to-entity-measurements.json",
+        "fusion-to-entity-hint-measurements.json",
+        "fusion-to-entity-opposite-hint-measurements.json",
+        "fusion-to-entity-maximum-measurements.json",
+    ]);
 }
 
 fn check_endpoint_histories(files: &[&str]) {

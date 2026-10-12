@@ -261,7 +261,14 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
     if !matches!(extent_type, 1 | 2) {
         return Err(invalid("unsupported extrusion extent type"));
     }
-    zeros(r, 1)?;
+    // ToEntity's direction hint disambiguates targets with several intersections.
+    // The importer currently accepts only parallel planes, with one signed endpoint;
+    // explicit hints in either direction produce the same observed geometry.
+    match r.take(1)? {
+        [0] => {}
+        [1] if extent_type == 1 => {}
+        _ => return Err(invalid("unsupported extrusion direction hint")),
+    }
     if r.take(1)? != [1] {
         return Err(invalid("unsupported extrusion start type"));
     }
@@ -297,7 +304,9 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
         }
         let offset = r.reference()?;
         require_class(classes, offset, "D91D429C-1BB5-4640-B49F-69AF14F463E9", 0)?;
-        if r.u32()? != 1 {
+        // Minimum (1) and maximum (2) solutions coincide for the single parallel
+        // plane accepted by reconstruction; multi-intersection targets still fail.
+        if !matches!(r.u32()?, 1 | 2) {
             return Err(invalid("unsupported To Object extrusion end flags"));
         }
         zeros(r, 31)?;
@@ -475,12 +484,21 @@ mod endpoint_tests {
         assert_eq!(input.taper, 66);
         assert_eq!(reader.at - start, end);
         assert!(d.history().is_ok());
+        let mut hinted = crate::f3d::import_tests::Fixture(f.0.clone());
+        hinted.0.get_mut(&9).unwrap().2[25] = 1;
+        assert!(hinted.design().history().is_ok());
+        let mut maximum = crate::f3d::import_tests::Fixture(f.0.clone());
+        maximum.0.get_mut(&9).unwrap().2[107] = 2;
+        assert!(maximum.design().history().is_ok());
+        let mut distance = fixture(false);
+        distance.0.get_mut(&9).unwrap().2[25] = 1;
+        assert!(distance.design().history().is_err());
         for keep in 0..end {
             let mut f = crate::f3d::import_tests::Fixture(f.0.clone());
             f.0.get_mut(&9).unwrap().2.truncate(keep);
             assert!(f.design().history().is_err(), "truncated at {keep}");
         }
-        for (at, value) in [(21, 3), (58, 0), (70, 0), (81, 0), (92, 3), (96, 0), (107, 2), (120, 1)] {
+        for (at, value) in [(21, 3), (25, 2), (58, 0), (70, 0), (81, 0), (92, 3), (96, 0), (107, 3), (120, 1)] {
             let mut f = crate::f3d::import_tests::Fixture(f.0.clone());
             f.0.get_mut(&9).unwrap().2[at] = value;
             assert!(f.design().history().is_err(), "invalid field {at}");

@@ -1634,3 +1634,23 @@ saved histories and the WASM checks. The HardEdgeBasin opening regression also
 passed. All 36 local native-import groups passed before the final copy-name
 regression was added. The adapter's ten ToEntity records still need the separately
 observed direction-hint flag; the larger corpus remains incomplete.
+
+
+### Explicit To Object direction hints
+
+A further 24 controlled exports distinguish explicit hints parallel and opposite
+to the sketch normal, including hints opposite to the target's location. Payload
+flag 0/1 follows the hint direction; both produce the same volumes, bounds and
+source/target/offset edits for the supported parallel planar targets. The parser
+now accepts both observed values for ToEntity only and rejects other values.
+Distance extents retain their existing flag requirement. Twelve additional
+maximum-solution controls identify end-mode 1 as minimum and 2 as maximum; both
+select the same single plane. Other end-mode values remain rejected. This does not enable
+ambiguous body targets, curved faces or nonparallel endpoint planes.
+
+After merging upstream `970da30`, all 30 CI binaries, WASM checks, 66 saved history
+fixtures and the opening regression passed. The expanded native endpoint group
+passed all 48 controls. The adapter still decodes 29 of 49 timeline entries: its
+ten ToEntity records use an older solution-mode value 0, which remains rejected
+pending controlled evidence. Parent extrusions changing the sign of their height
+also need logical end-cap tracking; currently such an edit can lose the endpoint.
