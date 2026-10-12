@@ -1444,3 +1444,44 @@ Validation: `cargo xtask ci` passed all 30 test binaries, including 117 I/O,
 114 document, 572 engine and 211 kernel tests, all 57 original fixtures,
 wasm and the HardEdgeBasin opening regression. All 34 local native-import
 groups passed with the expanded 44-control face-loft comparison.
+
+
+### General planar side incidence and operation lifecycle
+
+The bounded five-term face recipe is now validated as a closed quadrilateral
+rather than matched to one edge ordering. Each edge references the selected face
+and one of four distinct neighbors. Each three-surface corner occurs twice;
+repeated edges, invalid terms, duplicate corners and truncated graphs are rejected.
+Selected side labels belong to their operation and may differ between contributors.
+Each producer resolves its own complete line profile and explicit adjacent curve
+labels, including profiles from separate sketches and stepped polygons. Endpoint
+coordinates verify incidence only after curve IDs resolve; distinct point objects
+at a shared constrained position are valid. They never select a nearby source.
+
+Twenty-seven additional local public-API controls cover all four rectangular sides,
+a separate-sketch aligned Join, an offset intersecting Join and an eight-line
+stepped profile. The complete face-loft group has 71 controls, comparing imported
+and edited volume, bounds, feature order, reopening and undo. An unconstrained
+control origin was explicitly anchored before these comparisons to remove arbitrary
+solver placement. No exported control files are checked in.
+
+Topology map version 0 has a tag-to-feature table; version 1 adds an optional
+feature-to-tag index. A populated index must match the authoritative reverse table.
+Both versions also carry a bounded list of retired tags, required to be nonzero,
+unique and absent from the live map. Public-API deletion, suppression and recreation
+controls confirm that suppression retains ownership, deletion retires two extrusion
+tags, and recreation allocates new tags. Original field-authored records test both
+versions, optional indexes, invalid retired tags and every truncated prefix.
+
+Two original saved recipes add separate-sketch Join and polygon-side histories,
+bringing the regular editable-history suite to 59 designs. Their analytic volume
+and bounds checks run through edits, reopening and undo. The larger supplied F3D
+files still require additional legacy selectors, profile and constraint records,
+and unsupported feature types; these controls do not establish general import.
+
+Validation: `cargo xtask ci` passed all 30 test binaries, including 119 IO,
+114 document, 572 engine and 211 kernel tests, the 59 original saved fixtures,
+WASM, and the HardEdgeBasin opening regression (0.85 seconds for its test).
+All 35 local native-import groups also passed, including the 71 face-loft controls
+and deletion/suppression/recreation ownership checks. A rendered original stepped
+polygon fixture was visually inspected; probe files and images remain local.

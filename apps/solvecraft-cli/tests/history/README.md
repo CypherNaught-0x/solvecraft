@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These forty-six designs and their JSON command recipes are original SolveCraft test
+These fifty-nine designs and their JSON command recipes are original SolveCraft test
 data. They were authored through SolveCraft commands; no Fusion-produced file is
 included. Each `.solvecraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -167,3 +167,16 @@ when the width changes to 15 mm, or 1600 when the extrusion changes to 8 mm.
 Moving the support plane from 20 to 30 mm retains volume and translates the
 exact bounds. Reopen and undo preserve all three dependencies. This brings the
 suite to 57 original saved designs.
+
+
+`loft-face-mixed-sketches` uses the same analytic dimensions as the joined-side
+fixture, with the second extrusion coming from a separate sketch. Both source
+sketches depend on the same width parameter; the saved certificate retains their
+distinct feature and curve identities through edits, reopen and undo.
+
+`loft-face-polygon-side` extrudes an eight-line stepped footprint of area 800 mm²
+by 10 mm. Its outer +X side is a 10 x 10 mm rectangle at X = 40 mm. A loft to a
+30 x 40 mm section at X = 60 mm contributes 11000 mm³, giving 19000 mm³ total.
+Increasing the pedestal height to 15 mm gives 23833⅓ mm³; moving the destination
+to X = 70 mm gives 24500 mm³. These independent expectations use the rectangular
+transition formula above and include aggregate bounds. There are 59 saved designs.

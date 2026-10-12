@@ -503,8 +503,6 @@ impl Design {
                                 operation_owners = Some(self.operation_owners()?);
                             }
                             let owners = operation_owners.as_ref().ok_or_else(|| invalid("missing loft face operations"))?;
-                            let profile = *source_profiles.get(&face.feature).ok_or_else(|| invalid("loft face precedes its body creator"))?;
-                            face.validate_profile(profile, &circles, &lines)?;
                             let id = *feature_ids.get(&face.feature).ok_or_else(|| invalid("missing imported loft body creator"))?;
                             let creator = doc.feature(id).ok_or_else(|| invalid("missing imported loft body creator"))?;
                             let [body_name] = creator.body_names.as_slice() else { return Err(invalid("loft face requires one created body")) };
@@ -521,17 +519,15 @@ impl Design {
                                     return Err(invalid("loft face contributor belongs to another body or operation"));
                                 }
                                 let source = *source_profiles.get(&native).ok_or_else(|| invalid("missing loft face contributor profile"))?;
-                                // Composite identities are currently verified only for
-                                // repeated straight extrusions of the same whole profile.
-                                if source.geometry != profile.geometry || source.regions != profile.regions {
-                                    return Err(invalid("loft face contributors require the same complete source profile"));
-                                }
                                 if face.contributions.contains(operation) {
+                                    face.validate_profile(source, &circles, &lines)?;
                                     if !producers.insert(imported) {
                                         return Err(invalid("duplicate loft face contribution producer"));
                                     }
                                     let curve = face
-                                        .side
+                                        .side_roles
+                                        .get(operation)
+                                        .copied()
                                         .map(|label| {
                                             super::side_roles::curve(&records, &classes, native, label, source, &lines).map(|id| format!("c{id}"))
                                         })

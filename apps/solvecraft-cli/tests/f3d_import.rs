@@ -14,6 +14,40 @@ fn volume(s: &mut Session, want_cm3: f64, label: &str) -> Value {
 }
 
 #[test]
+#[ignore = "requires local public API operation deletion controls"]
+fn operation_ownership_excludes_deleted_tags_and_retains_suppressed_producers() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
+    let api: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-operation-lifecycle-measurements.json")).unwrap()).unwrap();
+    let mut maps = BTreeMap::new();
+    for (name, row) in api.as_object().unwrap() {
+        let bytes = std::fs::read(dir.join(format!("{name}.f3d"))).unwrap();
+        let native = solvecraft_engine::io::f3d::read_f3d(&bytes).unwrap();
+        let native = &native[0];
+        let owners = native.operation_owners().unwrap();
+        let features: BTreeSet<_> = native.history().unwrap().iter().map(|f| f.id).collect();
+        assert_eq!(owners.values().copied().collect::<BTreeSet<_>>(), features);
+        let mut s = Session::new(native.to_document(name).unwrap());
+        let measured = volume(&mut s, row["volume"].as_f64().unwrap(), name);
+        assert_eq!(measured["body_count"], row["body_count"]);
+        assert_eq!(
+            s.doc.features.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+            row["timeline"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect::<Vec<_>>()
+        );
+        maps.insert(name.as_str(), owners);
+    }
+    let baseline = &maps["operation-map-baseline"];
+    assert_eq!(baseline, &maps["operation-map-suppressed"]);
+    let deleted = &maps["operation-map-deleted"];
+    let recreated = &maps["operation-map-recreated"];
+    let retired: BTreeSet<_> = baseline.keys().filter(|tag| !deleted.contains_key(tag)).collect();
+    assert_eq!(retired.len(), 2);
+    assert!(retired.iter().all(|tag| !recreated.contains_key(tag)));
+    assert!(deleted.iter().all(|(tag, feature)| recreated.get(tag) == Some(feature)));
+    assert_eq!(recreated.len(), baseline.len());
+}
+
+#[test]
 #[ignore = "requires local face-section loft public API controls"]
 fn loft_face_sections_preserve_cap_body_and_parent_dependencies() {
     let dir = std::path::PathBuf::from(std::env::var_os("SOLVECRAFT_F3D_PROBES").unwrap());
@@ -23,6 +57,7 @@ fn loft_face_sections_preserve_cap_body_and_parent_dependencies() {
         "fusion-face-loft-rectangle-measurements.json",
         "fusion-face-loft-rectangle-joined-measurements.json",
         "fusion-face-loft-rectangle-side-measurements.json",
+        "fusion-face-loft-sides-measurements.json",
     ] {
         let api: Value = serde_json::from_slice(&std::fs::read(dir.join(file)).unwrap()).unwrap();
         let verify = |s: &mut Session, row: &Value, label: &str| {
@@ -52,31 +87,49 @@ fn loft_face_sections_preserve_cap_body_and_parent_dependencies() {
             verify(&mut Session::new(solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap()), row, name);
             if name.ends_with("-baseline") {
                 let original = s.doc.clone();
-                for (suffix, parameter, expr) in [
-                    ("source-changed", "source_parameter", if name.contains("rectangle") { "45 mm" } else { "30 mm" }),
-                    ("parent-changed", "parent_parameter", "15 mm"),
-                    (
-                        "plane-changed",
-                        "plane_parameter",
-                        if name.contains("bottom") {
-                            "-40 mm"
-                        } else if name.contains("side") {
-                            "70 mm"
-                        } else {
-                            "50 mm"
-                        },
-                    ),
-                ] {
-                    s.execute("parameters.change", &json!({"name":row[parameter],"expression":expr})).unwrap();
-                    let expected = &api[name.replace("baseline", suffix)];
-                    verify(&mut s, expected, suffix);
+                let edits: Vec<(String, String, String)> = if let Some(edits) = row["edits"].as_array() {
+                    edits
+                        .iter()
+                        .map(|edit| {
+                            (
+                                edit["suffix"].as_str().unwrap().into(),
+                                edit["parameter"].as_str().unwrap().into(),
+                                edit["expression"].as_str().unwrap().into(),
+                            )
+                        })
+                        .collect()
+                } else {
+                    [
+                        ("source-changed", "source_parameter", if name.contains("rectangle") { "45 mm" } else { "30 mm" }),
+                        ("parent-changed", "parent_parameter", "15 mm"),
+                        (
+                            "plane-changed",
+                            "plane_parameter",
+                            if name.contains("bottom") {
+                                "-40 mm"
+                            } else if name.contains("side") {
+                                "70 mm"
+                            } else {
+                                "50 mm"
+                            },
+                        ),
+                    ]
+                    .into_iter()
+                    .map(|(suffix, parameter, expression)| (suffix.into(), row[parameter].as_str().unwrap().into(), expression.into()))
+                    .collect()
+                };
+                let edit_count = edits.len();
+                for (suffix, parameter, expr) in edits {
+                    s.execute("parameters.change", &json!({"name":parameter,"expression":expr})).unwrap();
+                    let expected = &api[name.replace("baseline", &suffix)];
+                    verify(&mut s, expected, &suffix);
                     verify(
                         &mut Session::new(solvecraft_engine::io::read_design(&solvecraft_engine::io::write_design(&s.doc)).unwrap()),
                         expected,
-                        suffix,
+                        &suffix,
                     );
                 }
-                for _ in 0..3 {
+                for _ in 0..edit_count {
                     s.execute("edit.undo", &json!({})).unwrap();
                 }
                 assert_eq!(s.doc, original);

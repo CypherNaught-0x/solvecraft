@@ -110,7 +110,14 @@ pub(super) fn curve(
     let mut shared = BTreeSet::new();
     for neighbor in neighbors {
         let other = owned.get(&neighbor).ok_or_else(|| invalid("side-role neighbor outside selected profile"))?;
-        let common: Vec<_> = [line.start_point, line.end_point].into_iter().filter(|p| [other.start_point, other.end_point].contains(p)).collect();
+        // The explicit curve IDs already establish ownership and adjacency.
+        // Separate sketch-point objects can represent one constrained vertex;
+        // validate their positions instead of requiring object-ID equality.
+        let common: Vec<_> = [line.start, line.end]
+            .into_iter()
+            .enumerate()
+            .filter_map(|(slot, p)| [other.start, other.end].iter().any(|q| p.iter().zip(q).all(|(a, b)| (a - b).abs() < 1e-10)).then_some(slot))
+            .collect();
         let [point] = common.as_slice() else { return Err(invalid("side-role curves are not incident")) };
         if !shared.insert(*point) {
             return Err(invalid("side-role neighbors share the same endpoint"));
@@ -186,8 +193,12 @@ mod tests {
             .collect();
         if label == 99 {
             lines.get_mut(&31).unwrap().start_point = 999;
+            lines.get_mut(&31).unwrap().start = [999., 999., 0.];
+        } else if label == 98 {
+            lines.get_mut(&31).unwrap().start_point = 998;
+            lines.get_mut(&31).unwrap().end_point = 999;
         }
-        curve(&Records::new(&d), &classes, 9, if label == 99 { 13 } else { label }, profile, &lines)
+        curve(&Records::new(&d), &classes, 9, if label >= 98 { 13 } else { label }, profile, &lines)
     }
 
     #[test]
@@ -197,7 +208,8 @@ mod tests {
                 assert_eq!(resolve(authored(), label, reverse).unwrap(), expected);
             }
         }
-        assert!(resolve(authored(), 99, false).is_err(), "a nonincident curve cannot be rescued by coordinates");
+        assert_eq!(resolve(authored(), 98, false).unwrap(), 31, "distinct point objects may represent the same incident endpoints");
+        assert!(resolve(authored(), 99, false).is_err(), "referenced neighbors must actually meet the selected curve");
         assert!(resolve(authored(), 3, false).is_err(), "labels are not ordinal curve positions");
     }
 

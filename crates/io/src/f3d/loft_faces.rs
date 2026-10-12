@@ -12,6 +12,7 @@ pub(super) struct Face {
     pub high: bool,
     pub rectangular: bool,
     pub side: Option<u64>,
+    pub side_roles: BTreeMap<u64, u64>,
     pub contributions: Vec<u64>,
     pub all_operations: Vec<u64>,
 }
@@ -22,17 +23,26 @@ struct Recipe {
     high: bool,
     rectangular: bool,
     side: Option<u64>,
+    side_roles: BTreeMap<u64, u64>,
 }
 
 impl Face {
     pub fn cap(feature: u64, operation: u64, high: bool, rectangular: bool) -> Self {
-        Self { feature, high, rectangular, side: None, contributions: vec![operation], all_operations: vec![operation] }
+        Self { feature, high, rectangular, side: None, side_roles: BTreeMap::new(), contributions: vec![operation], all_operations: vec![operation] }
     }
     pub fn validate_profile(&self, profile: &SketchProfile, circles: &BTreeMap<u64, SketchCircle>, lines: &BTreeMap<u64, SketchLine>) -> Result<()> {
         let [loops] = profile.regions.as_slice() else { return Err(invalid("unsupported loft face producer regions")) };
         let [boundary] = loops.as_slice() else { return Err(invalid("unsupported loft face producer holes")) };
         if !boundary.outer || boundary.pieces.iter().any(|piece| *piece != (1, 1)) {
             return Err(invalid("unsupported loft cap boundary pieces"));
+        }
+        if self.side.is_some() {
+            if !(3..=1024).contains(&boundary.curves.len())
+                || boundary.curves.iter().any(|id| !lines.get(id).is_some_and(|line| line.sketch == profile.geometry))
+            {
+                return Err(invalid("loft side requires a complete owned line profile"));
+            }
+            return Ok(());
         }
         if !self.rectangular {
             let [circle] = boundary.curves.as_slice() else { return Err(invalid("loft face recipe requires a circular producer")) };
@@ -133,11 +143,7 @@ fn cap_recipe(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64) -
     require_class(classes, id, IDENTITY, 3)?;
     let mut r = payload(records.primary(id)?, id)?;
     zeros(&mut r, 6)?;
-    for value in [1, 3] {
-        if r.u32()? != value {
-            return Err(invalid("unsupported loft face recipe header"));
-        }
-    }
+    integers(&mut r, &[1, 3])?;
     let count = r.u32()?;
     if count != 3 && count != 5 {
         return Err(invalid("unsupported loft face term count"));
@@ -149,136 +155,147 @@ fn cap_recipe(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64) -
         if !(1..=64).contains(&n) {
             return Err(invalid("unsupported loft face alternative count"));
         }
-        let mut label = None;
-        let mut operations = BTreeSet::new();
+        let mut term = BTreeMap::new();
         for _ in 0..n {
-            let current = r.string()?;
-            if label.as_ref().is_some_and(|label| label != &current) {
-                return Err(invalid("mixed loft face alternative roles"));
-            }
-            label = Some(current);
+            let label = r.string()?;
             zeros(&mut r, 4)?;
             if r.u32()? != 1 {
                 return Err(invalid("unsupported loft face operation count"));
             }
             let operation = r.u64()?;
-            if operation == 0 || !operations.insert(operation) {
+            if operation == 0 || term.insert(operation, label).is_some() {
                 return Err(invalid("invalid or duplicate loft face operation"));
             }
             all_operations.insert(operation);
         }
-        terms.push((label.ok_or_else(|| invalid("missing loft face label"))?, operations));
+        if terms.contains(&term) {
+            return Err(invalid("duplicate loft face term"));
+        }
+        terms.push(term);
     }
     if all_operations.len() > 64 {
         return Err(invalid("too many loft face contributors"));
     }
-    let labels: Vec<_> = terms.iter().map(|t| t.0.as_str()).collect();
-    let (high, rectangular, side) = match labels.as_slice() {
-        ["2", "-1", "3"] => (true, false, None),
-        ["1", "-102", "3"] => (false, false, None),
-        ["2", "3", "6", "4", "5"] => (true, true, None),
-        ["1", "3", "6", "4", "5"] => (false, true, None),
-        ["5", "1", "4", "6", "2"] => (false, true, Some(5)),
-        _ => return Err(invalid("unsupported loft face topology recipe")),
+    let first = terms.first().ok_or_else(|| invalid("missing face terms"))?;
+    let (high, rectangular, side, side_roles) = if count == 3 {
+        let labels: Vec<_> = terms.iter().filter_map(|term| (term.len() == 1).then(|| term.values().next()).flatten()).map(String::as_str).collect();
+        let high = match labels.as_slice() {
+            ["2", "-1", "3"] => true,
+            ["1", "-102", "3"] => false,
+            _ => return Err(invalid("unsupported circular loft face recipe")),
+        };
+        if all_operations.len() != 1 {
+            return Err(invalid("unsupported composite circular loft face"));
+        }
+        (high, false, None, BTreeMap::new())
+    } else {
+        let roles = terms
+            .iter()
+            .map(|term| {
+                term.iter()
+                    .map(|(op, label)| {
+                        let role = label
+                            .parse::<u64>()
+                            .ok()
+                            .filter(|role| *role != 0 && role.to_string() == *label)
+                            .ok_or_else(|| invalid("unsupported planar loft face label"))?;
+                        Ok((*op, role))
+                    })
+                    .collect::<Result<BTreeMap<_, _>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let selected = roles.first().ok_or_else(|| invalid("missing planar face roles"))?;
+        let role = *selected.values().next().ok_or_else(|| invalid("missing selected face role"))?;
+        if role <= 2 {
+            if selected.values().any(|r| *r != role) || roles.iter().skip(1).flat_map(|term| term.values()).any(|r| *r < 3) {
+                return Err(invalid("unsupported planar cap incidence roles"));
+            }
+            (role == 2, true, None, BTreeMap::new())
+        } else {
+            if selected.values().any(|r| *r < 3)
+                || !roles.get(1).is_some_and(|term| term.values().all(|r| *r == 1))
+                || !roles.get(4).is_some_and(|term| term.values().all(|r| *r == 2))
+                || roles.iter().skip(2).take(2).flat_map(|term| term.values()).any(|r| *r < 3)
+            {
+                return Err(invalid("unsupported planar side incidence roles"));
+            }
+            (false, true, Some(role), selected.clone())
+        }
     };
-    let operations = &terms.first().ok_or_else(|| invalid("missing face terms"))?.1;
-    if !rectangular && (operations.len() != 1 || terms.iter().any(|t| &t.1 != operations)) {
-        return Err(invalid("unsupported composite circular loft face"));
-    }
     zeros(&mut r, 4)?;
     if r.string()? != "bounded_face_recipe_data" {
         return Err(invalid("missing bounded loft face recipe"));
     }
     zeros(&mut r, 4)?;
-    // Exact bounded incidence is required in addition to construction labels.
-    let tree = if side.is_some() {
-        side_tree()
-    } else if rectangular {
-        rectangle_tree(high)
+    if rectangular {
+        quadrilateral(&mut r)?;
     } else {
-        let mut tree = vec![-1_i32, 1, 1, -1, 2, 2, -1, 0, -1, 1, -1, 2, 2, -1, 0, -1, 1, 1, -1, 0, 0, -1, 1, 0];
-        tree.extend(if high { [2, 2, 2, 2, 1, 0, 1, -1] } else { [2, 1, 1, 1, 2, 1, 2, -1] });
-        tree
-    };
-    for value in tree {
-        if r.u32()? != value as u32 {
-            return Err(invalid("unsupported loft face incidence tree"));
-        }
+        integers(&mut r, &[-1, 1, 1, -1, 2, 2, -1, 0, -1, 1, -1, 2, 2, -1, 0, -1, 1, 1, -1, 0, 0, -1, 1, 0])?;
+        integers(&mut r, &if high { [2, 2, 2, 2, 1, 0, 1, -1] } else { [2, 1, 1, 1, 2, 1, 2, -1] })?;
     }
     finish(&r)?;
-    Ok(Recipe { operations: operations.iter().copied().collect(), all_operations: all_operations.into_iter().collect(), high, rectangular, side })
+    Ok(Recipe {
+        operations: first.keys().copied().collect(),
+        all_operations: all_operations.into_iter().collect(),
+        high,
+        rectangular,
+        side,
+        side_roles,
+    })
 }
 
-/// Four edges of the observed side-5 rectangle. Terms identify the selected
-/// side, lower cap, previous side, next side, and upper cap respectively.
-fn side_tree() -> Vec<i32> {
-    let mut tree = vec![-1, 4];
-    for [a, b, c, d, e, f, g, h] in [[0, 1, 0, 2, 1, 3, 0, 1], [0, 3, 3, 0, 1, 3, 4, 0], [0, 4, 0, 4, 2, 3, 4, 0], [2, 0, 0, 2, 1, 0, 4, 2]] {
-        tree.extend([-1, -1, 2, a, -1, b, -1, 2, -1, 3, c, -1, d, -1, e, -1, 0, 0, -1, 3, f, -1, g, -1, h, -1, 0, 0, -1]);
+fn integers(r: &mut Reader<'_>, expected: &[i32]) -> Result<()> {
+    for value in expected {
+        if r.u32()? != *value as u32 {
+            return Err(invalid("unsupported loft face incidence encoding"));
+        }
     }
-    tree
+    Ok(())
 }
 
-/// Four cyclic cap edges, each incident to the cap, a side and two vertices.
-/// Term indices follow [cap, side3, side6, side4, side5]. Bottom caps traverse
-/// the boundary in the opposite direction. Vertex incidence changes at the seam.
-fn rectangle_tree(high: bool) -> Vec<i32> {
-    let index = |side| match side {
-        3 => 1,
-        4 => 3,
-        5 => 4,
-        6 => 2,
-        _ => 0,
-    };
-    let mut tree = vec![-1, 4];
-    for side in if high { [3, 4, 5, 6] } else { [3, 6, 5, 4] } {
-        let this = index(side);
-        let previous = index(if side == 3 { 6 } else { side - 1 });
-        let next = index(if side == 6 { 3 } else { side + 1 });
-        let (a, b) = if side == 3 { (this, 0) } else { (0, previous) };
-        let (a, b) = if high { (a, b) } else { (b, a) };
-        // The last side's next vertex uses the first side; other next vertices
-        // use the current side and cap, in the cap's orientation.
-        let (c, d) = if side == 6 {
-            if high { (next, 0) } else { (0, next) }
-        } else if high {
-            (0, this)
-        } else {
-            (this, 0)
-        };
-        tree.extend([
-            -1,
-            -1,
-            2,
-            this,
-            -1,
-            0,
-            -1,
-            2,
-            -1,
-            3,
-            if side == 3 { previous } else { this },
-            -1,
-            a,
-            -1,
-            b,
-            -1,
-            0,
-            0,
-            -1,
-            3,
-            if side == 6 { this } else { next },
-            -1,
-            c,
-            -1,
-            d,
-            -1,
-            0,
-            0,
-            -1,
-        ]);
+/// Verify the four-edge boundary graph, independent of edge ordering and corner
+/// orientation. Every edge uses the selected face and one distinct neighbor;
+/// every corner joins two such edges and occurs exactly twice.
+fn quadrilateral(r: &mut Reader<'_>) -> Result<()> {
+    integers(r, &[-1, 4])?;
+    let mut neighbors = BTreeSet::new();
+    let mut corners = BTreeMap::new();
+    for _ in 0..4 {
+        integers(r, &[-1, -1, 2])?;
+        let a = r.u32()?;
+        integers(r, &[-1])?;
+        let b = r.u32()?;
+        if a.max(b) > 4 || a.min(b) != 0 || a == b || !neighbors.insert(a.max(b)) {
+            return Err(invalid("invalid planar loft boundary edge"));
+        }
+        integers(r, &[-1, 2])?;
+        let mut previous = None;
+        for _ in 0..2 {
+            integers(r, &[-1, 3])?;
+            let mut corner = [0; 3];
+            for role in &mut corner {
+                *role = r.u32()?;
+                integers(r, &[-1])?;
+            }
+            integers(r, &[0, 0])?;
+            corner.sort();
+            if corner.iter().any(|role| *role > 4)
+                || corner.windows(2).any(|pair| pair.first() == pair.get(1))
+                || !corner.contains(&a)
+                || !corner.contains(&b)
+                || previous == Some(corner)
+            {
+                return Err(invalid("invalid planar loft boundary corner"));
+            }
+            *corners.entry(corner).or_insert(0) += 1;
+            previous = Some(corner);
+        }
+        integers(r, &[-1])?;
     }
-    tree
+    if corners.len() != 4 || corners.values().any(|count| *count != 2) {
+        return Err(invalid("planar loft boundary is not one closed quadrilateral"));
+    }
+    Ok(())
 }
 
 fn producer(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, handle: u64) -> Result<u64> {
@@ -347,6 +364,7 @@ pub(super) fn face(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u
         high: recipe.high,
         rectangular: recipe.rectangular,
         side: recipe.side,
+        side_roles: recipe.side_roles,
         contributions: recipe.operations,
         all_operations: recipe.all_operations,
     })
@@ -409,6 +427,40 @@ mod tests {
     use super::*;
     use crate::f3d::import_tests::{Fixture, fixture};
     use crate::f3d::relationship_tests::{reference, refs, string, u32, u64, wide};
+
+    #[test]
+    fn quadrilateral_incidence_accepts_ordering_but_rejects_broken_topology() {
+        let mut edges = Vec::new();
+        for (neighbor, ends) in [(1, [2, 4]), (2, [1, 3]), (3, [2, 4]), (4, [3, 1])] {
+            let mut edge = vec![-1, -1, 2, 0, -1, neighbor, -1, 2];
+            for other in ends {
+                edge.extend([-1, 3, 0, -1, neighbor, -1, other, -1, 0, 0]);
+            }
+            edge.push(-1);
+            edges.push(edge);
+        }
+        let check = |edges: &[Vec<i32>]| {
+            let bytes: Vec<_> = [-1_i32, 4].into_iter().chain(edges.iter().flatten().copied()).flat_map(i32::to_le_bytes).collect();
+            quadrilateral(&mut Reader { bytes: &bytes, at: 0 })
+        };
+        assert!(check(&edges).is_ok());
+        edges.reverse();
+        for edge in &mut edges {
+            edge.swap(3, 5);
+            edge.swap(10, 14);
+            edge.swap(20, 24);
+        }
+        assert!(check(&edges).is_ok());
+        for (index, value) in [(3, 0), (10, 9), (14, 4), (24, 2)] {
+            let mut broken = edges.clone();
+            broken[0][index] = value;
+            assert!(check(&broken).is_err(), "invalid corner/edge at {index}");
+        }
+        let mut repeated = edges.clone();
+        repeated[0] = repeated[1].clone();
+        assert!(check(&repeated).is_err());
+        assert!(check(&edges[..3]).is_err());
+    }
 
     // Original records with arbitrary IDs, strings and operation values.
     // No exported binary payload or cached geometry is copied into the tests.
@@ -574,6 +626,12 @@ mod tests {
         assert_eq!(selected.contributions, [8001, 9001]);
         assert_eq!(selected.all_operations, [8001, 9001]);
         assert!(selected.rectangular);
+        let mut f = authored_joined_side();
+        f.0.get_mut(&181).unwrap().2[47] = b'6';
+        let d = f.design();
+        let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+        let selected = face(&Records::new(&d), &classes, 180, 19).unwrap();
+        assert_eq!(selected.side_roles, BTreeMap::from([(8001, 5), (9001, 6)]), "each producer retains its own explicit curve label");
     }
 
     #[test]
@@ -583,7 +641,7 @@ mod tests {
             f.0.get_mut(&181).unwrap().2.truncate(keep);
             assert!(decode(f, false).is_err(), "prefix {keep}");
         }
-        for (at, bytes) in [(18, 65_u32.to_le_bytes().to_vec()), (47, vec![b'6']), (56, 8001_u64.to_le_bytes().to_vec())] {
+        for (at, bytes) in [(18, 65_u32.to_le_bytes().to_vec()), (56, 8001_u64.to_le_bytes().to_vec())] {
             let mut f = authored_joined_side();
             f.0.get_mut(&181).unwrap().2[at..at + bytes.len()].copy_from_slice(&bytes);
             assert!(decode(f, false).is_err(), "offset {at}");

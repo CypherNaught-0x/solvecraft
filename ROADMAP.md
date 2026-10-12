@@ -166,12 +166,14 @@ headline counts in-scope tabs only and lists the deferred ones separately.
   circular/rectangular extrusion-cap sections, including explicit Join targets. Source
   dimensions, parent heights, plane dependencies and suppression remain editable.
   Three coaxial circular sections also retain editable chord-length interpolation.
-  Thirteen original loft recipes and a rotated-plane prism extend the
-  editable-history suite to 57 files.
+  Fifteen original loft recipes and a rotated-plane prism extend the
+  editable-history suite to 59 files.
   Finite planar Join certificates retain contributing extrusion identities for
-  editable side-face loft attachments. Native rectangular side-5 selectors now
-  resolve explicit sketch-curve labels, including same-profile joined sources
-  and joined caps. Rotated sketch bases retain live offset-plane dependencies.
+  editable side-face loft attachments. Native rectangular side selectors now
+  validate a closed four-edge incidence graph and resolve explicit sketch-curve
+  labels on all four sides, separate-sketch joins and whole-line polygon profiles.
+  Legacy operation maps and retired tags preserve live producer ownership.
+  Rotated sketch bases retain live offset-plane dependencies.
   Other composite selector roles remain incomplete.
   General multi-section interpolation, other native face recipes and the larger supplied
   designs remain incomplete.
