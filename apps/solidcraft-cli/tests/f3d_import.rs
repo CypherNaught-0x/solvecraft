@@ -1640,3 +1640,49 @@ fn verify_profile_piece_controls(measurements: &str, count: usize) {
         }
     }
 }
+
+#[test]
+#[ignore = "requires local independent-radius fillet controls"]
+fn imported_history_survives_container_save_reopen_edit_and_json_export() {
+    use solidcraft_engine::io;
+    let probes = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
+    let source = probes.join("fillet-sets-baseline.f3d");
+    let original = std::fs::read(&source).unwrap();
+    let dir = std::env::temp_dir().join(format!("solidcraft-f3d-container-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Imported.solidcraft");
+    let mut imported = Session::default();
+    imported.execute("doc.open", &json!({"path":source})).unwrap();
+    assert!(imported.path.is_none());
+    assert!(imported.is_dirty());
+    assert!(imported.execute("file.save", &json!({})).is_err());
+    imported.execute("file.save_as", &json!({"path":path})).unwrap();
+    assert!(!imported.is_dirty());
+    let baseline = std::fs::read(&path).unwrap();
+    assert!(io::is_design_container(&baseline));
+    let mut reopened = Session::default();
+    reopened.execute("doc.open", &json!({"path":path})).unwrap();
+    assert_eq!(reopened.doc, imported.doc);
+    reopened.execute("parameters.change", &json!({"name":"d6","expression":"5 mm"})).unwrap();
+    let edited = reopened.doc.clone();
+    reopened.execute("file.save", &json!({"compression":"compact"})).unwrap();
+    assert_eq!(std::fs::read(io::backup_path(&path)).unwrap(), baseline);
+    reopened.execute("doc.open", &json!({"path":path})).unwrap();
+    assert_eq!(reopened.doc, edited);
+    assert!(reopened.model.results.iter().all(|r| r.error.is_none() && r.warning.is_none()));
+    let removed = (1. - std::f64::consts::PI / 4.) * (2_f64.powi(2) + 5_f64.powi(2)) * 40.;
+    let want = 20. * 30. * 40. - removed;
+    let actual = reopened.execute("inspect.measure", &json!({})).unwrap()["total"]["volume_mm3"].as_f64().unwrap();
+    assert!((actual - want).abs() < removed * 0.005 + 0.01);
+    reopened.execute("parameters.change", &json!({"name":"d4","expression":"4 mm"})).unwrap();
+    reopened.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(reopened.doc, edited);
+    let plain = dir.join("Exported.json");
+    reopened.execute("file.export", &json!({"path":plain})).unwrap();
+    let bytes = std::fs::read(&plain).unwrap();
+    assert!(!io::is_design_container(&bytes));
+    assert_eq!(io::read_design(&bytes).unwrap(), *edited);
+    assert_eq!(reopened.path.as_deref(), path.to_str());
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -12,7 +12,7 @@ mod planar_sources;
 #[path = "planar_union.rs"]
 mod planar_union;
 #[path = "shell_groups.rs"]
-mod shell_groups;
+pub(crate) mod shell_groups;
 
 pub(crate) type Solid = mt::Solid;
 

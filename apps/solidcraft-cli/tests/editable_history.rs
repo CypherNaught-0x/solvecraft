@@ -163,13 +163,18 @@ fn simple_history_files_replay_reopen_edit_and_undo() {
         }
         // Aggregate world bounds catch incorrect sketch placement and direction.
         bounds(&measure, expected, &label);
+        let packaged = solidcraft_engine::io::write_design_container(&s.doc).unwrap();
+        assert_eq!(solidcraft_engine::io::read_design(&packaged).unwrap(), *s.doc, "{label}: container preserves history");
         for edit in recipe["edits"].as_array().unwrap() {
             s.execute(edit["command"].as_str().unwrap(), &edit["params"]).unwrap();
             let edited_volume = expected_volume(edit);
             bounds(&volume(&mut s, edited_volume, &label), edit, &label);
             let reopened = Document::from_json(&s.doc.to_json()).unwrap();
             assert_eq!(reopened, *s.doc);
-            bounds(&volume(&mut Session::new(reopened), edited_volume, &label), edit, &label);
+            let packaged = solidcraft_engine::io::write_design_container(&reopened).unwrap();
+            let container_doc = solidcraft_engine::io::read_design(&packaged).unwrap();
+            assert_eq!(container_doc, reopened, "{label}: container preserves edited history");
+            bounds(&volume(&mut Session::new(container_doc), edited_volume, &label), edit, &label);
             s.execute("edit.undo", &json!({})).unwrap();
             bounds(&volume(&mut s, original_volume, &label), expected, &label);
         }

@@ -17,3 +17,6 @@ zip = { workspace = true }
 quick-xml = { workspace = true }
 ruzstd = "0.8.3"
 crc32fast = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }

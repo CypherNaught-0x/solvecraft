@@ -19,7 +19,7 @@ mod control_server;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod space_mouse;
 
-use solidcraft_engine::Session;
+use solidcraft_engine::{Session, io};
 use solidcraft_ui_egui::{Services, SolveApp};
 
 struct App {
@@ -67,8 +67,9 @@ fn services() -> Services {
                 .add_filter(
                     "Designs, STEP, IGES and meshes",
                     &[
-                        "solidcraft",
-                        "solvecraft",
+                        io::DESIGN_EXT,
+                        io::LEGACY_DESIGN_EXT,
+                        "json",
                         "f3d",
                         "F3D",
                         "step",
@@ -85,8 +86,7 @@ fn services() -> Services {
                         "STL",
                     ],
                 )
-                // The legacy extension is a compatibility shim (docs/compatibility.md).
-                .add_filter("SolidCraft design", &solidcraft_engine::io::DESIGN_EXTS)
+                .add_filter("SolidCraft design (container or JSON)", &[io::DESIGN_EXT, io::LEGACY_DESIGN_EXT, "json"])
                 .add_filter("Fusion archive (supported history features)", &["f3d", "F3D"])
                 .add_filter("STEP", &["step", "stp", "STEP", "STP"])
                 .add_filter("IGES", &["igs", "iges", "IGS", "IGES"])
@@ -97,7 +97,17 @@ fn services() -> Services {
                 .map(|p| p.to_string_lossy().to_string())
         })),
         pick_save: Some(Box::new(|name: &str, exts: &[&str]| {
-            rfd::FileDialog::new().set_file_name(name).add_filter("File", exts).save_file().map(|p| p.to_string_lossy().to_string())
+            let dialog = rfd::FileDialog::new().set_file_name(name);
+            let dialog = if exts == [io::DESIGN_EXT, "json"] {
+                if name.ends_with(".json") {
+                    dialog.add_filter("Plain JSON design", &["json"]).add_filter("SolidCraft container", &[io::DESIGN_EXT])
+                } else {
+                    dialog.add_filter("SolidCraft container", &[io::DESIGN_EXT]).add_filter("Plain JSON design", &["json"])
+                }
+            } else {
+                dialog.add_filter("File", exts)
+            };
+            dialog.save_file().map(|p| p.to_string_lossy().to_string())
         })),
         graphics_path: graphics_path().map(|p| p.to_string_lossy().to_string()),
         show_in_folder: Some(Box::new(|path| {

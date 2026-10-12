@@ -84,7 +84,10 @@ recorded from the implementation. The placed cylinder has radius 6 mm, height
 
 `editable_history.rs` replays each recipe, compares the saved document, opens it
 through `doc.open`, checks feature order, body count, aggregate world bounds and
-volume, then checks edits, serialization/reopening and undo. Curved-volume checks
+volume, then checks edits, JSON and container serialization/reopening, and undo.
+The checked-in JSON designs retain their historical format versions; each baseline
+and edited document must also survive the current container format with identical
+parameters and references. Curved-volume checks
 use the existing oracle tolerance of 0.1% because `inspect.measure` integrates
 tessellated faces; world bounds use 0.00001 mm.
 

@@ -1976,3 +1976,31 @@ Clippy passed. The original three-radius model was rendered and visually checked
 A final remote check found `01bf0e4` (three further upstream commits, including
 new design containers); those are fetched for the next integration pass and
 are not included in these results.
+
+
+### Design container integration
+
+Upstream `01bf0e4` adds container saves with JSON compatibility. F3D opening stays
+connected in the command registry, CLI, desktop picker and browser picker; ZIP
+signatures do not route `.f3d` archives into the SolidCraft container reader.
+Imported designs remain unsaved with no native source path, so ordinary Save
+cannot overwrite the source archive. A new local integration test exercises
+import, default container Save As, reopening, independent native radius edits,
+compact Save and its backup, undo, and JSON export while checking source bytes.
+
+All 112 original saved fixtures retain their historical JSON representation.
+Their baseline and edited documents additionally pass through the container
+writer and reader, requiring exact document equality before geometry checks.
+This guards parameter identities, placements, profile certificates and grouped
+fillet selections across the new storage format without replacing migration
+coverage with freshly regenerated files.
+
+Validation passed all 112 saved histories (including container round trips), all
+43 local native-import groups, 155 I/O tests, 698 engine tests, 308 kernel tests,
+381 UI tests and WASM. The complete gate passed 35 of 36 binaries; the sandbox-
+blocked localhost socket test passed separately with socket permission. All
+other quality gates passed. HardEdgeBasin's isolated opening guard passed in
+1.00 seconds. The supplied Minimal file was imported, saved as an 883-byte
+container, reopened and rendered: two editable features, one cylinder, exact
+100 mm diameter/height bounds and volume within 0.1% of the analytic value.
+The final remote check still reported upstream `01bf0e4`.
