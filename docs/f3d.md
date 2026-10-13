@@ -2046,3 +2046,29 @@ point, Gridfinity feature 47444 is `Chamfer7` (class
 API inspection. These are remaining import blockers, not successful full imports.
 Upstream's subsequent `809ecf7` release-version commit is fetched for the next
 integration pass and is not included in these test results.
+
+### Chamfer reconstruction reference cases
+
+Eight original SolidCraft histories establish the geometry and edit checks for
+the next native chamfer decoder: equal setbacks on vertical, top, bottom and
+opposite edges, plus unequal setbacks and distance/angle with flipped sides.
+Analytic triangular-prism removal supplies both volume and center of mass.
+The latter detects a swapped first face that volume alone cannot distinguish.
+These fixtures exercise source dimensions, both chamfer inputs, suppression,
+JSON/container storage and undo. They do not yet decode native chamfer records.
+
+The local controlled probe is prepared for native equal-distance, two-distance,
+distance/angle, tangent-chain and multiple-set records. It uses temporary
+documents and exports locally, never saving the user's cloud document. Running
+that probe was deferred because the Mac was locked; no field meanings are being
+inferred from untested mode assumptions.
+
+The merge through upstream `9e60080` passed all 124 saved histories, 43 local
+native-import groups, 703 engine tests, 312 kernel tests, 384 UI tests and WASM.
+HardEdgeBasin's opening guard passed in 1.09 seconds. The full gate passed 35
+of 36 binaries; the only failure was sandbox-denied localhost socket access,
+and that test passed separately with socket permission. All other quality gates
+passed. The two-distance chamfer was rendered and visually checked. The final
+remote check found newer upstream `fb4c1d7` (face-attachment, sketch-axis and
+per-edge flange changes); it is fetched for the next integration pass and is
+not included in these results.

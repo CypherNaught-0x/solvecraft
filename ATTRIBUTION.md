@@ -226,3 +226,11 @@ Vulkan, DirectX 12, Metal and WebGPU retain their requested multisampling.
 | apps/solidcraft-cli/tests/history/fillet-chain-capsule-bottom.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solidcraft-cli/tests/history/fillet-chain-circle-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solidcraft-cli/tests/history/fillet-chain-groups.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-vertical.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-bottom.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-pair.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-two-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-two-top-flipped.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-angle-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-angle-top-flipped.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |

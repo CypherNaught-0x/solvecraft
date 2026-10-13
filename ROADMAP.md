@@ -61,6 +61,8 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
 
 ## Dimensioning and error reporting
 
+- Point has a default Sketch CREATE toolbar button alongside the existing drawing tools.
+  Saved custom layouts are preserved; Reset Toolbar restores the default Point button.
 - Construction planes cannot take an origin-plane name (XY, XZ, YZ, Top, Front, Right). Plane
   arguments reject such a name when an older design's construction plane already has it. Use
   the other alias, the construction feature's numeric ID or an explicit plane; existing
@@ -327,6 +329,11 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   from exact current edge topology on regeneration and pattern replay. Native
   tangent-enabled extrusion-edge controls import with editable radii and source
   dimensions. Four analytic rim/group fixtures bring the saved suite to 116.
+  Eight chamfer histories now cover equal setbacks, unequal setbacks, angle
+  inputs and flipped sides through dimension edits, suppression and reopening.
+  Their analytic volume and center-of-mass checks distinguish swapped sides;
+  these bring the saved suite to 124 designs. Native chamfer decoding is pending
+  controlled record comparisons and is not implied by these SolidCraft fixtures.
   More source topologies and the other native feature families remain unfinished.
 - Persistent naming follows the kernel's exact face history (docs/book/src/dev/naming.md):
   references resolve by name first, follow splits and merges, and warn when the entity split,
@@ -420,6 +427,8 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   record their coordinate frame; legacy wires migrate from known provenance without changing
   coordinates. Broken legacy links with missing provenance can require explicit refresh or relink.
   See [occurrence workflows](docs/occurrence-workflows.md).
+- Toolbar drops on panel labels, gaps and margins append commands with insertion feedback;
+  button drops keep insert-before ordering.
 - Parameters and Configurations have distinct actions in the SOLID toolbar's CONFIGURE panel.
   Parameters opens the user/model variable editor; Configurations opens the configuration table.
   Configure remains available in the panel dropdown.

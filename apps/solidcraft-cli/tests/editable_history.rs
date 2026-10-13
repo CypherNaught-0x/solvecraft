@@ -8,7 +8,7 @@ fn recipes() -> Vec<PathBuf> {
     let mut paths: Vec<_> =
         std::fs::read_dir(dir).unwrap().map(|p| p.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
     paths.sort();
-    assert_eq!(paths.len(), 116);
+    assert_eq!(paths.len(), 124);
     paths
 }
 
@@ -41,6 +41,20 @@ fn volume(s: &mut Session, want: f64, label: &str) -> Value {
 }
 
 fn bounds(measure: &Value, expected: &Value, label: &str) {
+    if let Some(center) = expected["center_of_mass"].as_array() {
+        let total = measure["total"]["volume_mm3"].as_f64().unwrap();
+        let tolerance = expected["center_of_mass_tolerance_mm"].as_f64().unwrap_or(1e-5);
+        for (axis, expected) in center.iter().enumerate() {
+            let moment: f64 = measure["bodies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|body| body["volume_mm3"].as_f64().unwrap() * body["center_of_mass"][axis].as_f64().unwrap())
+                .sum();
+            let actual = moment / total;
+            assert!((actual - expected.as_f64().unwrap()).abs() < tolerance, "{label}: center of mass axis {axis}: {actual}");
+        }
+    }
     if let Some(tolerance) = expected["volume_tolerance_mm3"].as_f64() {
         let actual = measure["total"]["volume_mm3"].as_f64().unwrap();
         assert!((actual - expected_volume(expected)).abs() < tolerance, "{label}: precise removal volume");

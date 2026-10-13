@@ -278,3 +278,16 @@ Radii, extrusion heights, circle diameter and suppression checks also verify
 bounds, JSON/container round trips and undo. Their curved-wall allowance is
 0.02% of the unrounded volume plus 1.5% of the removed volume and 0.1 mm³;
 this still rejects a missing or partially rounded rim. There are 116 designs.
+
+Eight `chamfer-*` examples bevel a vertical edge, the opposite vertical pair,
+or a top/bottom edge of a 20 × 30 × 40 mm extrusion. The top examples also
+cover two setbacks and distance/angle, with each possible side assignment.
+An edge of length L with perpendicular setbacks a and b removes a triangular
+prism of volume `L × a × b / 2`; angle mode uses `b = a × tan(angle)`.
+Each removed triangle has its centroid one third of the way along each setback.
+The remaining center of mass is `(V_block × C_block − V_removed × C_removed)
+/ (V_block − V_removed)`. Opposite vertical removals have the block's centroid.
+Center-of-mass checks (1e-6 mm) distinguish flipped sides even when volume and
+bounds are identical. Volume checks use 0.01 mm³ for these planar solids.
+First/second setback, angle, width, height and suppression edits pass through
+JSON/container reopening and undo. There are 124 original saved designs.
