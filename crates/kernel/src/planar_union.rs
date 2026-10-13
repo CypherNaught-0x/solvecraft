@@ -190,9 +190,44 @@ fn retain_other(source: Option<&FaceSource>) -> Option<FaceSource> {
     source.filter(|s| !is_leaf(s) && !matches!(s, FaceSource::PlanarUnion { .. }) && descriptor_cost(s).is_some()).cloned()
 }
 
-fn lineage(face: &mt::Face, operands: &[(&mt::Face, Option<&FaceSource>)], work: &mut usize) -> Result<Option<FaceSource>> {
+fn preserved_unique_support(
+    plane: &Plane,
+    operands: &[(&mt::Face, Option<&FaceSource>)],
+    preserved: Option<&FaceSource>,
+    work: &mut usize,
+) -> Result<Option<FaceSource>> {
+    let Some(preserved) = preserved.filter(|s| is_leaf(s)) else { return Ok(None) };
+    let mut matching = None;
+    for (face, source) in operands {
+        charge(work, 1)?;
+        let Some(actual) = actual_plane(face) else { continue };
+        let reversed = Plane { y: -actual.y, ..actual };
+        if !same_support(&actual, plane) && !same_support(&reversed, plane) {
+            continue;
+        }
+        // A second support, even unknown or oppositely oriented, prevents
+        // carrying one operand's identity through this unsupported boundary.
+        if matching.is_some() || !same_support(&actual, plane) || *source != Some(preserved) {
+            return Ok(None);
+        }
+        matching = Some(preserved.clone());
+    }
+    Ok(matching)
+}
+
+fn lineage(
+    face: &mt::Face,
+    operands: &[(&mt::Face, Option<&FaceSource>)],
+    preserved: Option<&FaceSource>,
+    work: &mut usize,
+) -> Result<Option<FaceSource>> {
     let Some(plane) = actual_plane(face) else { return Ok(None) };
-    let Some(output) = polygon(face, &plane, work)? else { return Ok(None) };
+    let Some(output) = polygon(face, &plane, work)? else {
+        // The boolean's support mapper can already certify an unchanged face
+        // with a hole or concave boundary. Do not erase that proof merely
+        // because convex polygon coverage cannot represent its boundary.
+        return preserved_unique_support(&plane, operands, preserved, work);
+    };
     let mut uncovered = vec![output.clone()];
     let mut contributions = BTreeMap::new();
     let mut first_source = None;
@@ -278,12 +313,13 @@ impl Body {
             let mut bytes = 16_000_000usize;
             let mut result = Vec::new();
             for (i, face) in self.solid.face_iter().enumerate() {
+                let old = self.face_sources().and_then(|s| s.get(i)).and_then(Option::as_ref);
                 // Provenance is optional; exhausting its budget revokes it,
                 // without turning a valid geometric union into a failed edit.
                 let mapped = if work == 0 {
                     None
                 } else {
-                    match lineage(face, &operands, &mut work) {
+                    match lineage(face, &operands, old, &mut work) {
                         Ok(source) => source,
                         Err(_) => {
                             work = 0;
@@ -291,7 +327,6 @@ impl Body {
                         }
                     }
                 };
-                let old = self.face_sources().and_then(|s| s.get(i)).and_then(Option::as_ref);
                 let source = mapped.or_else(|| retain_other(old)).filter(|s| {
                     if let Some(remaining) = descriptor_cost(s).and_then(|cost| bytes.checked_sub(cost)) {
                         bytes = remaining;

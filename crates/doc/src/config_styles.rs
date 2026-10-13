@@ -123,7 +123,7 @@ impl Document {
         use super::FaceCertificate;
         let Some(feature) = self.feature(producer) else { return false };
         match (certificate, &feature.kind) {
-            (FaceCertificate::Box { .. }, FeatureKind::Box { operation: crate::Operation::NewBody, .. }) => true,
+            (FaceCertificate::Box { .. }, FeatureKind::Box { operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => true,
             (FaceCertificate::ExtrudeCap { sketch, .. }, FeatureKind::Extrude { sketch: current, extent, operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => sketch == current && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.)),
             (FaceCertificate::ExtrudeSide { sketch, curve }, FeatureKind::Extrude { sketch: current, extent, operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {
                 sketch == current && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.))
@@ -144,7 +144,7 @@ impl Document {
         let feature = self.feature(target.origin_feature).ok_or_else(|| DocError::Unknown("face origin feature is gone".into()))?;
         if let Some(certificate) = &target.certificate {
             let valid = match (certificate, &feature.kind) {
-                (super::FaceCertificate::Box { axis, high }, FeatureKind::Box { operation: crate::Operation::NewBody, .. }) => {
+                (super::FaceCertificate::Box { axis, high }, FeatureKind::Box { operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {
                     ["x", "y", "z"].get(*axis as usize).is_some_and(|axis| role == format!("{}{axis}", if *high { "+" } else { "-" }))
                 }
                 (super::FaceCertificate::ExtrudeCap { sketch, high, outer, holes }, FeatureKind::Extrude { sketch: producer_sketch, extent, operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {

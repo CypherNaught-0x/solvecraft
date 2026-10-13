@@ -2072,3 +2072,30 @@ passed. The two-distance chamfer was rendered and visually checked. The final
 remote check found newer upstream `fb4c1d7` (face-attachment, sketch-axis and
 per-edge flange changes); it is fetched for the next integration pass and is
 not included in these results.
+
+### Face attachment integration
+
+Upstream `fb4c1d7` adds preserved Join attachments, sketch-axis references and
+per-edge flange inputs. Its face-history changes now coexist with finite
+compound-face certificates and the importer's explicit zero-taper expressions.
+When convex polygon coverage cannot represent a face's concave or curved
+boundary, the mapper retains an already certified single support only if one
+operand face owns it. A competing, unknown or oppositely oriented support
+prevents that fallback. Finite compound coverage and its work limits remain.
+
+Joined extrusion tools can extend into a target without losing the exposed
+nominal cap's identity. Shifted caps are excluded by their actual height, and
+source-side certificates still require matching original sketch segments. The
+stronger whole-tool constructor remains restricted to untrimmed tools. The
+regression creates attachments to a block and its joined boss, edits the block
+height and reopens the result; the updated model was also rendered and checked.
+
+Final validation passed all 124 saved histories, 43 local native-import groups,
+718 engine tests, 313 kernel tests, 385 UI tests and WASM. HardEdgeBasin's opening
+guard passed in 1.01 seconds. The complete gate passed 35 of 36 binaries; its
+localhost socket test was sandbox-denied and passed separately with permission.
+The final remote check found `dd67472`, which adds orbit behavior and documentation
+previews after `fb4c1d7`; those changes are fetched but outside this validation.
+Native chamfer decoding remains unfinished: the prepared local probe still
+requires an unlocked Mac. Its measurements now include centers of mass to
+distinguish equal-volume flipped modes.
