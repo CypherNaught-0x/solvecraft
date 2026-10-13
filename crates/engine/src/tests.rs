@@ -2866,3 +2866,90 @@ fn a_pattern_of_a_reduced_fillet_rounds_each_copy_alike() {
     let expect = 60.0 * 20.0 * 2.0 + 3.0 * (840.0 - (4.0 - PI) * 9.0 * 10.0);
     assert!(rel(volume(&mut s), expect) < 2e-4, "{} vs {expect}", volume(&mut s));
 }
+
+#[test]
+fn chamfer_groups_reject_invalid_partitions_and_overlapping_chains_atomically() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length":20,"width":30,"height":40}));
+    let saved = s.doc.to_json();
+    for params in [
+        json!({"edge_sets":[]}),
+        json!({"edge_sets":[{"edges":[[0,0,20]],"distance":2}]}),
+        json!({"edge_sets":[{"edges":[],"distance":2},{"edges":[[20,30,20]],"distance":3}]}),
+        json!({"edge_sets":[{"edges":[[0,0,20]],"distance":2},{"edges":[[0,0,20]],"distance":3}]}),
+        json!({"edge_sets":[{"edges":[[0,0,20]],"distance":2},{"edges":[[20,30,20]],"distance":3,"angle":45,"distance2":2}]}),
+        json!({"edges":[[0,0,20]],"distance":2,"tangent_chain":"yes"}),
+        json!({"edges":[[0,0,20]],"distance":2,"distance2":{}}),
+        json!({"edges":[[0,0,20]],"distance":2,"flip":1}),
+    ] {
+        assert!(s.execute("solid.chamfer", &params).is_err(), "{params}");
+        assert_eq!(s.doc.to_json(), saved);
+    }
+    run(
+        &mut s,
+        "solid.chamfer",
+        json!({"name":"Bevels","edge_sets":[
+            {"edges":[[0,0,20]],"distance":2},{"edges":[[20,30,20]],"distance":3}
+        ]}),
+    );
+    let id = s.doc.features.last().unwrap().id;
+    for count in [0, 2, usize::MAX] {
+        let mut doc = (*s.doc).clone();
+        let solidcraft_doc::FeatureKind::Chamfer { groups, .. } = &mut doc.feature_mut(id).unwrap().kind else { panic!() };
+        groups[0].count = count;
+        let rebuilt = Session::new(solidcraft_doc::Document::from_json(&doc.to_json()).unwrap());
+        assert!(rebuilt.model.result(id).unwrap().error.is_some());
+    }
+    let mut circle = Session::default();
+    run(&mut circle, "solid.cylinder", json!({"radius":10,"height":40}));
+    assert!(
+        circle
+            .execute(
+                "solid.chamfer",
+                &json!({"edge_sets":[
+                    {"edges":[[0,10,40]],"distance":2,"tangent_chain":true},
+                    {"edges":[[0,-10,40]],"distance":3,"tangent_chain":true}
+                ]})
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn chamfer_groups_keep_model_parameters_through_redefinition_and_feature_patterns() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length":20,"width":30,"height":40}));
+    run(&mut s, "solid.box", json!({"length":20,"width":30,"height":40,"corner":[40,0,0]}));
+    let id = run(
+        &mut s,
+        "solid.chamfer",
+        json!({"name":"Bevels","edge_sets":[
+            {"edges":[[0,0,20]],"distance":"2 mm","tangent_chain":true},{"edges":[[20,30,20]],"distance":"3 mm"}
+        ]}),
+    )["feature"]
+        .as_u64()
+        .unwrap();
+    let names = s.doc.feature(id).unwrap().param_names.clone();
+    assert_eq!(names.len(), 2);
+    assert_ne!(names[0], names[1]);
+    run(
+        &mut s,
+        "timeline.redefine",
+        json!({"feature":id,"command":"solid.chamfer","params":{"edge_sets":[
+            {"edges":[[0,0,20]],"distance":"2 mm","tangent_chain":true},{"edges":[[20,30,20]],"distance":"5 mm"}
+        ]}}),
+    );
+    assert_eq!(s.doc.feature(id).unwrap().param_names, names);
+    run(&mut s, "solid.pattern.rectangular", json!({"features":["Bevels"],"dir1":[1,0,0],"count1":2,"spacing1":40}));
+    let check = |s: &mut Session, d: f64| {
+        assert!(s.model.results.iter().all(|r| r.error.is_none() && r.warning.is_none()), "{:?}", s.model.results);
+        let actual = run(s, "inspect.measure", json!({}))["total"]["volume_mm3"].as_f64().unwrap();
+        assert!((actual - (48000. - 40. * (4. + d * d))).abs() < 0.01, "{actual}");
+    };
+    check(&mut s, 5.);
+    run(&mut s, "parameters.change", json!({"name":names[1],"expression":"3 mm"}));
+    check(&mut s, 3.);
+    check(&mut Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap()), 3.);
+    run(&mut s, "edit.undo", json!({}));
+    check(&mut s, 5.);
+}

@@ -70,6 +70,9 @@ pub enum Kind {
         radii: Vec<String>,
         chains: Vec<bool>,
     },
+    GroupedChamfer {
+        groups: Vec<solidcraft_engine::doc::ChamferGroup>,
+    },
     Shell {
         thickness: String,
     },
@@ -583,6 +586,7 @@ impl Dialog {
                 | Kind::Revolve { .. }
                 | Kind::Fillet { .. }
                 | Kind::GroupedFillet { .. }
+                | Kind::GroupedChamfer { .. }
                 | Kind::Shell { .. }
                 | Kind::Draft { .. }
                 | Kind::Mirror
@@ -618,6 +622,7 @@ impl Dialog {
             Kind::Revolve { angle, .. } => ("Angle", ValueKind::Angle, angle),
             Kind::Fillet { radius, chamfer, .. } => (if *chamfer { "Distance" } else { "Radius" }, ValueKind::Length, radius),
             Kind::GroupedFillet { radii, .. } => ("Radius", ValueKind::Length, radii.first_mut()?),
+            Kind::GroupedChamfer { groups } => ("Distance", ValueKind::Length, &mut groups.first_mut()?.distance),
             Kind::Shell { thickness } => ("Thickness", ValueKind::Length, thickness),
             Kind::Draft { angle } => ("Angle", ValueKind::Angle, angle),
             Kind::Hole { diameter, .. } => ("Diameter", ValueKind::Length, diameter),
@@ -839,7 +844,7 @@ fn title(k: &Kind) -> &'static str {
         Kind::Revolve { .. } => "REVOLVE",
         Kind::Fillet { chamfer: false, .. } => "FILLET",
         Kind::GroupedFillet { .. } => "FILLET",
-        Kind::Fillet { chamfer: true, .. } => "CHAMFER",
+        Kind::Fillet { chamfer: true, .. } | Kind::GroupedChamfer { .. } => "CHAMFER",
         Kind::Shell { .. } => "SHELL",
         Kind::Draft { .. } => "DRAFT",
         Kind::Mirror => "MIRROR",
@@ -1092,7 +1097,7 @@ fn input_rows(d: &mut Dialog, ui: &mut egui::Ui) {
     let mut clear: Option<usize> = None;
     let mut activate: Option<usize> = None;
     for (i, inp) in d.inputs.iter().enumerate() {
-        if matches!(d.kind, Kind::GroupedFillet { .. }) {
+        if matches!(d.kind, Kind::GroupedFillet { .. } | Kind::GroupedChamfer { .. }) {
             row_label(ui, &format!("Group {} edges", i + 1));
         } else {
             row_label(ui, inp.label);
@@ -1554,6 +1559,47 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                         row_label(ui, "Operation");
                         combo(ui, "rv_op", &OP_LABELS, operation);
                         ui.end_row();
+                    }
+                    Kind::GroupedChamfer { groups } => {
+                        for (index, group) in groups.iter_mut().enumerate() {
+                            ui.push_id(index, |ui| {
+                                row_label(ui, &format!("Group {} type", index + 1));
+                                let mut ctype = if group.distance2.is_some() {
+                                    1
+                                } else if group.angle.is_some() {
+                                    2
+                                } else {
+                                    0
+                                };
+                                combo(ui, "ch_type", &CHAMFER_TYPES, &mut ctype);
+                                ui.end_row();
+                                row_label(ui, &format!("Group {} distance", index + 1));
+                                enter |= field(ui, &mut group.distance);
+                                ui.end_row();
+                                if ctype == 1 {
+                                    row_label(ui, &format!("Group {} distance 2", index + 1));
+                                    enter |= field(ui, group.distance2.get_or_insert_with(|| group.distance.clone()));
+                                    ui.end_row();
+                                } else {
+                                    group.distance2 = None;
+                                }
+                                if ctype == 2 {
+                                    row_label(ui, &format!("Group {} angle", index + 1));
+                                    enter |= field(ui, group.angle.get_or_insert_with(|| "45 deg".into()));
+                                    ui.end_row();
+                                } else {
+                                    group.angle = None;
+                                }
+                                if ctype > 0 {
+                                    row_label(ui, &format!("Group {} flip", index + 1));
+                                    ui.checkbox(&mut group.flip, "");
+                                    ui.end_row();
+                                }
+                                row_label(ui, &format!("Group {} tangent chain", index + 1));
+                                ui.checkbox(&mut group.tangent_chain, "");
+                                ui.end_row();
+                            });
+                        }
                     }
                     Kind::GroupedFillet { radii, chains } => {
                         for (index, radius) in radii.iter_mut().enumerate() {
@@ -2549,6 +2595,28 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             }
             ("solid.revolve", p)
         }
+        Kind::GroupedChamfer { groups } => {
+            let mut sets = Vec::new();
+            for (index, group) in groups.iter().enumerate() {
+                need(index, "edges for each chamfer group")?;
+                let edges = sels(d, index)
+                    .iter()
+                    .map(|sel| match sel {
+                        Sel::Edge { point, .. } => Ok(pt(*point)),
+                        _ => Err("select edges for the chamfer group".to_string()),
+                    })
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let mut set = json!({"edges":edges, "distance":group.distance, "flip":group.flip, "tangent_chain":group.tangent_chain});
+                if let Some(value) = &group.distance2 {
+                    set["distance2"] = json!(value);
+                }
+                if let Some(value) = &group.angle {
+                    set["angle"] = json!(value);
+                }
+                sets.push(set);
+            }
+            ("solid.chamfer", json!({"edge_sets":sets}))
+        }
         Kind::GroupedFillet { radii, chains } => {
             let mut sets = Vec::new();
             for (index, radius) in radii.iter().enumerate() {
@@ -2595,7 +2663,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             }
             let edges: Vec<Value> = uniq.into_iter().map(pt).collect();
             if *chamfer {
-                let mut p = json!({"edges": edges, "distance": radius});
+                let mut p = json!({"edges": edges, "distance": radius, "tangent_chain":chain});
                 match *ctype {
                     1 => p["distance2"] = json!(distance2),
                     2 => p["angle"] = json!(angle),
@@ -3343,6 +3411,30 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             }
             d
         }
+        FeatureKind::Chamfer { edges, distance, distance2, angle, flip, tangent_chain, groups, body } if !groups.is_empty() => {
+            let sizes = solidcraft_engine::doc::ChamferGroup::group_sizes(groups, edges.len()).ok()?;
+            let mut inputs = Vec::new();
+            let mut at = 0;
+            for count in sizes {
+                let mut input = SelInput::new("Edges", EDGES, true);
+                input.items = edges.get(at..at + count)?.iter().map(|p| edge_sel(s, *p)).collect::<Option<Vec<_>>>()?;
+                inputs.push(input);
+                at += count;
+            }
+            let first = solidcraft_engine::doc::ChamferGroup {
+                count: 0,
+                distance: distance.clone(),
+                distance2: distance2.clone(),
+                angle: angle.clone(),
+                flip: *flip,
+                tangent_chain: *tangent_chain,
+            };
+            let mut d = Dialog::new(Kind::GroupedChamfer { groups: std::iter::once(first).chain(groups.iter().cloned()).collect() }, inputs);
+            if let Some(body) = body {
+                d.extra.insert("body".into(), json!(body));
+            }
+            d
+        }
         FeatureKind::Fillet { edges, radius, style: style @ FilletStyle::Grouped { groups }, body, tangent_chain, .. } => {
             let sizes = style.group_sizes(edges.len()).ok()?;
             let radii = std::iter::once(radius.clone()).chain(groups.iter().map(|g| g.radius.clone())).collect();
@@ -3366,7 +3458,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             let mut d = start(if chamfer { "solid.chamfer" } else { "solid.fillet" })?;
             d.kind = fillet_kind(radius, chamfer);
             if let Kind::Fillet { chain, ctype, distance2, angle, flip, .. } = &mut d.kind {
-                *chain = matches!(&f.kind, FeatureKind::Fillet { tangent_chain: true, .. });
+                *chain = matches!(&f.kind, FeatureKind::Fillet { tangent_chain: true, .. } | FeatureKind::Chamfer { tangent_chain: true, .. });
                 // An unequal chamfer: two distances, or a distance and an angle.
                 if let FeatureKind::Chamfer { distance2: d2, angle: a, flip: f, .. } = &f.kind {
                     if let Some(v) = d2 {

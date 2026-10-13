@@ -124,6 +124,7 @@ impl Document {
         let Some(feature) = self.feature(producer) else { return false };
         match (certificate, &feature.kind) {
             (FaceCertificate::Box { .. }, FeatureKind::Box { operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => true,
+            (FaceCertificate::CylinderCap { .. }, FeatureKind::Cylinder { operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => true,
             (FaceCertificate::ExtrudeCap { sketch, .. }, FeatureKind::Extrude { sketch: current, extent, operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => sketch == current && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.)),
             (FaceCertificate::ExtrudeSide { sketch, curve }, FeatureKind::Extrude { sketch: current, extent, operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {
                 sketch == current && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.))
@@ -146,6 +147,9 @@ impl Document {
             let valid = match (certificate, &feature.kind) {
                 (super::FaceCertificate::Box { axis, high }, FeatureKind::Box { operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {
                     ["x", "y", "z"].get(*axis as usize).is_some_and(|axis| role == format!("{}{axis}", if *high { "+" } else { "-" }))
+                }
+                (super::FaceCertificate::CylinderCap { high }, FeatureKind::Cylinder { operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {
+                    role == super::cylinder_cap_role(*high)
                 }
                 (super::FaceCertificate::ExtrudeCap { sketch, high, outer, holes }, FeatureKind::Extrude { sketch: producer_sketch, extent, operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {
                     sketch == producer_sketch && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.))
@@ -226,7 +230,10 @@ impl Document {
             }
             return Ok(indices);
         }
-        if matches!(target.certificate, Some(super::FaceCertificate::Box { .. } | super::FaceCertificate::ExtrudeCap { .. })) {
+        if matches!(
+            target.certificate,
+            Some(super::FaceCertificate::Box { .. } | super::FaceCertificate::CylinderCap { .. } | super::FaceCertificate::ExtrudeCap { .. })
+        ) {
             let indices: Vec<_> = body
                 .body
                 .face_sources()
@@ -239,6 +246,10 @@ impl Document {
                             Some(super::FaceCertificate::Box { axis, high }),
                             Some(solidcraft_kernel::FaceSource::Box { producer: Some(producer), axis: current_axis, high: current_high, .. }),
                         ) => *producer == target.origin_feature && axis == current_axis && high == current_high,
+                        (
+                            Some(super::FaceCertificate::CylinderCap { high }),
+                            Some(solidcraft_kernel::FaceSource::CylinderCap { producer, high: current_high, .. }),
+                        ) => *producer == target.origin_feature && high == current_high,
                         (
                             Some(super::FaceCertificate::ExtrudeCap { sketch, high, outer, holes }),
                             Some(solidcraft_kernel::FaceSource::CertifiedExtrudeCap {

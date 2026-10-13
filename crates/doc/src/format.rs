@@ -70,13 +70,16 @@
 //!   Older single-radius styles keep their original meaning.
 //! - 25: fillet tangent-chain choices persist per radius group and resolve after source edits.
 //!   Absent flags preserve the existing explicit selections.
+//! - 26: chamfers retain independent edge groups and persistent tangent chains.
+//!   Includes upstream 15: cylinder-cap certificates and sheet-panel attachments.
+//!   Sketch-axis links were already incorporated with upstream 14 in format 23.
 
 use serde_json::Value;
 
 use crate::{DocError, Document, Result};
 
 /// The format this build writes.
-pub const FORMAT: u32 = 25;
+pub const FORMAT: u32 = 26;
 
 pub fn format_string(n: u32) -> String {
     format!("solidcraft/{n}")
@@ -93,7 +96,7 @@ pub fn version_of(s: &str) -> Option<u32> {
 
 /// JSON-level upgrades: entry `i` turns format `i + 1` into `i + 2`.
 type JsonStep = fn(&mut Value) -> Result<()>;
-const JSON_STEPS: [JsonStep; 24] = [
+const JSON_STEPS: [JsonStep; 25] = [
     |_| Ok(()),
     v2_to_v3,
     v3_to_v4,
@@ -119,6 +122,8 @@ const JSON_STEPS: [JsonStep; 24] = [
     // 23 -> 24: existing fillets keep their original radius style.
     |_| Ok(()),
     // 24 -> 25: older fillets retain explicit selection semantics.
+    |_| Ok(()),
+    // 25 -> 26: older chamfers retain one explicit selection group.
     |_| Ok(()),
 ];
 

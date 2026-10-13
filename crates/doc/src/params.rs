@@ -88,13 +88,22 @@ impl FeatureKind {
                     v.extend(mid.iter_mut().map(|(_, r)| ("Mid radius", r, L)));
                 }
             },
-            FeatureKind::Chamfer { distance, distance2, angle, .. } => {
+            FeatureKind::Chamfer { distance, distance2, angle, groups, .. } => {
                 v.push(("Distance", distance, L));
                 if let Some(d) = distance2 {
                     v.push(("Distance 2", d, L));
                 }
                 if let Some(a) = angle {
                     v.push(("Angle", a, A));
+                }
+                for group in groups {
+                    v.push(("Group distance", &mut group.distance, L));
+                    if let Some(d) = &mut group.distance2 {
+                        v.push(("Group distance 2", d, L));
+                    }
+                    if let Some(a) = &mut group.angle {
+                        v.push(("Group angle", a, A));
+                    }
                 }
             }
             FeatureKind::Box { length, width, height, .. } => {

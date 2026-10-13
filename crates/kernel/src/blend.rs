@@ -634,8 +634,10 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
                     done = Some(x);
                     break;
                 }
+                // Reported: the first refusal, unless a later one is a size a smaller radius may
+                // fit (the others may be refused only until that edge is blended).
                 Err(e) => {
-                    if first_err.is_none() {
+                    if first_err.is_none() || (matches!(e, KernelError::TooLarge(_)) && !matches!(first_err, Some(KernelError::TooLarge(_)))) {
                         first_err = Some(e);
                     }
                 }
@@ -909,7 +911,12 @@ pub fn fillet(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
     // Corners the local blends refuse (an earlier round at an edge's end): radius per edge.
     blend(body, edges, radius, Shape::Round, "fillet").or_else(|e| {
         let sel: Vec<(Vec3, f64)> = edges.iter().map(|p| (*p, radius)).collect();
-        crate::blend_corner::fillet_radii(body, &sel).map_err(|_| e)
+        // The local blend's refusal, unless only the corner build found the radius too large.
+        crate::blend_corner::fillet_radii(body, &sel).map_err(|e2| match (&e, e2) {
+            (KernelError::TooLarge(_), _) => e,
+            (_, e2 @ KernelError::TooLarge(_)) => e2,
+            _ => e,
+        })
     })
 }
 
@@ -1094,6 +1101,60 @@ pub enum ChamferSide {
     Angle(f64),
 }
 
+/// One independently sized chamfer selection. Points refer to the unmodified source.
+pub struct ChamferSet {
+    pub edges: Vec<Vec3>,
+    pub distance: f64,
+    pub side: Option<ChamferSide>,
+    pub flip: bool,
+}
+
+/// Apply independent groups while composing every step's history over the source.
+/// All groups are resolved before cutting; overlapping selections and consumed
+/// edges are errors, rather than silently moving a later group onto a new edge.
+pub fn chamfer_sets(body: &Body, groups: &[ChamferSet]) -> Result<Body> {
+    if groups.is_empty() || groups.len() > 64 {
+        return Err(KernelError::Invalid("select 1…64 chamfer groups".into()));
+    }
+    let tol = (body.size() * 1e-6).max(1e-5);
+    let mut seen = std::collections::BTreeSet::new();
+    for group in groups {
+        if group.edges.is_empty() || group.edges.len() > 1000 {
+            return Err(KernelError::Invalid("select 1…1000 chamfer edges".into()));
+        }
+        for point in &group.edges {
+            if !point.is_finite() {
+                return Err(KernelError::Invalid("invalid chamfer selection".into()));
+            }
+            let (index, distance) = body.nearest_edge(*point, tol)?.ok_or_else(|| KernelError::Invalid("missing chamfer edge".into()))?;
+            if distance > 2. * tol {
+                return Err(KernelError::Invalid("no edge at the chamfer selection".into()));
+            }
+            if !seen.insert(index) {
+                return Err(KernelError::Invalid("an edge belongs to more than one chamfer selection".into()));
+            }
+            if seen.len() > 1000 {
+                return Err(KernelError::Invalid("select at most 1000 chamfer edges".into()));
+            }
+        }
+    }
+    let counts = record::counts(&[body]);
+    let mut cur = crate::boolean_record::operand(body, 0, &counts);
+    for group in groups {
+        for point in &group.edges {
+            if cur.nearest_edge(*point, tol)?.is_none_or(|(_, distance)| distance > 2. * tol) {
+                return Err(KernelError::Invalid("an earlier chamfer group consumed a selected edge".into()));
+            }
+        }
+        let step = match group.side {
+            Some(side) => chamfer_sides(&cur, &group.edges, group.distance, side, group.flip)?,
+            None => chamfer(&cur, &group.edges, group.distance)?,
+        };
+        cur = record::after(step, &cur, &counts);
+    }
+    Ok(cur)
+}
+
 /// A chamfer with different setbacks on the two faces of each (straight) edge: `d1` along the
 /// first face (the one facing up most, the other with `flip`), the second side by distance or
 /// angle.
@@ -1259,5 +1320,22 @@ mod tests {
             assert!((actual - removed).abs() < 1e-3 * removed, "{actual} vs {removed}");
             assert!(rounded.validity().is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod chamfer_group_tests {
+    use super::*;
+
+    #[test]
+    fn independent_groups_retain_source_history_and_refuse_consumed_edges() {
+        let body = crate::box_solid(Vec3::ZERO, Vec3::new(20., 30., 40.)).unwrap();
+        let group = |point, distance| ChamferSet { edges: vec![point], distance, side: None, flip: false };
+        let a = group(Vec3::new(0., 0., 20.), 2.);
+        let b = group(Vec3::new(20., 30., 20.), 3.);
+        let result = chamfer_sets(&body, &[a, b]).unwrap();
+        assert!(result.history().is_some());
+        let consumed = chamfer_sets(&body, &[group(Vec3::new(0., 0., 20.), 2.), group(Vec3::new(0.5, 0., 0.), 1.)]);
+        assert!(consumed.is_err());
     }
 }

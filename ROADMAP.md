@@ -337,6 +337,10 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   Upstream Join attachments are integrated with finite compound-face history:
   concave/curved single-owner faces retain their certificates, and nominal caps
   remain editable when an extrusion extends into its Join target.
+  Chamfers now retain independent edge-group parameters and tangent-chain choices
+  in format 26, including edit dialogs and feature-pattern replay. Four analytic
+  group/rim fixtures bring the saved suite to 128 designs. Native chamfer record
+  decoding still requires the controlled probe comparisons.
   More source topologies and the other native feature families remain unfinished.
 - Persistent naming follows the kernel's exact face history (docs/book/src/dev/naming.md):
   references resolve by name first, follow splits and merges, and warn when the entity split,
@@ -464,6 +468,8 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   exact holes and retained islands, including the union of multiple selected profiles, and
   records complementary depth layers as pockets while retaining the stock gauge. Unsupported
   tapered or bend-crossing machining refuses atomically instead of restoring material later.
+  Sketches attach to a sheet's flat faces (base and flanges, either side) by panel, in the
+  flat pattern's coordinates, and follow it through rebuilds and unfold/refold.
 - Rolling-ball fillet accuracy: independent offset-cylinder tee references check surface
   distance, actual trimmed tessellation, supporting-cylinder contacts and tangency at two
   scales. The measured trimmed-part error is below 0.0001 mm; this is an analytic geometry

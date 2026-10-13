@@ -291,3 +291,14 @@ Center-of-mass checks (1e-6 mm) distinguish flipped sides even when volume and
 bounds are identical. Volume checks use 0.01 mm³ for these planar solids.
 First/second setback, angle, width, height and suppression edits pass through
 JSON/container reopening and undo. There are 124 original saved designs.
+
+
+Four further chamfer fixtures cover independent equal-distance groups, mixed
+angle/equal groups with flipped sides, and persistent circular tangent chains
+on one or both caps. The planar fixtures use the triangular-prism volume and
+centroid formulas above, summed over groups. A full circular bevel of setback d
+on a cylinder of radius R removes `π × (R × d² − d³/3)`, from integrating its
+annular sections. Circular measurements allow 0.04% for tessellation; a missing
+half-rim exceeds that allowance. Independent group dimensions, source height
+and width/diameter, suppression, JSON/container reopening and undo are checked.
+There are 128 original saved designs.

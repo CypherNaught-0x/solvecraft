@@ -76,6 +76,7 @@ Generated-in-code assets are original and have no file to list:
 | docs/screenshots/sample-plate.png | SolidCraft contributors | screenshot of SolidCraft itself (`solidcraft --sample`) | MIT OR Apache-2.0 |
 | docs/screenshots/enclosure-demo-0.2.1.gif | SolidCraft contributors | original electronics enclosure screen recording of the actual SolidCraft 0.2.1 English desktop UI, generated with examples/demo/record_ui.sh and its original animated pointer overlay (4× playback) | MIT OR Apache-2.0 |
 | docs/screenshots/enclosure-demo-0.2.1.mp4 | SolidCraft contributors | original electronics enclosure screen recording of the actual SolidCraft 0.2.1 English desktop UI, generated with examples/demo/record_ui.sh and its original animated pointer overlay (4× playback) | MIT OR Apache-2.0 |
+| docs/book/src/og.png | SolidCraft contributors | original 1280 × 640 social preview card (the SolidCraft mark, name and tagline), served by the docs site for link previews | MIT OR Apache-2.0 |
 | docs/book/src/generated/sample-plate.png | SolidCraft contributors | copy of docs/screenshots/sample-plate.png made by `cargo xtask book` (gitignored) | MIT OR Apache-2.0 |
 | docs/book/src/generated/bracket.png | SolidCraft contributors | rendered by `cargo xtask book` (`solidcraft-cli snapshot examples/bracket.json`; gitignored) | MIT OR Apache-2.0 |
 | docs/book/src/generated/enclosure.png | SolidCraft contributors | rendered by `cargo xtask book` (`solidcraft-cli snapshot docs/book/scripts/enclosure.json`; gitignored) | MIT OR Apache-2.0 |
@@ -234,3 +235,7 @@ Vulkan, DirectX 12, Metal and WebGPU retain their requested multisampling.
 | apps/solidcraft-cli/tests/history/chamfer-two-top-flipped.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solidcraft-cli/tests/history/chamfer-angle-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solidcraft-cli/tests/history/chamfer-angle-top-flipped.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-groups-pair.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-groups-mixed.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-chain-circle.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-chain-groups.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |

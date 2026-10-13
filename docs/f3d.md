@@ -2099,3 +2099,46 @@ previews after `fb4c1d7`; those changes are fetched but outside this validation.
 Native chamfer decoding remains unfinished: the prepared local probe still
 requires an unlocked Mac. Its measurements now include centers of mass to
 distinguish equal-volume flipped modes.
+
+
+### Editable chamfer groups and tangent chains
+
+SolidCraft chamfers now retain independent equal-distance, two-distance or
+angle parameters per ordered edge group. `solid.chamfer` accepts `edge_sets`
+with 2–64 groups; each group owns its flip and tangent-chain choice. Format 26
+preserves these choices, while older documents keep one explicit selection.
+Group dimensions are model parameters and survive redefinition, pattern replay,
+JSON/container saves and reopening. The edit dialog exposes every group.
+
+Tangent continuations resolve against the source body on every regeneration.
+Groups cannot claim the same edge, even through different seeds of one chain.
+The kernel composes history across group operations, and refuses a group whose
+selected edge has already been consumed instead of picking a nearby new edge.
+Intersecting groups that require different corner reconstruction can therefore
+still be unsupported; this does not claim general multi-distance corner solving.
+
+Four original saved examples exercise opposite straight edges, mixed chamfer
+modes with a flipped side, and one or both circular caps. Planar volume and
+center-of-mass expectations follow triangular-prism removal; circular removal
+is `π(Rd² − d³/3)`. All expectations are analytic and the fixtures contain only
+original SolidCraft command histories. This supplies the representation needed
+for native multi-group chamfers, but does not decode their native records yet.
+
+
+The same batch integrates upstream through `aa156f4`, including cylinder-cap
+and sheet-panel attachments, model-derived sketch planes, bounded container
+metadata reads and kernel/UI fixes. Cylinder caps participate in the finite
+union source rules: a uniquely supported cap keeps its construction identity,
+while ambiguous coplanar curved contributions revoke it. A regression test
+covers both outcomes.
+
+
+Validation of the integrated batch passed all 128 saved histories and 43 local
+native-import groups, plus 732 engine, 329 kernel, 389 UI, 139 document and 159
+I/O tests. The 81 UI scenarios, WebAssembly, formatting, clippy, attribution,
+licence and dependency-layer checks passed. HardEdgeBasin opened in 1.47 seconds
+against its 20-second limit. The only sandbox failure was the localhost socket
+test; the same binary passed separately with socket access. The mixed chamfer
+model was rendered and visually checked. The native chamfer probe remains
+unexecuted because the local Mac is locked; native chamfer decoding and the
+remaining feature families are still incomplete.

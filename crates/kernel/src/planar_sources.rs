@@ -31,6 +31,7 @@ fn base_plane(source: &FaceSource, actual: &Plane) -> Option<Plane> {
         | FaceSource::CertifiedExtrudeCap { plane: p, .. }
         | FaceSource::Box { producer: Some(_), plane: p, .. }
         | FaceSource::PlanarUnion { plane: p, .. }
+        | FaceSource::CylinderCap { plane: p, .. }
         | FaceSource::ShellPlanar { producer: Some(_), plane: p, .. } => Some(*p),
         FaceSource::Imported { producer: Some(_), payload_sha256: Some(_), .. } => Some(*actual),
         _ => None,
@@ -43,6 +44,7 @@ pub(super) fn certified_plane(source: &FaceSource) -> Option<Plane> {
         | FaceSource::CertifiedExtrudeCap { plane: p, .. }
         | FaceSource::Box { producer: Some(_), plane: p, .. }
         | FaceSource::PlanarUnion { plane: p, .. }
+        | FaceSource::CylinderCap { plane: p, .. }
         | FaceSource::ShellPlanar { producer: Some(_), plane: p, .. } => Some(*p),
         _ => None,
     }
@@ -106,7 +108,7 @@ pub(super) fn descriptor_cost(source: &FaceSource) -> Option<usize> {
             }
             cost = cost.checked_add(count.checked_mul(128)?)?;
         }
-        FaceSource::ExtrudeSide { .. } | FaceSource::Imported { .. } | FaceSource::Box { .. } => {}
+        FaceSource::ExtrudeSide { .. } | FaceSource::Imported { .. } | FaceSource::Box { .. } | FaceSource::CylinderCap { .. } => {}
         _ => return None,
     }
     Some(cost)

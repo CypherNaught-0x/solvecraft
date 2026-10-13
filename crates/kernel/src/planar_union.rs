@@ -14,7 +14,10 @@ const MAX_PIECES: usize = 256;
 pub(super) fn is_leaf(source: &FaceSource) -> bool {
     matches!(
         source,
-        FaceSource::Box { producer: Some(_), .. } | FaceSource::CertifiedExtrudeSide { plane: Some(_), .. } | FaceSource::CertifiedExtrudeCap { .. }
+        FaceSource::Box { producer: Some(_), .. }
+            | FaceSource::CylinderCap { .. }
+            | FaceSource::CertifiedExtrudeSide { plane: Some(_), .. }
+            | FaceSource::CertifiedExtrudeCap { .. }
     )
 }
 
@@ -22,6 +25,7 @@ fn key(source: &FaceSource) -> Option<String> {
     descriptor_cost(source)?;
     match source {
         FaceSource::Box { producer: Some(p), axis, high, .. } => Some(format!("{p}:box:{axis}:{high}")),
+        FaceSource::CylinderCap { producer, high, .. } => Some(format!("{producer}:cylinder:{high}")),
         FaceSource::CertifiedExtrudeSide { producer, sketch, curve, plane: Some(_), .. } => {
             Some(format!("{producer}:side:{sketch}:{}:{curve}", curve.len()))
         }
@@ -385,6 +389,20 @@ mod tests {
                 _ => panic!("box leaf"),
             })
             .collect()
+    }
+
+    #[test]
+    fn cylinder_cap_identity_requires_a_unique_coplanar_support() {
+        let cylinder = crate::cylinder(Vec3::ZERO, Vec3::Z, 10., 40.).unwrap().with_cylinder_certificate(1).unwrap();
+        let other = block(100., 10., 20., 10., 2);
+        let preserved = cylinder.clone().with_union_planar_sources(&cylinder, &other).unwrap();
+        let caps = |body: &Body| body.face_sources().unwrap().iter().flatten().filter(|s| matches!(s, FaceSource::CylinderCap { .. })).count();
+        assert_eq!(caps(&preserved), 2);
+        let competing = crate::cylinder(Vec3::new(5., 0., 0.), Vec3::Z, 10., 40.).unwrap().with_cylinder_certificate(3).unwrap();
+        // Curved coplanar boundaries are outside finite polygon coverage. A
+        // previously mapped cap alone cannot prove the output's construction.
+        let revoked = cylinder.clone().with_union_planar_sources(&cylinder, &competing).unwrap();
+        assert_eq!(caps(&revoked), 0);
     }
 
     #[test]

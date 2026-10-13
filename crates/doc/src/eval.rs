@@ -2914,7 +2914,7 @@ fn replay(
                     _ => moved,
                 };
                 let nb = match &src.kind {
-                    FeatureKind::Chamfer { distance2, angle, flip, .. } => chamfer_with(vals, &mb.body, &moved, r, distance2, angle, *flip)?,
+                    FeatureKind::Chamfer { .. } => chamfer_with(vals, &mb.body, &moved, &src.kind)?,
                     FeatureKind::Fillet { style: style @ crate::FilletStyle::Grouped { .. }, fit, tangent_chain, .. } => {
                         grouped_fillet(vals, &mb.body, &moved, r, style, *fit, *tangent_chain)?
                     }
@@ -3131,6 +3131,38 @@ fn smooth_chain(b: &ModelBody, picks: &[Vec3]) -> Vec<Vec3> {
     out
 }
 
+/// `plane` with the sheet face it names (see `sheet::plane_sheet_face`) replaced by that face's current
+/// plane in the frame of component `comp`, or an error when the face is gone: a lost
+/// attachment is reported, never moved to the nearest face.
+pub(crate) fn sheet_face_plane_in_frame(doc: &Document, st: &ModelState, comp: u64, plane: &PlaneRef) -> Result<PlaneRef> {
+    Ok(match plane {
+        PlaneRef::Face { name: Some(name), anchor: None, .. } if crate::sheet::plane_sheet_face(plane).is_some() => {
+            let lost = || DocError::Invalid(format!("lost face attachment: the sheet face `{name}` no longer exists; reattach the sketch to a face"));
+            let (body, face) = crate::sheet::sheet_face_plane(st, name).ok_or_else(lost)?;
+            if doc.occurrences.is_empty() && doc.body_offsets.is_empty() {
+                return Ok(PlaneRef::Custom { plane: face });
+            }
+            // The body's own coordinates into the component's frame, as `state_in_frame` places its bodies.
+            let source = st.body(&body).ok_or_else(lost)?;
+            let inverse = crate::mat_inverse(&doc.component_transform(comp)).ok_or_else(lost)?;
+            let m = crate::mat_mul(&inverse, &doc.component_transform(doc.model_body_component(source)));
+            let m = doc.model_body_offset(source).map(|offset| crate::mat_mul(&m, offset)).unwrap_or(m);
+            let placed = Plane::new(crate::apply_point(&m, face.origin), crate::apply_vector(&m, face.x), crate::apply_vector(&m, face.y));
+            PlaneRef::Custom { plane: placed.ok_or_else(lost)? }
+        }
+        PlaneRef::Offset { base, distance } => {
+            PlaneRef::Offset { base: Box::new(sheet_face_plane_in_frame(doc, st, comp, base)?), distance: distance.clone() }
+        }
+        PlaneRef::AtAngle { base, axis_origin, axis_dir, angle } => PlaneRef::AtAngle {
+            base: Box::new(sheet_face_plane_in_frame(doc, st, comp, base)?),
+            axis_origin: *axis_origin,
+            axis_dir: *axis_dir,
+            angle: angle.clone(),
+        },
+        other => other.clone(),
+    })
+}
+
 /// The plane of the body face a sketch sits on, found again: among planar faces with the
 /// picked plane's normal, the one nearest `at`. The picked frame moves along its normal onto it.
 fn face_plane(st: &ModelState, picked: &Plane, at: Vec3, name: Option<&str>) -> (Plane, Option<String>) {
@@ -3210,25 +3242,43 @@ fn face_plane(st: &ModelState, picked: &Plane, at: Vec3, name: Option<&str>) -> 
     }
 }
 
-/// A chamfer, equal or by its second distance or angle.
-fn chamfer_with(
-    vals: &BTreeMap<String, Value>,
-    b: &kernel::Body,
-    edges: &[Vec3],
-    d: f64,
-    distance2: &Option<String>,
-    angle: &Option<String>,
-    flip: bool,
-) -> Result<kernel::Body> {
-    let side = match (distance2, angle) {
-        (Some(e), _) => Some(kernel::ChamferSide::Distance(val(vals, e, Kind::Length)?)),
-        (None, Some(e)) => Some(kernel::ChamferSide::Angle(val(vals, e, Kind::Angle)?)),
-        (None, None) => None,
+/// Resolve all groups and tangent chains against the same source body.
+fn chamfer_with(vals: &BTreeMap<String, Value>, body: &kernel::Body, edges: &[Vec3], kind: &FeatureKind) -> Result<kernel::Body> {
+    let FeatureKind::Chamfer { distance, distance2, angle, flip, tangent_chain, groups, .. } = kind else {
+        return Err(DocError::Invalid("missing chamfer parameters".into()));
     };
-    Ok(match side {
-        Some(s) => kernel::chamfer_sides(b, edges, d, s, flip)?,
-        None => kernel::chamfer(b, edges, d)?,
-    })
+    let sizes = crate::ChamferGroup::group_sizes(groups, edges.len())?;
+    let first = crate::ChamferGroup {
+        count: 0,
+        distance: distance.clone(),
+        distance2: distance2.clone(),
+        angle: angle.clone(),
+        flip: *flip,
+        tangent_chain: *tangent_chain,
+    };
+    let mut selected = Vec::new();
+    let mut at = 0;
+    for (count, group) in sizes.into_iter().zip(std::iter::once(&first).chain(groups)) {
+        let seeds = edges.get(at..at + count).ok_or_else(|| DocError::Invalid("missing chamfer group edges".into()))?;
+        let edges = if group.tangent_chain { kernel::tangent_edge_points(body, seeds)? } else { seeds.to_vec() };
+        let side = match (&group.distance2, &group.angle) {
+            (Some(_), Some(_)) => return Err(DocError::Invalid("give chamfer distance2 or angle, not both".into())),
+            (Some(e), None) => Some(kernel::ChamferSide::Distance(val(vals, e, Kind::Length)?)),
+            (None, Some(e)) => Some(kernel::ChamferSide::Angle(val(vals, e, Kind::Angle)?)),
+            (None, None) => None,
+        };
+        selected.push(kernel::ChamferSet { edges, distance: val(vals, &group.distance, Kind::Length)?, side, flip: group.flip });
+        at += count;
+    }
+    // Legacy explicit selections retain their established point-picking tolerance.
+    if groups.is_empty() && !tangent_chain {
+        let first = selected.first().ok_or_else(|| DocError::Invalid("missing chamfer selection".into()))?;
+        return Ok(match first.side {
+            Some(side) => kernel::chamfer_sides(body, &first.edges, first.distance, side, first.flip)?,
+            None => kernel::chamfer(body, &first.edges, first.distance)?,
+        });
+    }
+    Ok(kernel::chamfer_sets(body, &selected)?)
 }
 
 fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &mut ModelState, warning: &mut Option<String>) -> Result<()> {
@@ -3262,6 +3312,10 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             };
             let (plane, face_warning) = match (anchor, plane) {
                 (Some(_), plane) => (doc.resolve_attached_plane(vals, plane, f.component, st, &fst)?, None),
+                // A flat face of a sheet: the panel's exact plane, from its flat region and fold.
+                (None, plane) if crate::sheet::plane_sheet_face(plane).is_some() => {
+                    (doc.resolve_plane_in(vals, &sheet_face_plane_in_frame(doc, st, f.component, plane)?, 0, Some(&fst))?, None)
+                }
                 (None, PlaneRef::Face { plane: picked, at, name, anchor: None }) => face_plane(&fst, picked, *at, name.as_deref()),
                 (None, other) => (doc.resolve_plane_in(vals, other, 0, Some(&fst))?, None),
             };
@@ -3649,12 +3703,12 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             } else {
                 resolve_edges(&mb.body, edges, &f.edge_refs, warning)?
             };
-            if matches!(
+            let strict_selection = matches!(
                 &f.kind,
                 FeatureKind::Fillet { style: crate::FilletStyle::Grouped { .. }, .. } | FeatureKind::Fillet { tangent_chain: true, .. }
-            ) && edges.len() != selected_count
-            {
-                return Err(DocError::Invalid("a selected edge disappeared from the fillet selection".into()));
+            ) || matches!(&f.kind, FeatureKind::Chamfer { groups, tangent_chain, .. } if !groups.is_empty() || *tangent_chain);
+            if strict_selection && edges.len() != selected_count {
+                return Err(DocError::Invalid("a selected edge disappeared from the blend selection".into()));
             }
             st.blend_edges.insert(f.id, edges.clone());
             let edges = match &f.kind {
@@ -3700,7 +3754,7 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
                     }
                     (b, input)
                 }
-                FeatureKind::Chamfer { distance2, angle, flip, .. } => (chamfer_with(vals, &mb.body, &edges, r, distance2, angle, *flip)?, input),
+                FeatureKind::Chamfer { .. } => (chamfer_with(vals, &mb.body, &edges, &f.kind)?, input),
                 _ => return Err(DocError::Invalid("blend".into())),
             };
             // Keeping the input's planar certificates may join faces; their history stays over
@@ -3721,6 +3775,7 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
         }
         FeatureKind::Cylinder { base, axis, radius, height, operation } => {
             let b = kernel::cylinder(point(vals, base)?, *axis, val(vals, radius, Kind::Length)?, val(vals, height, Kind::Length)?)?;
+            let b = if matches!(operation, Operation::NewBody | Operation::Join) { b.with_cylinder_certificate(f.id)? } else { b };
             apply_traced(st, f, vec![crate::lineage::cylinder_tool(b)], *operation, &[])
         }
         FeatureKind::Sphere { center, radius, operation } => {

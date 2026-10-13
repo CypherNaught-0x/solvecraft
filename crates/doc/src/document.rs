@@ -434,6 +434,12 @@ pub enum FeatureKind {
         /// Swap which face is the first (by default the one facing up most).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         flip: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        tangent_chain: bool,
+        /// Independently sized trailing edge groups; the remaining leading edges
+        /// use the feature's primary distance, side and tangent-chain choice.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        groups: Vec<ChamferGroup>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         body: Option<String>,
     },
@@ -1062,6 +1068,38 @@ pub struct FilletRadiusGroup {
     pub tangent_chain: bool,
 }
 
+/// An additional ordered chamfer selection with independent editable parameters.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChamferGroup {
+    pub count: usize,
+    pub distance: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance2: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flip: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tangent_chain: bool,
+}
+
+impl ChamferGroup {
+    pub fn group_sizes(groups: &[Self], edge_count: usize) -> Result<Vec<usize>> {
+        if groups.len() > 63 || edge_count == 0 || edge_count > 1000 {
+            return Err(DocError::Invalid("invalid chamfer groups".into()));
+        }
+        let mut remaining = edge_count;
+        for group in groups {
+            if group.count == 0 || group.count >= remaining {
+                return Err(DocError::Invalid("chamfer groups do not partition the selected edges".into()));
+            }
+            remaining -= group.count;
+        }
+        Ok(std::iter::once(remaining).chain(groups.iter().map(|g| g.count)).collect())
+    }
+}
+
 /// A face picked by a point on it, on a named body.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FaceAt {
@@ -1588,10 +1626,15 @@ impl FeatureKind {
                     v.extend(mid.iter().map(|(_, r)| r.as_str()));
                 }
             }
-            FeatureKind::Chamfer { distance, distance2, angle, .. } => {
+            FeatureKind::Chamfer { distance, distance2, angle, groups, .. } => {
                 v.push(distance);
                 v.extend(distance2.iter().map(String::as_str));
                 v.extend(angle.iter().map(String::as_str));
+                for group in groups {
+                    v.push(&group.distance);
+                    v.extend(group.distance2.iter().map(String::as_str));
+                    v.extend(group.angle.iter().map(String::as_str));
+                }
             }
             FeatureKind::Box { length, width, height, corner, .. } => {
                 v.extend([length.as_str(), width, height]);

@@ -32,7 +32,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("fillet")
         .key("F")
         .params("edges: [[x,y,z] point on edge | {body, index}]; radius: expr; body?; tangent_chain?: bool (constant radius only: resolve smooth continuations after every edit; default false); type?: constant|chord (radius is the width across)|variable (radius at the end nearest start, radius2 at the other); radius2?; start?: [x,y,z]; mid?: [[position 0…1 from start, radius expr], …] (variable radii between the ends); smooth?: bool (smooth instead of straight between the radii); edge_sets?: [{edges, radius, tangent_chain?}, …] (2…64 constant-radius groups, instead of edges/radius/type; each group stays independently editable); fit?: exact|reduce (exact, the default: a radius too large for the geometry around the edges is refused; reduce: it is reduced to the largest that fits all of them, returned as `radius_applied` and noted in the feature's warning)"),
-    CommandSpec::new("solid.chamfer", "Chamfer", chamfer).at("SOLID", "MODIFY").icon("chamfer").params("edges: [[x,y,z] | {body, index}]; distance: expr; distance2?: expr (along the second face) | angle?: expr (from the first face); flip?: bool (which face is first: by default the one facing up most); body?"),
+    CommandSpec::new("solid.chamfer", "Chamfer", chamfer).at("SOLID", "MODIFY").icon("chamfer").params("edges: [[x,y,z] | {body, index}]; distance: expr; distance2?: expr (along the second face) | angle?: expr (from the first face); flip?: bool (which face is first: by default the one facing up most); tangent_chain?: bool (resolve smooth continuations after edits); edge_sets?: [{edges, distance, distance2?, angle?, flip?, tangent_chain?}, …] (2…64 independently editable groups); body?"),
     CommandSpec::new("solid.combine", "Combine", combine).at("SOLID", "MODIFY").icon("combine").params("target: body; tools: [body]; operation?: join|cut|intersect; keep_tools?: bool; new_component?: bool (the result goes into a new component; component_name?)"),
     CommandSpec::new("solid.pattern.rectangular", "Rectangular Pattern", pattern_rect)
         .at("SOLID", "CREATE")
@@ -877,23 +877,67 @@ fn fillet(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-fn chamfer(s: &mut Session, p: &Value) -> Result<Value> {
+fn chamfer_group(s: &Session, p: &Value, count: usize) -> Result<solidcraft_doc::ChamferGroup> {
     let cmd = "solid.chamfer";
-    let edges = edge_points(s, p, cmd)?;
     let distance = req_expr(cmd, p, "distance")?;
     check_expr(s, &distance, Kind::Length, cmd, "distance")?;
     let (distance2, angle) = (expr(p, "distance2"), expr(p, "angle"));
-    if let Some(d) = &distance2 {
-        check_expr(s, d, Kind::Length, cmd, "distance2")?;
-    }
-    if let Some(a) = &angle {
-        check_expr(s, a, Kind::Angle, cmd, "angle")?;
+    for (key, value, kind) in [("distance2", &distance2, Kind::Length), ("angle", &angle, Kind::Angle)] {
+        if p.get(key).is_some() && value.is_none() {
+            return Err(bad(cmd, format!("{key} must be an expression")));
+        }
+        if let Some(value) = value {
+            check_expr(s, value, kind, cmd, key)?;
+        }
     }
     if distance2.is_some() && angle.is_some() {
         return Err(bad(cmd, "give `distance2` or `angle`, not both"));
     }
-    let flip = bool_(p, "flip").unwrap_or(false);
-    add_feature(s, p, FeatureKind::Chamfer { edges, distance, distance2, angle, flip, body: str_(p, "body").map(str::to_string) })
+    let flag = |key: &str| match p.get(key) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(bad(cmd, format!("{key} must be a boolean"))),
+    };
+    Ok(solidcraft_doc::ChamferGroup { count, distance, distance2, angle, flip: flag("flip")?, tangent_chain: flag("tangent_chain")? })
+}
+
+fn chamfer(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "solid.chamfer";
+    let mut edges = Vec::new();
+    let mut groups = Vec::new();
+    if let Some(sets) = p.get("edge_sets") {
+        if ["edges", "distance", "distance2", "angle", "flip", "tangent_chain"].iter().any(|key| p.get(key).is_some()) {
+            return Err(bad(cmd, "edge_sets cannot also specify shared selections or chamfer parameters"));
+        }
+        let sets = sets.as_array().filter(|sets| (2..=64).contains(&sets.len())).ok_or_else(|| bad(cmd, "edge_sets requires 2…64 chamfer groups"))?;
+        for set in sets {
+            let selected = edge_points(s, set, cmd)?;
+            if selected.is_empty() || edges.len() + selected.len() > 1000 {
+                return Err(bad(cmd, "select 1…1000 chamfer edges across nonempty groups"));
+            }
+            groups.push(chamfer_group(s, set, selected.len())?);
+            edges.extend(selected);
+        }
+    } else {
+        edges = edge_points(s, p, cmd)?;
+        groups.push(chamfer_group(s, p, edges.len())?);
+    }
+    let mut groups = groups.into_iter();
+    let first = groups.next().ok_or_else(|| bad(cmd, "missing first chamfer group"))?;
+    add_feature(
+        s,
+        p,
+        FeatureKind::Chamfer {
+            edges,
+            distance: first.distance,
+            distance2: first.distance2,
+            angle: first.angle,
+            flip: first.flip,
+            tangent_chain: first.tangent_chain,
+            groups: groups.collect(),
+            body: str_(p, "body").map(str::to_string),
+        },
+    )
 }
 
 fn combine(s: &mut Session, p: &Value) -> Result<Value> {

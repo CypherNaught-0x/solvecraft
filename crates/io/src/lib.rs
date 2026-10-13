@@ -11,8 +11,8 @@ mod design_metadata;
 mod dxf;
 pub mod f3d;
 pub use design::{
-    DesignCompression, DesignPreview, is_design_container, read_design_preview, write_design_container, write_design_container_with_compression,
-    write_design_container_with_preview,
+    DesignCompression, DesignContainerReader, DesignPreview, is_design_container, read_design_preview, write_design_container,
+    write_design_container_with_compression, write_design_container_with_preview,
 };
 mod legacy_dir;
 pub mod safe_write;
