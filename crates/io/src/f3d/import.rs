@@ -99,6 +99,7 @@ impl Design {
         for f in history {
             let mut new_body = None;
             let mut new_plane = None;
+            let mut new_point = None;
             let mut new_edge_names = Vec::new();
             let mut import_face = |object| -> Result<solidcraft_doc::FaceAnchor> {
                 let face = super::loft_faces::face(&records, &classes, object, f.id)?;
@@ -144,7 +145,8 @@ impl Design {
                 }
                 face.anchor(&doc, &projection_model.state(), id, &contributions)
             };
-            let import_edges = |container,
+            let import_edges = |objects: &[u64],
+                                intersection: Option<Vec3>,
                                 native_flip: Option<bool>,
                                 body: &mut Option<String>,
                                 edges: &mut Vec<Vec3>,
@@ -161,14 +163,17 @@ impl Design {
                     return Err(invalid("cannot regenerate blend dependencies"));
                 }
                 let state = projection_model.state();
-                let objects = super::loft_faces::objects(&records, &classes, container, f.id)?;
                 let count = objects.len();
                 if !(1..=64).contains(&count) || edges.len() + count > 1000 {
                     return Err(invalid("invalid blend edge count"));
                 }
                 let mut resolved_flip = None;
                 for object in objects {
-                    let edge = super::fillets::edge(&records, &classes, object, f.id)?;
+                    let edge = if intersection.is_some() {
+                        super::fillets::edge_with_mode(&records, &classes, *object, f.id, true)?
+                    } else {
+                        super::fillets::edge(&records, &classes, *object, f.id)?
+                    };
                     if owners.get(&edge.operation) != Some(&edge.feature) {
                         return Err(invalid("blend edge operation belongs to another producer"));
                     }
@@ -260,12 +265,68 @@ impl Design {
                     if start.dist(*end) < 1e-8 {
                         return Err(invalid("degenerate regenerated blend edge"));
                     }
+                    if let Some(point) = intersection {
+                        super::construction_points::check_line(edge, point)?;
+                    }
                     edges.push((*start + *end) * 0.5);
                     new_edge_names.push(selected.clone());
                 }
                 Ok((count, resolved_flip.unwrap_or(false)))
             };
             let kind = match f.kind {
+                HistoryKind::TwoEdgePoint { edges, position, .. } => {
+                    use solidcraft_doc::construct::{GeoRef, PointDef};
+                    let mut sources = Vec::new();
+                    let mut body = None;
+                    let mut picks = Vec::new();
+                    let mut names = Vec::new();
+                    for object in edges {
+                        let source = if classes.get(&object).is_some_and(|c| c.id == "5A1BF548-241F-46FD-9FB5-E4B05126EB9D") {
+                            let (geometry, tag) = super::construction_points::sketch_edge(&records, &classes, object, f.id)?;
+                            let (sketch, _) = sketches.get(&geometry).copied().ok_or_else(|| invalid("construction point precedes its sketch"))?;
+                            let matching: Vec<_> =
+                                lines.values().filter(|l| l.sketch == geometry && l.profile_id.is_some_and(|(id, _)| id == tag)).collect();
+                            let [line] = matching.as_slice() else {
+                                return Err(invalid("missing or ambiguous construction-point sketch line"));
+                            };
+                            let curve = format!("c{}", line.id);
+                            projection_model.evaluate(&doc);
+                            if projection_model.results.iter().any(|r| r.error.is_some()) {
+                                return Err(invalid("cannot regenerate construction-point sources"));
+                            }
+                            let state = projection_model.state();
+                            let solved = state.sketch(sketch).ok_or_else(|| invalid("missing regenerated construction-point sketch"))?;
+                            let index = solved.sketch.curve_index(&curve).ok_or_else(|| invalid("missing regenerated construction-point line"))?;
+                            let points: Vec<_> = solved.sketch.polyline(index).into_iter().map(|p| solved.plane.to_world(p)).collect();
+                            super::construction_points::check_line(&points, position)?;
+                            GeoRef::SketchCurve { sketch, curve }
+                        } else {
+                            import_edges(
+                                &[object],
+                                Some(position),
+                                None,
+                                &mut body,
+                                &mut picks,
+                                &mut operation_owners,
+                                &mut projection_model,
+                                &mut names,
+                            )?;
+                            GeoRef::Edge {
+                                at: *picks.last().ok_or_else(|| invalid("missing construction-point edge"))?,
+                                name: Some(names.last().ok_or_else(|| invalid("missing construction-point edge name"))?.clone()),
+                            }
+                        };
+                        if sources.contains(&source) {
+                            return Err(invalid("duplicate construction-point source"));
+                        }
+                        sources.push(source);
+                    }
+                    let [a, b] = sources.as_slice() else {
+                        return Err(invalid("missing construction-point sources"));
+                    };
+                    new_point = Some(position);
+                    FeatureKind::ConstructionPoint { def: PointDef::TwoEdges { a: a.clone(), b: b.clone() } }
+                }
                 HistoryKind::Chamfer { sets } => {
                     let mut body = None;
                     let mut edges = Vec::new();
@@ -289,7 +350,8 @@ impl Design {
                         }
                         let asymmetric = distance2.is_some() || angle.is_some();
                         let (count, flip) = import_edges(
-                            set.container,
+                            &super::loft_faces::objects(&records, &classes, set.container, f.id)?,
+                            None,
                             asymmetric.then_some(set.flip),
                             &mut body,
                             &mut edges,
@@ -335,7 +397,8 @@ impl Design {
                             return Err(invalid("fillet groups reuse a radius binding"));
                         }
                         let (count, _) = import_edges(
-                            set.container,
+                            &super::loft_faces::objects(&records, &classes, set.container, f.id)?,
+                            None,
                             None,
                             &mut body,
                             &mut edges,
@@ -1102,6 +1165,17 @@ impl Design {
                 feature.body_names = body;
             }
             doc.params.retain(|p| !transferred.contains(&p.name));
+            if let Some(expected) = new_point {
+                projection_model.evaluate(&doc);
+                if projection_model.results.iter().any(|r| r.error.is_some()) {
+                    return Err(invalid("cannot regenerate imported construction point"));
+                }
+                let state = projection_model.state();
+                let actual = state.construct.iter().find(|c| c.feature == id).map(|c| &c.geom);
+                if !matches!(actual, Some(solidcraft_doc::construct::ConstructGeom::Point(p)) if p.dist(expected) <= 1e-6) {
+                    return Err(invalid("construction point changed position during import"));
+                }
+            }
         }
         // Preserve expressions and reject a translation that changes their value.
         // A cached native value is a check, never a substitute for an expression.

@@ -20,6 +20,11 @@ pub struct HistoryFeature {
 
 #[derive(Debug, PartialEq)]
 pub enum HistoryKind {
+    TwoEdgePoint {
+        definition: u64,
+        edges: [u64; 2],
+        position: solidcraft_geom::Vec3,
+    },
     Chamfer {
         sets: Vec<ChamferSet>,
     },
@@ -214,6 +219,7 @@ impl Design {
                             }
                             (HistoryKind::OffsetPlane { geometry, definition, extra_offset }, String::new())
                         }
+                        (super::construction_points::CLASS, 1) => super::construction_points::inputs(&mut r, &records, &classes, id)?,
                         (super::chamfers::CLASS, version @ (2 | 3)) => {
                             (HistoryKind::Chamfer { sets: super::chamfers::inputs(&mut r, &records, &classes, id, version)? }, String::new())
                         }
@@ -274,12 +280,24 @@ impl Design {
                     {
                         return Err(invalid("inconsistent chamfer suppression"));
                     }
+                    if let HistoryKind::TwoEdgePoint { definition, edges: [a, b], .. } = &kind
+                        && dependencies != [*definition, *a, *b]
+                    {
+                        return Err(invalid("construction-point dependencies disagree with its sources"));
+                    }
                     let name = if !custom.is_empty() {
                         custom
                     } else if !feature_name.is_empty() {
                         feature_name
                     } else {
-                        format!("{}{sequence}", if base == "WorkPlane" { "Plane" } else { &base })
+                        format!(
+                            "{}{sequence}",
+                            match base.as_str() {
+                                "WorkPlane" => "Plane",
+                                "WorkPoint" => "Point",
+                                _ => &base,
+                            }
+                        )
                     };
                     Ok(HistoryFeature { id, name, suppressed, dependencies, kind })
                 })();

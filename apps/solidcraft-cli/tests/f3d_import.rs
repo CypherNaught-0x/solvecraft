@@ -3,6 +3,58 @@ use serde_json::{Value, json};
 use solidcraft_engine::Session;
 
 #[test]
+#[ignore = "requires local native two-edge construction-point controls"]
+fn native_two_edge_points_preserve_sources_names_and_edits() {
+    use solidcraft_engine::doc::{
+        Document, FeatureKind,
+        construct::{ConstructGeom, GeoRef, PointDef},
+    };
+    let dir = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
+    for mode in ["body", "body-reversed", "sketch", "sketch-reversed"] {
+        let check = |s: &mut Session, height: f64| {
+            let m = volume(s, 0.6 * height, mode);
+            assert!((m["total"]["volume_mm3"].as_f64().unwrap() - 600. * height).abs() < 0.01);
+            let state = s.model.state();
+            let [point] = state.construct.as_slice() else {
+                panic!("missing point {mode}");
+            };
+            let ConstructGeom::Point(p) = point.geom else {
+                panic!("wrong construction type");
+            };
+            assert!(p.dist(solidcraft_engine::geom::Vec3::new(0., 0., if mode.starts_with("body") { height } else { 0. })) < 1e-6, "{mode}: {p:?}");
+            assert!(s.model.results.iter().all(|r| r.warning.is_none()));
+        };
+        for suffix in ["baseline", "height50", "renamed"] {
+            let mut s = Session::default();
+            s.execute("doc.open", &json!({"path":dir.join(format!("construction-two-edges-{mode}-{suffix}.f3d"))}))
+                .unwrap_or_else(|e| panic!("{mode}/{suffix}: {e}"));
+            assert_eq!(s.doc.features.len(), 3);
+            assert_eq!(s.doc.features[2].name, if suffix == "renamed" { "Corner datum" } else { "Point1" });
+            let FeatureKind::ConstructionPoint { def: PointDef::TwoEdges { a, b } } = &s.doc.features[2].kind else {
+                panic!("point history missing");
+            };
+            for source in [a, b] {
+                if mode.starts_with("body") {
+                    assert!(matches!(source, GeoRef::Edge { name: Some(_), .. }));
+                } else {
+                    assert!(matches!(source, GeoRef::SketchCurve { .. }));
+                }
+            }
+            check(&mut s, if suffix == "height50" { 50. } else { 40. });
+            if suffix == "baseline" {
+                let original = s.doc.to_json();
+                s.execute("parameters.change", &json!({"name":"d1","expression":"65 mm"})).unwrap();
+                check(&mut s, 65.);
+                check(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), 65.);
+                s.execute("edit.undo", &json!({})).unwrap();
+                assert_eq!(s.doc.to_json(), original);
+                check(&mut s, 40.);
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires local native chamfer controls"]
 fn chamfers_preserve_equal_distance_groups_and_source_edits() {
     use solidcraft_engine::doc::{Document, FeatureKind};

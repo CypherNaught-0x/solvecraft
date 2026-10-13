@@ -74,13 +74,15 @@
 //!   Includes upstream 15: cylinder-cap certificates and sheet-panel attachments.
 //!   Sketch-axis links were already incorporated with upstream 14 in format 23.
 //! - 27: includes upstream 16 corner-relief shapes, text fonts, Move copies and saved visibility.
+//! - 28: includes upstream physical materials and exact-history planar face anchors.
+//!   Existing construction certificates and material defaults remain unchanged.
 
 use serde_json::Value;
 
 use crate::{DocError, Document, Result};
 
 /// The format this build writes.
-pub const FORMAT: u32 = 27;
+pub const FORMAT: u32 = 28;
 
 pub fn format_string(n: u32) -> String {
     format!("solidcraft/{n}")
@@ -97,7 +99,7 @@ pub fn version_of(s: &str) -> Option<u32> {
 
 /// JSON-level upgrades: entry `i` turns format `i + 1` into `i + 2`.
 type JsonStep = fn(&mut Value) -> Result<()>;
-const JSON_STEPS: [JsonStep; 26] = [
+const JSON_STEPS: [JsonStep; 27] = [
     |_| Ok(()),
     v2_to_v3,
     v3_to_v4,
@@ -127,6 +129,8 @@ const JSON_STEPS: [JsonStep; 26] = [
     // 25 -> 26: older chamfers retain one explicit selection group.
     |_| Ok(()),
     // 26 -> 27: new optional fields preserve their historical defaults.
+    |_| Ok(()),
+    // 27 -> 28: new material and lineage fields are optional.
     |_| Ok(()),
 ];
 

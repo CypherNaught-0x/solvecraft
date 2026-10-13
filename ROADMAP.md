@@ -61,6 +61,9 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
 
 ## Dimensioning and error reporting
 
+- Sketch Create groups drawing variants under Line, Rectangle, Circle, Arc, Slot,
+  Polygon and Spline. Each open part remembers its last interactive choice per family
+  across sketch sessions and document-tab switches; closing the part resets these UI choices.
 - Inscribed, circumscribed and edge polygon tools preview their actual outline before
   placement, including orientation and the selected side count.
 - Construction (X) preserves the active sketch drawing tool, picked anchors and inline
@@ -360,6 +363,11 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   import on orthogonal planar extrusion edges, resolving native face orientation
   from endpoint cycles; 288 rotated/reordered controls validate the face mapping.
   Nonorthogonal edges and mixed-orientation groups remain unsupported.
+  Two-edge construction points now reconstruct from explicit sketch-line or
+  extrusion-edge identities, retaining names and following source edits. Twelve
+  native controls cover source order, naming and extrusion height. Two original
+  point/solid fixtures bring the saved suite to 130 designs, with analytic volume
+  and point-position checks through edits, reopen and undo.
   More source topologies and the other native feature families remain unfinished.
 - Persistent naming follows the kernel's exact face history (docs/book/src/dev/naming.md):
   references resolve by name first, follow splits and merges, and warn when the entity split,
@@ -489,6 +497,10 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   tapered or bend-crossing machining refuses atomically instead of restoring material later.
   Sketches attach to a sheet's flat faces (base and flanges, either side) by panel, in the
   flat pattern's coordinates, and follow it through rebuilds and unfold/refold.
+  A flange on another flange's far edge (a return) follows that flange's closed end and keeps
+  clear of the flange beside it, and the returns of one feature are mitred toward each other
+  with the rule's gap where their flanges meet at a corner; returns of separate features, and
+  flanges on returns, are not closed toward each other.
 - Rolling-ball fillet accuracy: independent offset-cylinder tee references check surface
   distance, actual trimmed tessellation, supporting-cylinder contacts and tangency at two
   scales. The measured trimmed-part error is below 0.0001 mm; this is an analytic geometry
@@ -533,6 +545,10 @@ and reference-object placement remain separate work, as do loft rails and center
   evaluation or meshing; explicit `preview: true` remains a separate warm-mesh option.
   Keys, resource budgets and document/revision guards reject incompatible, hostile or
   stale results. A second modelling kernel still requires its own tested adapter.
+- Warm saves with explicit `cache: true` can also carry a bounded PNG thumbnail from already cached meshes.
+  Home reads it without rebuilding the design when its local picture is missing;
+  mismatched or malformed thumbnails fall back to normal generation. The image is
+  kernel-independent and saving never forces cold meshing to produce it.
 
 - Cold rebuild profiling separates parsing, geometry, placement, display meshing and
   thumbnails. Straight-line closest-point projection and exact curved-surface evaluation

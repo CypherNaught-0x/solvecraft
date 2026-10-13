@@ -18,6 +18,7 @@ mod chamfers;
 mod circles;
 mod combines;
 mod constraints;
+mod construction_points;
 mod entity;
 mod fillets;
 #[cfg(test)]

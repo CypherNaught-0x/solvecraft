@@ -89,13 +89,20 @@ pub(super) struct Edge {
 }
 
 pub(super) fn edge(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<Edge> {
+    edge_with_mode(records, classes, id, owner, false)
+}
+
+pub(super) fn edge_with_mode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64, intersection: bool) -> Result<Edge> {
     let version = super::loft_faces::selector_version(classes, id)?;
     let mut r = payload(records.primary(id)?, id)?;
-    zeros(&mut r, if version == 3 { 8 } else { 7 })?;
+    zeros(&mut r, if version == 3 { 7 } else { 6 })?;
+    if r.take(1)? != [u8::from(intersection)] {
+        return Err(invalid("unsupported edge intersection-selection flag"));
+    }
     let identity = r.reference()?;
     require_class(classes, identity, "7ACC2A03-0261-4879-A14A-A93D661A5BDC", 3)?;
     let mut recipe = payload(records.primary(identity)?, identity)?;
-    let (operation, labels, endpoint_cycles) = edge_recipe(&mut recipe)?;
+    let (operation, labels, endpoint_cycles) = edge_recipe(&mut recipe, intersection)?;
     if r.u32()? != 1 {
         return Err(invalid("unsupported fillet edge source count"));
     }
@@ -120,7 +127,7 @@ pub(super) fn edge(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u
 // Two incident faces and two endpoint faces. The ordered incidence branches
 // validate the selected edge; face labels are resolved through the producer table.
 type EdgeRecipe = (u64, Vec<u32>, [[u32; 3]; 2]);
-fn edge_recipe(r: &mut Reader<'_>) -> Result<EdgeRecipe> {
+fn edge_recipe(r: &mut Reader<'_>, intersection: bool) -> Result<EdgeRecipe> {
     zeros(r, 6)?;
     for n in [1, 3, 4] {
         if r.u32()? != n {
@@ -175,7 +182,7 @@ fn edge_recipe(r: &mut Reader<'_>) -> Result<EdgeRecipe> {
         }
         zeros(r, 8)?;
     }
-    if r.u32()? != u32::MAX {
+    if r.u32()? != if intersection { 0 } else { u32::MAX } {
         return Err(invalid("unsupported fillet edge tracking"));
     }
     finish(r)?;
@@ -289,7 +296,7 @@ mod tests {
 
     #[test]
     fn edge_incidence_accepts_explicit_nonordinal_labels_and_rejects_wrong_ownership() {
-        let parse = |b: &[u8]| edge_recipe(&mut Reader { bytes: b, at: 0 });
+        let parse = |b: &[u8]| edge_recipe(&mut Reader { bytes: b, at: 0 }, false);
         let b = recipe();
         assert_eq!(parse(&b).unwrap(), (8001, vec![19, 42, 1, 2], [[1, 0, 2], [1, 3, 0]]));
         for keep in 0..b.len() {

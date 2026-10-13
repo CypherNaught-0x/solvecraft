@@ -72,7 +72,7 @@ mod thread_tests;
 mod topo;
 mod tspline;
 
-pub use blend::{ChamferSet, ChamferSide, chamfer, chamfer_sets, chamfer_sides, fillet, fillet_max};
+pub use blend::{ChamferSet, ChamferSide, chamfer, chamfer_sets, chamfer_sides, fillet, fillet_each, fillet_max, fillet_max_each};
 pub use blend_corner::fillet_radii;
 pub use blend_variable::{fillet_chord, fillet_variable, fillet_variable_points};
 pub use body::{Body, CapSignature, DISPLAY_ANGLE, EdgeInfo, FaceInfo, FacePaint, FaceSource, Paint};

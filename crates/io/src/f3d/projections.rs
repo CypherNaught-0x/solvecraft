@@ -247,7 +247,7 @@ pub(super) fn tracking_identity(
     Ok(tracked_identity)
 }
 
-fn source_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64) -> Result<(u64, u64)> {
+pub(super) fn source_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64) -> Result<(u64, u64)> {
     require_class(classes, id, "E2CEFD18-D755-4E09-8E7F-953A2F6D43F8", 0)?;
     let mut r = payload(records.primary(id)?, id)?;
     empty(&mut r)?;

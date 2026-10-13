@@ -239,3 +239,6 @@ Vulkan, DirectX 12, Metal and WebGPU retain their requested multisampling.
 | apps/solidcraft-cli/tests/history/chamfer-groups-mixed.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solidcraft-cli/tests/history/chamfer-chain-circle.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solidcraft-cli/tests/history/chamfer-chain-groups.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+
+| apps/solidcraft-cli/tests/history/construction-point-body.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/construction-point-sketch.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |

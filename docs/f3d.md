@@ -2231,3 +2231,40 @@ The HardEdgeBasin opening guard passes in 0.98 seconds. Formatting, clippy,
 assets, licenses, layers and WASM pass. The localhost socket test requires
 socket access outside the sandbox and passes there. All three local native
 chamfer groups and both native fillet groups pass after the orientation change.
+
+
+### Two-edge construction points
+
+Native two-edge points now retain explicit sketch-line or independent extrusion-edge
+references. The decoder checks source ownership, feature dependencies, geometry
+ownership and the agreement of the two cached point records. Reconstruction checks
+that both regenerated straight lines pass through that point and that the resulting
+editable construction feature reproduces it. A cached coordinate never replaces a
+source reference; skew, curved, parallel, missing or ambiguous sources reject.
+
+Twelve local controls cover body/sketch edges, reversed input order, renamed points
+and changed extrusion height. Source edits, JSON reopening and undo pass. Permanent
+authored schema tests cover truncation, wrong method/owner, duplicate sources and
+stale coordinates. Two original saved designs add analytic volume and construction
+point checks through width/height edits, reopening and undo, bringing the saved
+history corpus to 130. General construction methods and modified body-edge sources
+remain unfinished.
+
+Upstream through `0f0bb098` is integrated, retaining physical materials, thumbnails,
+named views, exact-history planar attachments, sketch tool groups, flange changes
+and local fillet-radius reduction. Format 28 includes the upstream optional material
+and lineage fields while preserving this branch's existing construction certificates.
+
+Validation after integration: all 47 local native-import groups and all 130 saved
+histories pass. HardEdgeBasin opens in 1.17 seconds under the regression guard.
+The quality gate passes formatting, clippy, assets, licenses, layers, WASM,
+354 kernel, 172 I/O, 158 document, 181 sketch, 419 UI and 88 UI scenario tests.
+The engine suite passes 804 tests and exposes one upstream test hard-coded to
+format 16; it now checks the current format and its focused regression passes.
+The final point parser/native tests and I/O/engine clippy checks also pass.
+The localhost socket test passes
+separately with socket access.
+
+The supplied adapter's older point-definition and inherited geometry layouts
+remain unsupported. Public-API inspection confirms their sketch-line sources;
+a local resave is retained for the next versioned-schema comparison.

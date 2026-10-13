@@ -1,5 +1,8 @@
 //! Documents and files: new, open (designs and STEP), insert STEP, save, export.
 
+#[path = "file_thumbnail.rs"]
+mod thumbnail;
+
 use serde_json::{Value, json};
 use solidcraft_doc::Document;
 use solidcraft_io::Format;
@@ -230,6 +233,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
             let history = match d.history() {
                 Ok(features) => json!({"records":features.iter().map(|f| {
                     let kind = match &f.kind {
+                        solidcraft_io::f3d::HistoryKind::TwoEdgePoint { definition, edges, position } => json!({"type":"construction_point_two_edges","definition":definition,"edges":edges,"cached_position_mm":position}),
                         solidcraft_io::f3d::HistoryKind::Chamfer { sets } => json!({"type":"chamfer","sets":sets.iter().map(|s| json!({"container":s.container,"distance_binding":s.distance,"distance2_binding":s.distance2,"angle_binding":s.angle,"flip":s.flip,"tangent_chain":s.tangent_chain})).collect::<Vec<_>>()}),
                         solidcraft_io::f3d::HistoryKind::Fillet { sets } => json!({"type":"fillet","sets":sets.iter().map(|s| json!({"container":s.container,"radius_binding":s.radius,"weight_binding":s.weight,"tangent_chain":s.tangent_chain})).collect::<Vec<_>>()}),
                         solidcraft_io::f3d::HistoryKind::Sketch { geometry, placement } => json!({"type":"sketch","geometry":geometry,"transform":placement.matrix,"transform_length_unit":"cm","placement_owner":placement.owner,"entities":placement.entities}),
@@ -338,7 +342,8 @@ impl Session {
     pub fn design_container(&self, compression: solidcraft_io::DesignCompression, preview: bool, cache: bool) -> solidcraft_io::Result<Vec<u8>> {
         let geometry = cache.then(|| saved_geometry(self)).flatten();
         let preview = preview.then(|| saved_preview(self)).flatten();
-        solidcraft_io::write_design_container_with_cache(&self.design(), compression, preview.as_ref(), geometry.as_deref())
+        let thumbnail = cache.then(|| thumbnail::saved(self)).flatten();
+        solidcraft_io::write_design_container_with_thumbnail(&self.design(), compression, preview.as_ref(), geometry.as_deref(), thumbnail.as_deref())
     }
 }
 
@@ -640,6 +645,7 @@ mod tests {
                 session.execute(command, &params).unwrap();
                 let bytes = std::fs::read(&path).unwrap();
                 assert_eq!(solidcraft_io::read_design_geometry(&bytes).is_some(), cache == Some(true), "{command}: {cache:?}");
+                assert_eq!(solidcraft_io::read_design_thumbnail(&bytes).is_some(), cache == Some(true), "{command}: {cache:?}");
                 assert!(
                     !bytes.windows(b"cache/preview.bin".len()).any(|entry| entry == b"cache/preview.bin"),
                     "display meshes require preview: true"

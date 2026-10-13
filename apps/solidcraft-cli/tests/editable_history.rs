@@ -8,7 +8,7 @@ fn recipes() -> Vec<PathBuf> {
     let mut paths: Vec<_> =
         std::fs::read_dir(dir).unwrap().map(|p| p.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
     paths.sort();
-    assert_eq!(paths.len(), 128);
+    assert_eq!(paths.len(), 130);
     paths
 }
 
@@ -38,6 +38,19 @@ fn volume(s: &mut Session, want: f64, label: &str) -> Value {
     // tolerance is the existing design/oracle tolerance, not a saved result.
     assert!((got - want).abs() < want.abs().max(1.0) * 1e-3, "{label}: volume {got} != {want}");
     measure
+}
+
+fn construction_points(s: &Session, expected: &Value, label: &str) {
+    let Some(points) = expected["construction_points"].as_object() else { return };
+    let state = s.model.state();
+    for (name, value) in points {
+        let actual = state.construct.iter().find(|c| &c.name == name).map(|c| &c.geom);
+        let Some(solidcraft_engine::doc::construct::ConstructGeom::Point(p)) = actual else {
+            panic!("{label}: missing point {name}");
+        };
+        let expected = solidcraft_engine::geom::Vec3::new(value[0].as_f64().unwrap(), value[1].as_f64().unwrap(), value[2].as_f64().unwrap());
+        assert!(p.dist(expected) < 1e-6, "{label}: {name} {p:?} != {expected:?}");
+    }
 }
 
 fn bounds(measure: &Value, expected: &Value, label: &str) {
@@ -187,20 +200,26 @@ fn simple_history_files_replay_reopen_edit_and_undo() {
         }
         // Aggregate world bounds catch incorrect sketch placement and direction.
         bounds(&measure, expected, &label);
+        construction_points(&s, expected, &label);
+        construction_points(&rebuilt, expected, &label);
         let packaged = solidcraft_engine::io::write_design_container(&s.doc).unwrap();
         assert_eq!(solidcraft_engine::io::read_design(&packaged).unwrap(), *s.doc, "{label}: container preserves history");
         for edit in recipe["edits"].as_array().unwrap() {
             s.execute(edit["command"].as_str().unwrap(), &edit["params"]).unwrap();
             let edited_volume = expected_volume(edit);
             bounds(&volume(&mut s, edited_volume, &label), edit, &label);
+            construction_points(&s, edit, &label);
             let reopened = Document::from_json(&s.doc.to_json()).unwrap();
             assert_eq!(reopened, *s.doc);
             let packaged = solidcraft_engine::io::write_design_container(&reopened).unwrap();
             let container_doc = solidcraft_engine::io::read_design(&packaged).unwrap();
             assert_eq!(container_doc, reopened, "{label}: container preserves edited history");
-            bounds(&volume(&mut Session::new(container_doc), edited_volume, &label), edit, &label);
+            let mut reopened_session = Session::new(container_doc);
+            bounds(&volume(&mut reopened_session, edited_volume, &label), edit, &label);
+            construction_points(&reopened_session, edit, &label);
             s.execute("edit.undo", &json!({})).unwrap();
             bounds(&volume(&mut s, original_volume, &label), expected, &label);
+            construction_points(&s, expected, &label);
         }
     }
 }
