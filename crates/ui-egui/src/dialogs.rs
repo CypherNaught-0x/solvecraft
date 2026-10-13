@@ -68,6 +68,7 @@ pub enum Kind {
     },
     GroupedFillet {
         radii: Vec<String>,
+        chains: Vec<bool>,
     },
     Shell {
         thickness: String,
@@ -616,7 +617,7 @@ impl Dialog {
             Kind::Extrude { distance, .. } => ("Distance", ValueKind::Length, distance),
             Kind::Revolve { angle, .. } => ("Angle", ValueKind::Angle, angle),
             Kind::Fillet { radius, chamfer, .. } => (if *chamfer { "Distance" } else { "Radius" }, ValueKind::Length, radius),
-            Kind::GroupedFillet { radii } => ("Radius", ValueKind::Length, radii.first_mut()?),
+            Kind::GroupedFillet { radii, .. } => ("Radius", ValueKind::Length, radii.first_mut()?),
             Kind::Shell { thickness } => ("Thickness", ValueKind::Length, thickness),
             Kind::Draft { angle } => ("Angle", ValueKind::Angle, angle),
             Kind::Hole { diameter, .. } => ("Diameter", ValueKind::Length, diameter),
@@ -1554,11 +1555,16 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                         combo(ui, "rv_op", &OP_LABELS, operation);
                         ui.end_row();
                     }
-                    Kind::GroupedFillet { radii } => {
+                    Kind::GroupedFillet { radii, chains } => {
                         for (index, radius) in radii.iter_mut().enumerate() {
                             row_label(ui, &format!("Group {} radius", index + 1));
                             enter |= field(ui, radius);
                             ui.end_row();
+                            if let Some(chain) = chains.get_mut(index) {
+                                row_label(ui, &format!("Group {} tangent chain", index + 1));
+                                ui.checkbox(chain, "");
+                                ui.end_row();
+                            }
                         }
                     }
                     Kind::Fillet { radius, chamfer, chain, ctype, distance2, angle, flip } => {
@@ -2543,7 +2549,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             }
             ("solid.revolve", p)
         }
-        Kind::GroupedFillet { radii } => {
+        Kind::GroupedFillet { radii, chains } => {
             let mut sets = Vec::new();
             for (index, radius) in radii.iter().enumerate() {
                 need(index, "edges for each radius group")?;
@@ -2554,11 +2560,11 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                         _ => Err("select edges for the radius group".to_string()),
                     })
                     .collect::<std::result::Result<Vec<_>, _>>()?;
-                sets.push(json!({"edges":edges,"radius":radius}));
+                sets.push(json!({"edges":edges,"radius":radius,"tangent_chain":chains.get(index).copied().unwrap_or(false)}));
             }
             ("solid.fillet", json!({"edge_sets":sets}))
         }
-        Kind::Fillet { radius, chamfer, ctype, distance2, angle, flip, .. } => {
+        Kind::Fillet { radius, chamfer, chain, ctype, distance2, angle, flip } => {
             need(0, "edges")?;
             // Faces stand for all their edges.
             let st = s.world_state();
@@ -2601,6 +2607,9 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                 ("solid.chamfer", p)
             } else {
                 let mut p = json!({"edges": edges, "radius": radius});
+                if d.extra.get("type").and_then(Value::as_str).is_none_or(|kind| kind == "constant") {
+                    p["tangent_chain"] = json!(chain);
+                }
                 if d.extra.get("type").and_then(Value::as_str) == Some("variable") {
                     // The start radius goes at one end of the first edge (Swap Ends: the other).
                     let ends = sels(d, 0).iter().find_map(|x| match x {
@@ -3334,7 +3343,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             }
             d
         }
-        FeatureKind::Fillet { edges, radius, style: style @ FilletStyle::Grouped { groups }, body, .. } => {
+        FeatureKind::Fillet { edges, radius, style: style @ FilletStyle::Grouped { groups }, body, tangent_chain, .. } => {
             let sizes = style.group_sizes(edges.len()).ok()?;
             let radii = std::iter::once(radius.clone()).chain(groups.iter().map(|g| g.radius.clone())).collect();
             let mut inputs = Vec::new();
@@ -3345,7 +3354,8 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                 inputs.push(input);
                 at += count;
             }
-            let mut d = Dialog::new(Kind::GroupedFillet { radii }, inputs);
+            let chains = std::iter::once(*tangent_chain).chain(groups.iter().map(|g| g.tangent_chain)).collect();
+            let mut d = Dialog::new(Kind::GroupedFillet { radii, chains }, inputs);
             if let Some(body) = body {
                 d.extra.insert("body".into(), json!(body));
             }
@@ -3356,7 +3366,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             let mut d = start(if chamfer { "solid.chamfer" } else { "solid.fillet" })?;
             d.kind = fillet_kind(radius, chamfer);
             if let Kind::Fillet { chain, ctype, distance2, angle, flip, .. } = &mut d.kind {
-                *chain = false;
+                *chain = matches!(&f.kind, FeatureKind::Fillet { tangent_chain: true, .. });
                 // An unequal chamfer: two distances, or a distance and an angle.
                 if let FeatureKind::Chamfer { distance2: d2, angle: a, flip: f, .. } = &f.kind {
                     if let Some(v) = d2 {

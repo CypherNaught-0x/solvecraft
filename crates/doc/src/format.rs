@@ -68,13 +68,15 @@
 
 //! - 24: ordered constant-radius edge groups retain independent expressions in one fillet.
 //!   Older single-radius styles keep their original meaning.
+//! - 25: fillet tangent-chain choices persist per radius group and resolve after source edits.
+//!   Absent flags preserve the existing explicit selections.
 
 use serde_json::Value;
 
 use crate::{DocError, Document, Result};
 
 /// The format this build writes.
-pub const FORMAT: u32 = 24;
+pub const FORMAT: u32 = 25;
 
 pub fn format_string(n: u32) -> String {
     format!("solidcraft/{n}")
@@ -91,7 +93,7 @@ pub fn version_of(s: &str) -> Option<u32> {
 
 /// JSON-level upgrades: entry `i` turns format `i + 1` into `i + 2`.
 type JsonStep = fn(&mut Value) -> Result<()>;
-const JSON_STEPS: [JsonStep; 23] = [
+const JSON_STEPS: [JsonStep; 24] = [
     |_| Ok(()),
     v2_to_v3,
     v3_to_v4,
@@ -115,6 +117,8 @@ const JSON_STEPS: [JsonStep; 23] = [
     |_| Ok(()),
     |_| Ok(()),
     // 23 -> 24: existing fillets keep their original radius style.
+    |_| Ok(()),
+    // 24 -> 25: older fillets retain explicit selection semantics.
     |_| Ok(()),
 ];
 

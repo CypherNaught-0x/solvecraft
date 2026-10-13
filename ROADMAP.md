@@ -323,6 +323,11 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   bring the saved suite to 112 designs.
   Upstream container saves are integrated with F3D opening; saved-history tests
   now preserve every baseline and edit through both JSON and container storage.
+  Constant-radius tangent-chain choices now persist per radius group and resolve
+  from exact current edge topology on regeneration and pattern replay. Native
+  tangent-enabled extrusion-edge controls import with editable radii and source
+  dimensions. Four analytic rim/group fixtures bring the saved suite to 116.
+  More source topologies and the other native feature families remain unfinished.
 - Persistent naming follows the kernel's exact face history (docs/book/src/dev/naming.md):
   references resolve by name first, follow splits and merges, and warn when the entity split,
   merged or vanished, or was found by geometry only (operations that report no history yet).

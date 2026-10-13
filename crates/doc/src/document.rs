@@ -350,6 +350,10 @@ pub enum FeatureKind {
         /// What to do when the radius is too large for the geometry around the edges.
         #[serde(default, skip_serializing_if = "FilletFit::is_exact")]
         fit: FilletFit,
+        /// Recompute smooth continuations from the selected seed edges. For grouped
+        /// radii this controls the leading group; subsequent groups own their flags.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        tangent_chain: bool,
     },
     Chamfer {
         edges: Vec<Vec3>,
@@ -986,6 +990,8 @@ impl FilletStyle {
 pub struct FilletRadiusGroup {
     pub count: usize,
     pub radius: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tangent_chain: bool,
 }
 
 /// A face picked by a point on it, on a named body.

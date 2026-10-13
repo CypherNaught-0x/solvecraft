@@ -222,3 +222,7 @@ Vulkan, DirectX 12, Metal and WebGPU retain their requested multisampling.
 | apps/solidcraft-cli/tests/history/fillet-groups-three.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solidcraft-cli/tests/history/fillet-groups-shared.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | apps/solidcraft-cli/tests/history/fillet-groups-caps.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-chain-capsule-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-chain-capsule-bottom.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-chain-circle-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-chain-groups.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |

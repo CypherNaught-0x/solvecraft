@@ -797,6 +797,8 @@ mod extent_target_tests;
 #[cfg(test)]
 mod extent_tests;
 #[cfg(test)]
+mod fillet_chain_tests;
+#[cfg(test)]
 mod fillet_groups_tests;
 #[cfg(test)]
 mod loft_face_tests;

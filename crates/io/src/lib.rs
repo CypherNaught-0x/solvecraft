@@ -621,6 +621,7 @@ mod tests {
                 body: None,
                 style: Default::default(),
                 fit: Default::default(),
+                tangent_chain: false,
             },
             None,
         )

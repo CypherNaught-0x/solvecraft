@@ -2004,3 +2004,45 @@ other quality gates passed. HardEdgeBasin's isolated opening guard passed in
 container, reopened and rendered: two editable features, one cylinder, exact
 100 mm diameter/height bounds and volume within 0.1% of the analytic value.
 The final remote check still reported upstream `01bf0e4`.
+
+
+### Persistent constant-radius tangent chains
+
+Format 25 retains `tangent_chain` on the leading fillet edge group and on each
+additional radius group. Native constant-radius flags now survive reconstruction;
+editable feature dialogs retain the choices, and commands accept a boolean per
+group. Absent flags preserve older documents' behavior. Chord and variable-radius
+imports remain unsupported; explicit persistent chaining currently requires a
+constant radius.
+
+On regeneration, exact shared vertices and oriented endpoint derivatives resolve
+smooth continuations from the saved seed edges. Coincident but separate vertices
+are not welded, ambiguous branches and degenerate endpoints are refused, and
+expanded selections are capped at 1,000 edges. The seed references remain in the
+document; expanded points are transient and are re-resolved on a pattern's target
+body. Different radius groups cannot claim the same expanded edge.
+
+The five local tangent-enabled controls check radius, height, suppression and
+restoration variants with independent volume expectations. The four original
+`fillet-chain-*` fixtures add complete circular and rounded-slot rims, both cap
+directions and mixed group flags. Analytic parallel-area integration checks their
+volumes through edits, JSON/container serialization and undo. The original native
+source restrictions still apply: independent positive, untapered line-profile
+extrusions. This removes the tangent-flag rejection for those sources; it does
+not yet make the complete Gridfinity timeline importable.
+
+Validation against upstream `01bf0e4` passed all 116 saved histories, 702 engine
+tests, 310 kernel tests, 382 UI tests, 155 I/O tests, WASM and the other quality
+gates. The full gate passed 35 of 36 binaries; its sandbox-blocked localhost
+socket test passed separately with socket permission. The isolated HardEdgeBasin
+opening guard passed in 1.01 seconds. Targeted native constant/grouped fillet and
+container workflow tests passed on the final build. The rounded-slot rim was
+rendered and visually checked.
+
+The larger archives still fail explicitly: adapter feature 17126 is a construction
+point, Gridfinity feature 47444 is `Chamfer7` (class
+`F757D611-217B-4B72-9C41-B617BDCE43DA`, version 2), and R36S starts with base feature
+1160. Gridfinity's timeline position was checked against the independent local
+API inspection. These are remaining import blockers, not successful full imports.
+Upstream's subsequent `809ecf7` release-version commit is fetched for the next
+integration pass and is not included in these test results.

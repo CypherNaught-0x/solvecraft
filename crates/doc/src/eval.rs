@@ -295,6 +295,7 @@ fn grouped_fillet(
     radius: f64,
     style: &crate::FilletStyle,
     fit: crate::FilletFit,
+    tangent_chain: bool,
 ) -> Result<kernel::Body> {
     if fit != crate::FilletFit::Exact {
         return Err(DocError::Invalid("multiple radius groups require exact fit".into()));
@@ -305,8 +306,16 @@ fn grouped_fillet(
     let mut selected = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     let mut at = 0;
-    for (count, radius) in sizes.into_iter().zip(radii) {
-        let group = edges.get(at..at + count).ok_or_else(|| DocError::Invalid("missing fillet group edges".into()))?;
+    let chains = std::iter::once(tangent_chain).chain(groups.iter().map(|g| g.tangent_chain));
+    for ((count, radius), chain) in sizes.into_iter().zip(radii).zip(chains) {
+        let seeds = edges.get(at..at + count).ok_or_else(|| DocError::Invalid("missing fillet group edges".into()))?;
+        let expanded;
+        let group = if chain {
+            expanded = kernel::tangent_edge_points(body, seeds)?;
+            expanded.as_slice()
+        } else {
+            seeds
+        };
         for point in group {
             let (index, _) =
                 body.nearest_edge(*point, (body.size() * 2e-3).max(1e-3))?.ok_or_else(|| DocError::Invalid("missing fillet edge".into()))?;
@@ -2883,10 +2892,16 @@ fn replay(
                 let moved: Vec<Vec3> = found.iter().map(|p| crate::apply_point(m, *p)).collect();
                 let ti = blend_target(st, &None, &moved)?;
                 let Some(mb) = st.bodies.get(ti).cloned() else { continue };
+                let moved = match &src.kind {
+                    FeatureKind::Fillet { style: crate::FilletStyle::Constant, tangent_chain: true, .. } => {
+                        kernel::tangent_edge_points(&mb.body, &moved)?
+                    }
+                    _ => moved,
+                };
                 let nb = match &src.kind {
                     FeatureKind::Chamfer { distance2, angle, flip, .. } => chamfer_with(vals, &mb.body, &moved, r, distance2, angle, *flip)?,
-                    FeatureKind::Fillet { style: style @ crate::FilletStyle::Grouped { .. }, fit, .. } => {
-                        grouped_fillet(vals, &mb.body, &moved, r, style, *fit)?
+                    FeatureKind::Fillet { style: style @ crate::FilletStyle::Grouped { .. }, fit, tangent_chain, .. } => {
+                        grouped_fillet(vals, &mb.body, &moved, r, style, *fit, *tangent_chain)?
                     }
                     // A copy is congruent to the original: the radius it was reduced to first.
                     FeatureKind::Fillet { fit, .. } => match st.fitted.get(&src.id).copied() {
@@ -3619,15 +3634,29 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             } else {
                 resolve_edges(&mb.body, edges, &f.edge_refs, warning)?
             };
-            if matches!(&f.kind, FeatureKind::Fillet { style: crate::FilletStyle::Grouped { .. }, .. }) && edges.len() != selected_count {
-                return Err(DocError::Invalid("a selected edge disappeared from a fillet radius group".into()));
+            if matches!(
+                &f.kind,
+                FeatureKind::Fillet { style: crate::FilletStyle::Grouped { .. }, .. } | FeatureKind::Fillet { tangent_chain: true, .. }
+            ) && edges.len() != selected_count
+            {
+                return Err(DocError::Invalid("a selected edge disappeared from the fillet selection".into()));
             }
             st.blend_edges.insert(f.id, edges.clone());
+            let edges = match &f.kind {
+                FeatureKind::Fillet { style: crate::FilletStyle::Grouped { .. }, .. } => edges,
+                FeatureKind::Fillet { style, tangent_chain: true, .. } => {
+                    if !style.is_constant() {
+                        return Err(DocError::Invalid("persistent tangent chains require a constant radius".into()));
+                    }
+                    kernel::tangent_edge_points(&mb.body, &edges)?
+                }
+                _ => edges,
+            };
             let input = mb.traced();
             // The blended body, and the lineage of what the last blend started from.
             let (nb, from) = match &f.kind {
-                FeatureKind::Fillet { style: style @ crate::FilletStyle::Grouped { .. }, fit, .. } => {
-                    (grouped_fillet(vals, &mb.body, &edges, r, style, *fit)?, input)
+                FeatureKind::Fillet { style: style @ crate::FilletStyle::Grouped { .. }, fit, tangent_chain, .. } => {
+                    (grouped_fillet(vals, &mb.body, &edges, r, style, *fit, *tangent_chain)?, input)
                 }
                 FeatureKind::Fillet { style: crate::FilletStyle::Chord, .. } => (kernel::fillet_chord(&mb.body, &edges, r)?, input),
                 FeatureKind::Fillet { style: crate::FilletStyle::Variable { radius2, start, mid, smooth }, .. } => {
@@ -4129,6 +4158,7 @@ mod chain_tests {
                 body: None,
                 style: crate::FilletStyle::Constant,
                 fit: Default::default(),
+                tangent_chain: false,
             },
             None,
         )

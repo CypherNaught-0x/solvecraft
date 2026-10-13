@@ -48,10 +48,10 @@ fn grouped_fillets_preserve_native_radius_parameters_and_source_edits() {
 fn constant_fillets_retain_selected_edges_radius_and_source_edits() {
     use solidcraft_engine::doc::{Document, FeatureKind};
     let dir = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
-    for mode in ["vertical", "bottom", "top", "pair"] {
+    for mode in ["vertical", "bottom", "top", "pair", "tangent"] {
         let analytic = |radius: f64, height: f64, suppressed: bool| {
             let length = match mode {
-                "vertical" => height,
+                "vertical" | "tangent" => height,
                 "pair" => 2. * height,
                 _ => 20.,
             };
@@ -76,7 +76,7 @@ fn constant_fillets_retain_selected_edges_radius_and_source_edits() {
             let mut s = Session::default();
             s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(s.doc.features.len(), 3);
-            assert!(matches!(s.doc.features[2].kind, FeatureKind::Fillet { .. }));
+            assert!(matches!(s.doc.features[2].kind, FeatureKind::Fillet { tangent_chain, .. } if tangent_chain == (mode == "tangent")));
             assert_eq!(s.doc.features[2].suppressed, suppressed);
             assert_eq!(s.doc.features[2].edge_names.len(), if mode == "pair" { 2 } else { 1 });
             check(&mut s, r, h, suppressed, &name);
@@ -94,11 +94,6 @@ fn constant_fillets_retain_selected_edges_radius_and_source_edits() {
             }
         }
     }
-    let mut s = Session::default();
-    s.execute("solid.box", &json!({"length":10,"width":10,"height":10})).unwrap();
-    let before = s.doc.to_json();
-    assert!(s.execute("doc.open", &json!({"path":dir.join("fillet-tangent-baseline.f3d")})).is_err());
-    assert_eq!(s.doc.to_json(), before);
 }
 
 #[test]

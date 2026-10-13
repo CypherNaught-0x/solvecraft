@@ -62,6 +62,7 @@ mod step_out;
 mod surface_kind;
 mod surfaces;
 mod sweep_path;
+mod tangent_chain;
 #[cfg(test)]
 mod thread_tests;
 mod topo;
@@ -98,6 +99,7 @@ pub use step_out::{ExportBody, ExportProduct, StepHeader, step_export_bodies, st
 pub use surface_kind::{FaceSurface, face_surface};
 pub use surfaces::{copy_faces, extend, patch_edges, patch_region, stitch, thicken, trim};
 pub use sweep_path::sweep_path;
+pub use tangent_chain::tangent_edge_points;
 pub use topo::{CylinderFace, cylinder_face_at};
 pub use topo::{TopoCounts, merged_topology, seam_flags};
 pub use tspline::tspline_sheet;

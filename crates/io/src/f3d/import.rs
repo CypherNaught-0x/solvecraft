@@ -161,9 +161,6 @@ impl Design {
                     let mut groups = Vec::new();
                     let mut radius_bindings = BTreeSet::new();
                     for (index, set) in sets.iter().enumerate() {
-                        if set.tangent_chain {
-                            return Err(invalid("fillet tangent-chain reconstruction is not supported yet"));
-                        }
                         let radius = length_parameter(&bindings, set.radius)?;
                         let weight = bindings.get(&set.weight).ok_or_else(|| invalid("missing fillet tangency weight"))?;
                         if radius.owner != Some(f.id)
@@ -184,7 +181,11 @@ impl Design {
                         if index == 0 {
                             primary_radius = Some(radius.name.clone());
                         } else {
-                            groups.push(solidcraft_doc::FilletRadiusGroup { count: objects.len(), radius: radius.name.clone() });
+                            groups.push(solidcraft_doc::FilletRadiusGroup {
+                                count: objects.len(),
+                                radius: radius.name.clone(),
+                                tangent_chain: set.tangent_chain,
+                            });
                         }
                         for object in objects {
                             let edge = super::fillets::edge(&records, &classes, object, f.id)?;
@@ -261,6 +262,7 @@ impl Design {
                             solidcraft_doc::FilletStyle::Grouped { groups }
                         },
                         fit: solidcraft_doc::FilletFit::Exact,
+                        tangent_chain: sets.first().is_some_and(|s| s.tangent_chain),
                     }
                 }
                 HistoryKind::Combine { operation, keep_tools, operation_tag, tool_containers, target_container, consumed_handles } => {

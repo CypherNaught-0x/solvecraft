@@ -1,6 +1,6 @@
 # Small editable history fixtures
 
-These 112 designs and their JSON command recipes are original SolidCraft test
+These 116 designs and their JSON command recipes are original SolidCraft test
 data. They were authored through SolidCraft commands; no Fusion-produced file is
 included. Each `.solidcraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
@@ -265,3 +265,16 @@ edges. Their volume is `width × depth × height − (1 − π/4) × Σ(radius²
 Each radius is edited independently; width, height and suppression edits also
 check bounds and volume through reopening and undo. Group parameters retain
 their identity when the feature is redefined. There are 112 original saved designs.
+
+
+Four `fillet-chain-*` fixtures preserve tangent-chain choices, including a
+single selected edge of a rounded-slot rim, a circle rim, opposite cap directions
+and mixed settings across radius groups. For a convex profile with area A and
+perimeter P, a rim of radius r removes
+`P × r² × (1 − π/4) − π × r³ × (5/3 − π/2)`.
+This integrates the parallel area `A − P × s + π × s²` through the quarter-circle
+blend. Slot profiles use `A = 2RL + πR²` and `P = 2L + 2πR`; circles use L = 0.
+Radii, extrusion heights, circle diameter and suppression checks also verify
+bounds, JSON/container round trips and undo. Their curved-wall allowance is
+0.02% of the unrounded volume plus 1.5% of the removed volume and 0.1 mm³;
+this still rejects a missing or partially rounded rim. There are 116 designs.
