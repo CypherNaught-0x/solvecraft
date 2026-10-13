@@ -1,5 +1,5 @@
 {
-  "format": "solvecraft/11",
+  "format": "solidcraft/11",
   "name": "HardEdgeBasin",
   "units": "mm",
   "params": [

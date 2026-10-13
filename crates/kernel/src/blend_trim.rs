@@ -5,7 +5,7 @@ use crate::blend::{extension_fits, plane_normal, unsupported, vtx};
 use crate::blend_end::{conic, curved_section, on_end, trim, uncrossed};
 use crate::body::{Body, Solid, from_p3, p3};
 use crate::{KernelError, Result};
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 use std::collections::{HashMap, HashSet};
 use truck_modeling::{self as mt, BoundedCurve, ParameterDivision1D, ParametricCurve, ParametricSurface3D, SearchNearestParameter, builder};
 
@@ -173,7 +173,7 @@ struct Hit {
     v: mt::Vertex,
 }
 
-pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> Result<Solid> {
+pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> Result<(Solid, crate::record::Rebuild)> {
     if !(r.is_finite() && r > 0.0 && (size * 4.0).is_finite() && size > 0.0) {
         return Err(unsupported("invalid fillet radius or body size"));
     }
@@ -219,7 +219,7 @@ pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> R
     }
     let w = (alpha * 0.5).sin();
     let tol = (size * 1e-8).max(1e-7);
-    let mut bounds = solvecraft_geom::Aabb3::EMPTY;
+    let mut bounds = solidcraft_geom::Aabb3::EMPTY;
     for v in solid.vertex_iter() {
         bounds.add(vtx(&v));
     }
@@ -412,6 +412,8 @@ pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> R
         replacements.insert(*id, replacement);
     }
     let mut out = Vec::new();
+    let mut rec = crate::record::Rebuild::default();
+    rec.pieces(&replacements);
     for (fi, f) in faces.iter().enumerate() {
         let mut keep = Vec::new();
         let mut changed = false;
@@ -458,6 +460,7 @@ pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> R
         }
         let rebuilt = mt::Face::try_new(wires, f.oriented_surface()).map_err(|e| KernelError::Failed(format!("fillet end face: {e}")))?;
         uncrossed(&rebuilt, tol)?;
+        rec.face(&rebuilt, f);
         out.push(rebuilt);
     }
     let [c0, c1] = &ends[..] else {
@@ -483,12 +486,14 @@ pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> R
     if Vec3::new(n.x, n.y, n.z).dot((center - mid) * sign) < 0.0 {
         surf = mt::Invertible::inverse(&surf);
     }
-    out.push(mt::Face::try_new(vec![wire], surf).map_err(|e| KernelError::Failed(format!("fillet cylinder: {e}")))?);
+    let cylinder = mt::Face::try_new(vec![wire], surf).map_err(|e| KernelError::Failed(format!("fillet cylinder: {e}")))?;
+    rec.blend(&cylinder, [edge.id()]);
+    out.push(cylinder);
     let mut shells = solid.boundaries().clone();
     if let Some(sh) = shells.get_mut(si) {
         *sh = out.into();
     }
-    Solid::try_new(shells).map_err(|e| KernelError::Failed(format!("fillet traced solid: {e}")))
+    Solid::try_new(shells).map(|s| (s, rec)).map_err(|e| KernelError::Failed(format!("fillet traced solid: {e}")))
 }
 
 #[cfg(test)]

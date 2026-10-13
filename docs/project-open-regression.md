@@ -25,7 +25,7 @@ are not mixed into the upstream-based F3D branch.
 ## Regression coverage
 
 ```sh
-cargo test --profile ci -p solvecraft-cli --test open_performance -- --nocapture
+cargo test --profile ci -p solidcraft-cli --test open_performance -- --nocapture
 ```
 
 The upstream-only test used a 20-second deadline and pinned eight unsupported
@@ -73,3 +73,36 @@ speedup comparison.
 The existing endpoint-hole test now uses a planar square-hole tool, preserving
 its intended containment assertion while avoiding the unrelated cylinder-cut
 setup failure. The focused test passed, followed by the complete kernel suite.
+
+## Corner-flow and display follow-up, 2026-10-13
+
+Closeups exposed two separate problems: the radial position guide could introduce
+small repeated waves beside a floor blend, and a chord-only display mesh could
+interpolate its surface normals poorly. The fit now gives the interior guide
+less weight, integrates curvature within the collapsed chart's knot spans, and
+retains the existing boundary position/tangency and control-hull certificates.
+Display refinement checks interior normal error and shares finer boundary samples
+between adjacent faces. Multi-span cylindrical joins retain their smooth-edge
+classification.
+
+The regression tests trace normal flow through perpendicular and sloped corners,
+check strips beside the front floor shoulder, and compare interpolated display
+normals with the analytic surfaces on small and full-size placed basins. Display
+checks exclude the physical meshing floor and the immediate neighborhood of an
+original sharp vertex, where the limiting normal depends on approach direction.
+They do not exclude those regions from the geometry containment checks.
+
+Profiling the added display work found dense spline searches on cubic transition
+faces, including intermediate bodies used for later edge lookup. Those searches
+now use the compact-support evaluator, with bounded searches for cubic and
+quintic patches. Unchanged triangles reuse their normal-error result across
+refinement passes. Profiling the fit then identified repeated indexing in the
+banded QR update; matching contiguous slices preserve its arithmetic while
+removing that overhead. Boundary acceptance checks remain unchanged.
+
+After integration with upstream `f5ae7205`, a local `bench-open` run measured
+49.81 seconds of evaluation plus 3.67 seconds of display preparation, with zero
+feature errors, 14 bodies and 98,596 display triangles. The higher triangle count
+reflects normal-aware rendering of the corner fills. The 60-second end-to-end
+opening guard remains unchanged. This is a local measurement, not a controlled
+cross-version benchmark.

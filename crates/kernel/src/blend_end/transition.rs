@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::blend_corner::setback::{Boundary, Normal};
-use solvecraft_geom::Aabb3;
+use solidcraft_geom::Aabb3;
 mod fan;
 
 pub(super) struct End {

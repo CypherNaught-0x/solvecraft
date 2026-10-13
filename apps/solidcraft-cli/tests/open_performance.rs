@@ -4,9 +4,9 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
-use solvecraft_engine::Session;
+use solidcraft_engine::Session;
 
-const CHILD: &str = "SOLVECRAFT_OPEN_PERF_CHILD";
+const CHILD: &str = "SOLIDCRAFT_OPEN_PERF_CHILD";
 
 #[test]
 fn hard_edge_basin_open_performance() {
@@ -14,8 +14,8 @@ fn hard_edge_basin_open_performance() {
         check_basin();
         return;
     }
-    // Full fillet support: ~22 seconds locally after the performance fix.
-    // Leave headroom for CI, while catching the former ~90 second rebuild.
+    // Include every corner fill and its display mesh. Leave headroom for CI,
+    // while catching the former ~90-second rebuild.
     let budget = Duration::from_secs(60);
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "hard_edge_basin_open_performance", "--nocapture"])
@@ -34,14 +34,14 @@ fn hard_edge_basin_open_performance() {
         if start.elapsed() >= budget {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("HardEdgeBasin cold open exceeded {budget:?}; run solvecraft-cli bench-open on tests/performance/HardEdgeBasin.solvecraft");
+            panic!("HardEdgeBasin cold open exceeded {budget:?}; run solidcraft-cli bench-open on tests/performance/HardEdgeBasin.solidcraft");
         }
         std::thread::sleep(Duration::from_millis(50));
     }
 }
 
 fn check_basin() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/performance/HardEdgeBasin.solvecraft");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/performance/HardEdgeBasin.solidcraft");
     let original = std::fs::read(&path).unwrap();
     let start = Instant::now();
     let mut session = Session::default();

@@ -638,9 +638,10 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)], round: bool) -> Result<Body> {
                             list.push((c.clone(), vec![owner, Owner::Patch]));
                             wire.push(c);
                         }
-                        patches.push(
+                        patches.push((
                             mt::Face::try_new(vec![wire.into()], patch.surface).map_err(|e| KernelError::Failed(format!("setback patch: {e}")))?,
-                        );
+                            [*e1, *e2, *e3],
+                        ));
                         continue;
                     }
                     let q12 = meet(v, (*u1, s1.t(f12), s1.s), (*u2, s2.t(f12), s2.s))?;

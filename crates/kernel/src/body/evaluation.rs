@@ -1,7 +1,7 @@
 //! Meshing adapter: spline bases have compact support. Skipping exactly zero
 //! weights preserves the surface while avoiding work proportional to its entire
 //! control net at every interior grid point.
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 use truck_modeling::{self as mt, *};
 
 #[derive(Clone)]
@@ -127,12 +127,16 @@ impl ParameterDivision2D for Surface {
 impl SearchParameter<D2> for Surface {
     type Point = mt::Point3;
     fn search_parameter<H: Into<SPHint2D>>(&self, p: mt::Point3, hint: H, trials: usize) -> Option<(f64, f64)> {
-        if matches!(&self.0, mt::Surface::BSplineSurface(s) if s.degrees() == (5, 5)) {
+        if matches!(&self.0, mt::Surface::BSplineSurface(s) if matches!(s.degrees(), (3, 3) | (5, 5))) {
             // Robust triangulation tries this exact search before the nearest
             // search. Both must use the bounded solver: an unconstrained root
             // outside a singular patch can corrupt its boundary triangulation.
             let (u, v) = self.search_nearest_parameter(p, hint, trials)?;
             return self.subs(u, v).near(&p).then_some((u, v));
+        }
+        if let mt::Surface::BSplineSurface(s) = &self.0 {
+            let seed = sparse_search_seed(self, s.range_tuple(), p, hint.into());
+            return mt::algo::surface::search_parameter3d(self, p, seed, trials);
         }
         self.0.search_parameter(p, hint, trials)
     }
@@ -142,8 +146,9 @@ impl SearchNearestParameter<D2> for Surface {
     fn search_nearest_parameter<H: Into<SPHint2D>>(&self, p: mt::Point3, hint: H, trials: usize) -> Option<(f64, f64)> {
         let hint = hint.into();
         let mt::Surface::BSplineSurface(s) = &self.0 else { return self.0.search_nearest_parameter(p, hint, trials) };
-        if s.degrees() != (5, 5) {
-            return self.0.search_nearest_parameter(p, hint, trials);
+        if !matches!(s.degrees(), (3, 3) | (5, 5)) {
+            let seed = sparse_search_seed(self, s.range_tuple(), p, hint);
+            return mt::algo::surface::search_nearest_parameter(self, p, seed, trials);
         }
         if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
             return None;
@@ -209,6 +214,14 @@ impl SearchNearestParameter<D2> for Surface {
                 best = Some(uv);
             }
         };
+        // A grid seed exactly on a collapsed boundary has a zero derivative,
+        // so Newton cannot leave it even when the nearest point is inside.
+        // Try one bounded interior seed as well; keep the better result.
+        let inset = |t: f64, (a, b): (f64, f64)| t.clamp(a + (b - a) / 1024.0, b - (b - a) / 1024.0);
+        let interior = (inset(seed.0, ur), inset(seed.1, vr));
+        if interior != seed && first.is_some_and(|uv| distance(uv) > boundary_tol * boundary_tol) {
+            consider(improve(interior));
+        }
         if !matches!(hint, SPHint2D::None) {
             consider(improve(mt::algo::surface::presearch(self, p, (ur, vr), 12)));
         }
@@ -262,12 +275,93 @@ impl SearchNearestParameter<D2> for Surface {
                 }
             }
         }
-        boundary_best.or(best)
+        boundary_best.or(best).map(|(u, v)| {
+            // Nearly identical trim points can invert just inside an edge.
+            // Snap only a parameter already within 1e-8 of the domain boundary,
+            // and only when its world-space movement is roundoff-sized. This
+            // keeps duplicate seam samples from forming crossing sliver loops.
+            let snap = |t: f64, (a, b): (f64, f64)| {
+                if (t - a).abs() <= (b - a) * 1e-8 {
+                    a
+                } else if (t - b).abs() <= (b - a) * 1e-8 {
+                    b
+                } else {
+                    t
+                }
+            };
+            let snapped = (snap(u, ur), snap(v, vr));
+            let movement = self.subs(snapped.0, snapped.1).distance2(self.subs(u, v));
+            if movement <= (boundary_tol * 64.0).powi(2) { snapped } else { (u, v) }
+        })
     }
 }
 
+// Keep truck's search and 50-division seed grid, but evaluate that grid through
+// the compact-support adapter. Delegating to the raw spline here made every
+// normal sample on a cubic transition scan its entire control net thousands
+// of times, including intermediate bodies used to resolve later edge names.
+fn sparse_search_seed(surface: &Surface, range: ((f64, f64), (f64, f64)), p: mt::Point3, hint: SPHint2D) -> (f64, f64) {
+    match hint {
+        SPHint2D::Parameter(u, v) => (u, v),
+        SPHint2D::Range(u, v) => mt::algo::surface::presearch(surface, p, (u, v), 50),
+        SPHint2D::None => mt::algo::surface::presearch(surface, p, range, 50),
+    }
+}
+
+/// Invert the surface in a fixed display projection. Refining in UV space
+/// after projected triangulation can reverse a triangle on a distorted chart.
+pub(crate) fn projected_parameter(surface: &Surface, point: mt::Point3, direction: Vec3, seed: (f64, f64)) -> Option<(f64, f64)> {
+    if !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite() || !seed.0.is_finite() || !seed.1.is_finite() {
+        return None;
+    }
+    let direction = direction.normalized()?;
+    let x = direction.any_perp();
+    let y = direction.cross(x);
+    let x = mt::Vector3::new(x.x, x.y, x.z);
+    let y = mt::Vector3::new(y.x, y.y, y.z);
+    let (ur, vr) = surface.try_range_tuple();
+    let (ur, vr) = (ur?, vr?);
+    if ![ur.0, ur.1, vr.0, vr.1].iter().all(|x| x.is_finite()) || ur.0 >= ur.1 || vr.0 >= vr.1 {
+        return None;
+    }
+    let mut uv = (seed.0.clamp(ur.0, ur.1), seed.1.clamp(vr.0, vr.1));
+    let residual = |(u, v)| {
+        let d = surface.subs(u, v) - point;
+        d.dot(x).powi(2) + d.dot(y).powi(2)
+    };
+    for _ in 0..24 {
+        let d = surface.subs(uv.0, uv.1) - point;
+        if residual(uv) < 1e-20 {
+            return Some(uv);
+        }
+        let (du, dv) = (surface.uder(uv.0, uv.1), surface.vder(uv.0, uv.1));
+        let (a, b, c, e) = (du.dot(x), dv.dot(x), du.dot(y), dv.dot(y));
+        let det = a * e - b * c;
+        if !det.is_finite() || det.abs() <= 1e-14 * a.hypot(c) * b.hypot(e) {
+            return None;
+        }
+        let (su, sv) = ((d.dot(x) * e - d.dot(y) * b) / det, (d.dot(y) * a - d.dot(x) * c) / det);
+        if !su.is_finite() || !sv.is_finite() {
+            return None;
+        }
+        let old = residual(uv);
+        let mut scale = 1.0;
+        let mut next = None;
+        for _ in 0..16 {
+            let candidate = ((uv.0 - scale * su).clamp(ur.0, ur.1), (uv.1 - scale * sv).clamp(vr.0, vr.1));
+            if residual(candidate) < old {
+                next = Some(candidate);
+                break;
+            }
+            scale *= 0.5;
+        }
+        uv = next?;
+    }
+    (residual(uv) < 1e-20).then_some(uv)
+}
+
 pub(crate) fn display_projection(surface: &mt::BSplineSurface<mt::Point3>, mesh_normals: &[mt::Vector3]) -> Option<Vec3> {
-    if surface.degrees() != (5, 5) || surface.control_points().len() > 64 || surface.control_points().iter().any(|r| r.len() > 64) {
+    if !matches!(surface.degrees(), (3, 3) | (5, 5)) || surface.control_points().len() > 64 || surface.control_points().iter().any(|r| r.len() > 64) {
         return None;
     }
     let origin = *surface.control_points().first()?.first()?;
@@ -364,6 +458,108 @@ mod tests {
         assert!(surface.search_parameter(mt::Point3::new(-0.125, 0.5, 0.0), None, 100).is_none());
         assert_eq!(surface.search_nearest_parameter(mt::Point3::new(1e-14, 1e-14, 0.0), (0.001, 0.001), 100), Some((0.0, 0.0)));
         assert!(surface.search_nearest_parameter(mt::Point3::new(f64::NAN, 0.0, 0.0), None, 100).is_none());
+    }
+
+    #[test]
+    fn projected_refinement_uses_physical_not_parameter_midpoints() {
+        let cubic = [0.0, 0.0, 0.0, 0.1, 0.4, 1.0];
+        let controls = cubic.iter().map(|x| cubic.iter().map(|y| mt::Point3::new(*x, *y, 0.0)).collect()).collect();
+        let knots = mt::KnotVec::bezier_knot(5);
+        let surface = Surface(mt::Surface::BSplineSurface(mt::BSplineSurface::new((knots.clone(), knots), controls)));
+        let p = mt::Point3::new(0.5, 0.5, 0.2);
+        let (u, v) = projected_parameter(&surface, p, Vec3::Z, (0.5, 0.5)).unwrap();
+        assert!((u - 0.5_f64.cbrt()).abs() < 1e-9 && (v - u).abs() < 1e-9);
+        assert!(projected_parameter(&surface, p, Vec3::ZERO, (0.5, 0.5)).is_none());
+        assert!(projected_parameter(&surface, p, Vec3::Z, (f64::NAN, 0.5)).is_none());
+        assert!(projected_parameter(&surface, mt::Point3::new(2.0, 0.5, 0.0), Vec3::Z, (0.5, 0.5)).is_none());
+    }
+
+    #[test]
+    fn cubic_and_quintic_search_resolve_narrow_boundary_strips() {
+        for degree in [3_usize, 5] {
+            let power3 = |i: usize| if i < 3 { 0.0 } else { (i * (i - 1) * (i - 2)) as f64 / (degree * (degree - 1) * (degree - 2)) as f64 };
+            let knots = mt::KnotVec::bezier_knot(degree);
+            let controls = (0..=degree)
+                .map(|i| {
+                    (0..=degree)
+                        .map(|j| {
+                            let z = 0.01 * (i * i.saturating_sub(1)) as f64 / (degree * (degree - 1)) as f64 * j as f64 / degree as f64;
+                            mt::Point3::new(700.0 + 10.0 * power3(i), -150.0 + 10.0 * power3(j), 730.0 + z)
+                        })
+                        .collect()
+                })
+                .collect();
+            let surface = Surface(mt::Surface::BSplineSurface(mt::BSplineSurface::new((knots.clone(), knots), controls)));
+            for (u, v) in [(0.85, 0.004), (0.02, 0.7), (0.7, 0.8)] {
+                let point = surface.subs(u, v);
+                let (a, b) = surface.search_nearest_parameter(point, None, 100).unwrap();
+                assert!(
+                    surface.subs(a, b).distance(point) < 1e-9,
+                    "degree {degree}: ({u},{v}) resolved as ({a},{b}), distance {}",
+                    surface.subs(a, b).distance(point)
+                );
+                assert!(
+                    surface.normal(a, b).dot(surface.normal(u, v)) > 0.01_f64.to_radians().cos(),
+                    "degree {degree}: ({u},{v}) resolved as ({a},{b})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn roundoff_near_a_trim_boundary_does_not_create_a_sliver() {
+        let knots = mt::KnotVec::bezier_knot(5);
+        for origin in [mt::Point3::new(0.0, 0.0, 0.0), mt::Point3::new(100.0, 200.0, 700.0)] {
+            let controls = (0..6).map(|i| (0..6).map(|j| origin + mt::Vector3::new(i as f64 / 5.0, j as f64 / 5.0, 0.0)).collect()).collect();
+            let surface = Surface(mt::Surface::BSplineSurface(mt::BSplineSurface::new((knots.clone(), knots.clone()), controls)));
+            for (u, v) in [(2e-11, 0.4), (1.0 - 2e-11, 0.4), (0.4, 2e-11), (0.4, 1.0 - 2e-11)] {
+                let p = surface.subs(u, v);
+                let result = surface.search_nearest_parameter(p, (u, v), 100).unwrap();
+                assert!(result.0 == 0.0 || result.0 == 1.0 || result.1 == 0.0 || result.1 == 1.0);
+                assert!(surface.subs(result.0, result.1).distance(p) < 1e-9);
+            }
+            let p = surface.subs(1e-5, 0.4);
+            let result = surface.search_nearest_parameter(p, None, 100).unwrap();
+            assert!((result.0 - 1e-5).abs() < 1e-10, "a distinct interior point must stay inside");
+        }
+    }
+
+    #[test]
+    fn meshing_checks_normal_error_on_a_narrow_curved_strip() {
+        use truck_meshalgo::prelude::*;
+        let knots = mt::KnotVec::bezier_knot(5);
+        // A narrow bump, z=3u²(1-u)³v²(1-v)², lies below the chord
+        // tolerance but turns the normal substantially. All four boundary
+        // curves and their normals remain flat, isolating interior shading.
+        let controls = (0..6)
+            .map(|i| {
+                (0..6).map(|j| mt::Point3::new(i as f64 / 50.0, j as f64 / 5.0, if i == 2 && (j == 2 || j == 3) { 0.03 } else { 0.0 })).collect()
+            })
+            .collect();
+        let patch = mt::BSplineSurface::new((knots.clone(), knots), controls);
+        let surface = Surface(mt::Surface::BSplineSurface(patch.clone()));
+        let vertices = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(u, v)| mt::Vertex::new(surface.subs(u, v)));
+        let curves = [patch.row_curve(0), patch.column_curve(5), patch.row_curve(5).inverse(), patch.column_curve(0).inverse()];
+        let wire =
+            mt::Wire::from_iter((0..4).map(|i| mt::Edge::new(&vertices[i], &vertices[(i + 1) % 4], mt::Curve::BSplineCurve(curves[i].clone()))));
+        let face = truck_topology::Face::new(vec![wire], surface.clone());
+        let mesh = truck_topology::Shell::from(vec![face]).robust_triangulation(0.02);
+        let polygon = mesh.face_iter().next().unwrap().surface().unwrap();
+        let triangles = crate::body::refined_quality(&polygon, &surface.0, 0.02, true, true).unwrap();
+        assert_eq!(
+            triangles,
+            crate::body::refined_quality(&polygon, &surface.0, 0.02, false, true).unwrap(),
+            "caching must preserve every refinement decision"
+        );
+        let mut worst = 0.0_f64;
+        for t in &triangles {
+            let p = t.iter().map(|(p, _)| *p).fold(Vec3::ZERO, |a, b| a + b) / 3.0;
+            let n = t.iter().map(|(_, n)| *n).fold(Vec3::ZERO, |a, b| a + b).normalized().unwrap();
+            let exact = surface.normal(p.x / 0.1, p.y);
+            worst = worst.max(n.dot(Vec3::new(exact.x, exact.y, exact.z)).clamp(-1.0, 1.0).acos().to_degrees());
+        }
+        assert!(worst < 2.0, "interpolated normal differs by {worst} degrees");
+        assert!(triangles.len() < 1000, "normal refinement must stay bounded");
     }
 
     #[test]

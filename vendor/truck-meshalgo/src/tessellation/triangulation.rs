@@ -90,7 +90,8 @@ pub fn retriangulate_projected(mesh: &PolygonMesh, direction: Vector3) -> Option
     if !loop_orientation(&polygon) {
         polygon.reverse();
     }
-    let boundary = PolyBoundary(vec![polygon]);
+    let bounds = polygon.iter().collect();
+    let boundary = PolyBoundary(vec![polygon], vec![bounds]);
     let mut cdt = Cdt::new();
     let mut handles = Vec::with_capacity(positions.len());
     let mut original = HashMap::default();
@@ -356,6 +357,27 @@ fn relax_crowded_faces<C, S>(
             }
         }
     }
+}
+
+/// Tessellate surfaces while retaining an already sampled, shared boundary.
+/// The caller may have sampled tangent planes as well as positions; applying
+/// chord-only curve division again would discard that information.
+pub fn triangulate_presampled<S: RobustMeshableSurface>(
+    shell: &Shell<Point3, PolylineCurve, S>, tol: Deflection,
+) -> Option<MeshedShell> {
+    if !tol.chord.is_finite() || tol.chord <= TOLERANCE || shell.edge_iter().any(|e| {
+        let points=e.curve();
+        points.len()<2 || points.len()>MAX_EDGE_POINTS || points.iter().any(|p|!p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite())
+    }) { return None; }
+    let cap=face_cap(shell.len());
+    let create=|face: &Face<Point3, PolylineCurve, S>| {
+        shell_create_polygon(&face.surface(),face.absolute_boundaries().clone(),face.orientation(),tol,by_search_nearest_parameter,cap)
+    };
+    #[cfg(not(target_arch="wasm32"))]
+    let result=shell.face_par_iter().map(create).collect();
+    #[cfg(target_arch="wasm32")]
+    let result=shell.face_iter().map(create).collect();
+    Some(result)
 }
 
 /// Tessellates faces
@@ -978,9 +1000,9 @@ pub(super) fn face_cap(faces: usize) -> usize {
 /// bisection depth of 24; a midpoint that does not evaluate (NaN) counts as flat (truck's
 /// version recursed on it 100 levels deep, which never finishes). A piece within the chord
 /// tolerance is still halved while it turns more than the deflection's angle.
-fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64, f64), d: Deflection) -> PolylineCurve {
+pub fn bounded_curve_parameters<C: PolylineableCurve>(curve: &C, range: (f64, f64), d: Deflection) -> Vec<f64> {
     let (tol, turn2) = (d.chord, d.turn2());
-    let mut out = vec![curve.subs(range.0)];
+    let mut out = vec![range.0];
     let mut stack: Vec<(f64, f64, usize)> = vec![(range.0, range.1, 0)];
     while let Some((a, b, depth)) = stack.pop() {
         let (pa, pb) = (curve.subs(a), curve.subs(b));
@@ -992,14 +1014,18 @@ fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64, f64), d: Defle
         let flat = !(d2 >= tol * tol || dm >= tol * tol);
         let flat = flat && !d.turns(turn2, d2.max(dm), pa.distance2(pb));
         if flat || depth >= 24 || out.len() + stack.len() >= MAX_EDGE_POINTS {
-            out.push(pb);
+            out.push(b);
         } else {
             // Right half after the left one (stack order).
             stack.push((tm, b, depth + 1));
             stack.push((a, tm, depth + 1));
         }
     }
-    PolylineCurve(out)
+    out
+}
+
+fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64,f64), d: Deflection) -> PolylineCurve {
+    PolylineCurve(bounded_curve_parameters(curve,range,d).into_iter().map(|t|curve.subs(t)).collect())
 }
 
 /// SolidCraft: truck's surface division, bounded: stops refining when the grid would exceed

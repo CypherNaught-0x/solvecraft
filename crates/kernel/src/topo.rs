@@ -268,10 +268,12 @@ fn tangent_patches(a: &truck_modeling::Surface, b: &truck_modeling::Surface, edg
                 && p.control_points().iter().all(|r| r.len() <= 96))
     };
     let cylinder = |s: &truck_modeling::Surface| {
+        // Knot insertion and trimming can leave several quadratic spans on
+        // the same cylindrical strip (a full circle has nine controls).
         matches!(s, truck_modeling::Surface::NurbsSurface(p)
             if matches!(p.degrees(), (2, 1) | (1, 2))
-                && p.control_points().len() <= 3
-                && p.control_points().iter().all(|r| r.len() <= 3))
+                && p.control_points().len() <= 9
+                && p.control_points().iter().all(|r| r.len() <= 9))
     };
     if !((patch(a) && (patch(b) || cylinder(b))) || (patch(b) && cylinder(a))) {
         return false;
@@ -748,13 +750,16 @@ mod seam_tests {
 
     #[test]
     fn transition_cylinder_join_requires_coincident_tangent_planes() {
-        let cylinder = mt::Surface::NurbsSurface(mt::NurbsSurface::new(mt::BSplineSurface::new(
+        let mut controls = mt::BSplineSurface::new(
             (mt::KnotVec::bezier_knot(2), mt::KnotVec::bezier_knot(1)),
             [(1.0, 0.0, 1.0), (1.0, 1.0, 0.5_f64.sqrt()), (0.0, 1.0, 1.0)]
                 .into_iter()
                 .map(|(x, y, w)| [0.0, 1.0].into_iter().map(|z| mt::Vector4::new(x * w, y * w, z * w, w)).collect())
                 .collect(),
-        )));
+        );
+        let cylinder = mt::Surface::NurbsSurface(mt::NurbsSurface::new(controls.clone()));
+        controls.add_uknot(0.25).add_uknot(0.5).add_uknot(0.75);
+        let subdivided = mt::Surface::NurbsSurface(mt::NurbsSurface::new(controls));
         let a = mt::Point3::new(1.0, 0.0, 0.0);
         let b = mt::Point3::new(1.0, 0.0, 1.0);
         let edge = mt::Edge::try_new(&mt::builder::vertex(a), &mt::builder::vertex(b), mt::Curve::Line(mt::Line(a, b))).unwrap();
@@ -774,10 +779,12 @@ mod seam_tests {
                     .collect();
                 mt::Surface::BSplineSurface(mt::BSplineSurface::new((knots.clone(), knots), controls))
             };
-            assert!(tangent_patches(&patch(0.0, 0.0), &cylinder, &edge, 1e-6));
-            assert!(tangent_patches(&cylinder, &patch(0.0, 0.0), &edge, 1e-6));
-            assert!(!tangent_patches(&patch(0.02, 0.0), &cylinder, &edge, 1e-6));
-            assert!(!tangent_patches(&patch(0.0, 0.01), &cylinder, &edge, 1e-6));
+            for cylinder in [&cylinder, &subdivided] {
+                assert!(tangent_patches(&patch(0.0, 0.0), cylinder, &edge, 1e-6));
+                assert!(tangent_patches(cylinder, &patch(0.0, 0.0), &edge, 1e-6));
+                assert!(!tangent_patches(&patch(0.02, 0.0), cylinder, &edge, 1e-6));
+                assert!(!tangent_patches(&patch(0.0, 0.01), cylinder, &edge, 1e-6));
+            }
         }
     }
 

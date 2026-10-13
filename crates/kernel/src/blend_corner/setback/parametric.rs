@@ -173,6 +173,14 @@ pub(crate) fn fit(
                 let (p, normal) = sample(side, t)?;
                 let (bu, du, ddu) = basis(&knots, u, n)?;
                 let (bv, dv, ddv) = basis(&knots, v, n)?;
+                // Boundary controls remain fixed during the height fit. Reject
+                // an insufficient boundary grid before assembling and solving
+                // its much larger curvature system; no interior solve can
+                // repair this positional error.
+                let fixed_height = tensor(&bu, &bv, 1.0, 0.0).entries.iter().map(|(i, w)| cz[*i] * *w).sum::<f64>();
+                if (origin + project(&bu, &bv) + z * fixed_height).dist(p) >= tol {
+                    return Err(unsupported("parametric boundary grid is too coarse"));
+                }
                 rows.push(tensor(&bu, &bv, 10000.0, (p - origin).dot(z)));
                 if normal != Vec3::ZERO {
                     if !normal.dot(z).is_finite() || normal.dot(z) < 1e-3 {
@@ -243,26 +251,59 @@ pub(crate) fn fit(
                 // Fade the positional guide at constrained boundaries, where
                 // the neighboring face already determines position and tangent.
                 let fade = (16.0 * u * (1.0 - u) * v * (1.0 - v)).powi(2);
-                rows.push(tensor(&bu, &bv, 1.25 * fade, target.dot(z)));
+                // These discrete radial samples are only a shape hint. A
+                // strong positional fit makes a narrow shoulder oscillate
+                // between the samples and its exact tangent boundary.
+                rows.push(tensor(&bu, &bv, 0.01 * fade, target.dot(z)));
             }
         }
-        for i in 1..2 * n {
-            for j in 1..2 * n {
-                let u = i as f64 / (2 * n) as f64;
-                let v = j as f64 / (2 * n) as f64;
-                let (bu, du, ddu) = basis(&knots, u, n)?;
-                let (bv, dv, ddv) = basis(&knots, v, n)?;
+        // Collapsed corner charts need quadrature inside every knot span.
+        // The regular-chart grid misses the ends of their clamped spans,
+        // allowing a narrow ridge beside an otherwise tangent boundary. Use
+        // four-point Gauss integration within spans and eight at the ends,
+        // where the collapsed physical map needs closer sampling.
+        let quadrature: Vec<_> = if tips.is_empty() {
+            (1..2 * n).map(|i| (i as f64 / (2 * n) as f64, 1.0 / (2 * n) as f64)).collect()
+        } else {
+            (0..n - 5)
+                .flat_map(|span| {
+                    let samples: &[(f64, f64)] = if span == 0 || span == n - 6 {
+                        &[
+                            (-0.9602898564975363, 0.1012285362903763),
+                            (-0.7966664774136267, 0.2223810344533745),
+                            (-0.525_532_409_916_329, 0.3137066458778873),
+                            (-0.1834346424956498, 0.362_683_783_378_362),
+                            (0.1834346424956498, 0.362_683_783_378_362),
+                            (0.525_532_409_916_329, 0.3137066458778873),
+                            (0.7966664774136267, 0.2223810344533745),
+                            (0.9602898564975363, 0.1012285362903763),
+                        ]
+                    } else {
+                        &[
+                            (-0.8611363115940526, 0.3478548451374538),
+                            (-0.3399810435848563, 0.6521451548625461),
+                            (0.3399810435848563, 0.6521451548625461),
+                            (0.8611363115940526, 0.3478548451374538),
+                        ]
+                    };
+                    samples.iter().map(move |&(t, w)| ((span as f64 + (t + 1.0) * 0.5) * h, w * h * 0.5))
+                })
+                .collect()
+        };
+        let quadrature = quadrature.into_iter().map(|(t, w)| Ok((basis(&knots, t, n)?, w))).collect::<Result<Vec<_>>>()?;
+        for ((bu, du, ddu), wu) in &quadrature {
+            for ((bv, dv, ddv), wv) in &quadrature {
                 let derivatives =
-                    [project(&du, &bv), project(&bu, &dv), project(&ddu, &bv), project(&du, &dv), project(&bu, &ddv)].map(|p| [p.dot(x), p.dot(y)]);
+                    [project(du, bv), project(bu, dv), project(ddu, bv), project(du, dv), project(bu, ddv)].map(|p| [p.dot(x), p.dot(y)]);
                 let (area, weights) = physical_curvature_weights(derivatives).ok_or_else(|| unsupported("singular smoothing map"))?;
-                let w = (if singular.iter().any(|s| *s) { 1e-4 } else { 1e-3 }) * size * area.sqrt() / (2 * n) as f64;
+                let w = (if singular.iter().any(|s| *s) { 1e-4 } else { 1e-3 }) * size * (area * wu * wv).sqrt();
                 if !singular.iter().any(|s| *s)
                     && let Some((ax, ay)) = axial
                 {
                     let directional: [f64; 5] =
                         std::array::from_fn(|k| ax * ax * weights[0][k] + 2.0 * ax * ay * weights[1][k] + ay * ay * weights[2][k]);
                     let mut entries = std::collections::BTreeMap::new();
-                    for ((aa, bb), c) in [(&ddu, &bv), (&du, &dv), (&bu, &ddv), (&du, &bv), (&bu, &dv)].into_iter().zip(directional) {
+                    for ((aa, bb), c) in [(ddu, bv), (du, dv), (bu, ddv), (du, bv), (bu, dv)].into_iter().zip(directional) {
                         for (index, value) in tensor(aa, bb, c * w * 3.0, 0.0).entries {
                             *entries.entry(index).or_insert(0.0) += value;
                         }
@@ -273,7 +314,7 @@ pub(crate) fn fit(
                 // physical projected coordinates, not derivatives of that chart.
                 for ([a, b, c, cu, cv], factor) in weights.into_iter().zip([1.0, 2.0_f64.sqrt(), 1.0]) {
                     let mut entries = std::collections::BTreeMap::new();
-                    for (aa, bb, coefficient) in [(&ddu, &bv, a), (&du, &dv, b), (&bu, &ddv, c), (&du, &bv, cu), (&bu, &dv, cv)] {
+                    for (aa, bb, coefficient) in [(ddu, bv, a), (du, dv, b), (bu, ddv, c), (du, bv, cu), (bu, dv, cv)] {
                         for (index, value) in tensor(aa, bb, coefficient * w * factor, 0.0).entries {
                             *entries.entry(index).or_insert(0.0) += value;
                         }
@@ -646,11 +687,14 @@ fn solve_qr(rows: &[Row], count: usize) -> Result<Vec<f64>> {
             let radius = a.hypot(b);
             let c = a / radius;
             let s = b / radius;
-            for (j, work) in work.iter_mut().enumerate().take(last.min(i + width) + 1).skip(i) {
-                let slot = i * stride + j - i;
-                let a = matrix[slot];
-                let b = *work;
-                matrix[slot] = c * a + s * b;
+            // Work on matching contiguous slices. Indexing the band through
+            // an enumerated full work vector retained a bounds check on every
+            // coefficient in this (billions-of-updates) fitting hot loop.
+            let end = last.min(i + width) + 1;
+            let band = &mut matrix[i * stride..i * stride + end - i];
+            for (slot, work) in band.iter_mut().zip(&mut work[i..end]) {
+                let (a, b) = (*slot, *work);
+                *slot = c * a + s * b;
                 *work = -s * a + c * b;
             }
             let a = rhs[i];

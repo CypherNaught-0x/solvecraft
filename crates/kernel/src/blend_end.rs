@@ -4,7 +4,7 @@
 use crate::blend::{plane_normal, unsupported, vtx};
 use crate::body::{Solid, from_p3, p3};
 use crate::{KernelError, Result};
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 use std::collections::HashMap;
 use truck_modeling::{
     self as mt, BoundedCurve, Cut, Invertible, ParameterDivision1D, ParametricCurve, ParametricSurface3D, SearchNearestParameter, builder,
@@ -224,15 +224,15 @@ pub(crate) fn can_trim(solid: &Solid, edge: &mt::Edge) -> bool {
         && solid.face_iter().filter(|f| f.edge_iter().any(|e| e.id() == edge.id())).all(|f| plane_normal(f).is_some())
 }
 
-pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> Result<Solid> {
+pub(crate) fn fillet_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> Result<(Solid, crate::record::Rebuild)> {
     fillet_one_impl(solid, edge, size, r, false)
 }
 
-pub(crate) fn with_transitions(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> Result<Solid> {
+pub(crate) fn with_transitions(solid: &Solid, edge: &mt::Edge, size: f64, r: f64) -> Result<(Solid, crate::record::Rebuild)> {
     fillet_one_impl(solid, edge, size, r, true)
 }
 
-fn fillet_one_impl(solid: &Solid, edge: &mt::Edge, size: f64, r: f64, transitions: bool) -> Result<Solid> {
+fn fillet_one_impl(solid: &Solid, edge: &mt::Edge, size: f64, r: f64, transitions: bool) -> Result<(Solid, crate::record::Rebuild)> {
     if !(r.is_finite() && r > 0.0 && (size * 4.0).is_finite() && size > 0.0) {
         return Err(KernelError::Invalid("fillet radius and body size must be finite and positive".into()));
     }
@@ -288,7 +288,7 @@ fn fillet_one_impl(solid: &Solid, edge: &mt::Edge, size: f64, r: f64, transition
     // Extensions through a reflex endpoint must not escape the part. The
     // original vertex envelope is conservative for curved outer boundaries;
     // refusing those cases is preferable to creating an exterior protrusion.
-    let mut bounds = solvecraft_geom::Aabb3::EMPTY;
+    let mut bounds = solidcraft_geom::Aabb3::EMPTY;
     for v in solid.vertex_iter() {
         bounds.add(vtx(&v));
     }
@@ -454,6 +454,8 @@ fn fillet_one_impl(solid: &Solid, edge: &mt::Edge, size: f64, r: f64, transition
         }
     }
     let (la, lb) = (builder::line(a0, a1), builder::line(b0, b1));
+    let mut rec = crate::record::Rebuild::default();
+    rec.pieces(&subst);
     let mut out = Vec::new();
     for (i, f) in faces.iter().enumerate() {
         let mut sub = subst.clone();
@@ -468,6 +470,8 @@ fn fillet_one_impl(solid: &Solid, edge: &mt::Edge, size: f64, r: f64, transition
         if i == fa || i == fb || !caps.is_empty() {
             uncrossed(&rebuilt, tol)?;
         }
+        rec.face(&rebuilt, f);
+        rec.pieces(&sub);
         out.push(rebuilt);
     }
     let mut es: Vec<_> = c0.iter().map(|(_, e)| e.clone()).collect();
@@ -491,19 +495,22 @@ fn fillet_one_impl(solid: &Solid, edge: &mt::Edge, size: f64, r: f64, transition
             surf = mt::Invertible::inverse(&surf);
         }
     }
-    out.push(mt::Face::try_new(vec![wire], surf).map_err(|e| KernelError::Failed(format!("fillet cylinder: {e}")))?);
+    let cylinder = mt::Face::try_new(vec![wire], surf).map_err(|e| KernelError::Failed(format!("fillet cylinder: {e}")))?;
+    rec.blend(&cylinder, [edge.id()]);
+    out.push(cylinder);
     for (at_start, mut patch) in patches {
         if at_start != forward {
             patch = mt::Face::try_new(patch.boundaries().iter().map(|w| w.inverse()).collect(), patch.oriented_surface())
                 .map_err(|e| KernelError::Failed(format!("transition orientation: {e}")))?;
         }
+        rec.blend(&patch, [edge.id()]);
         out.push(patch);
     }
     let mut shells = solid.boundaries().clone();
     if let Some(sh) = shells.get_mut(si) {
         *sh = out.into();
     }
-    Solid::try_new(shells).map_err(|e| KernelError::Failed(format!("fillet endpoints: {e}")))
+    Solid::try_new(shells).map(|s| (s, rec)).map_err(|e| KernelError::Failed(format!("fillet endpoints: {e}")))
 }
 
 #[cfg(test)]
@@ -511,7 +518,7 @@ mod tests {
     use super::*;
     use crate::{Body, BoolOp};
     use mt::ParametricSurface;
-    use solvecraft_geom::{Loop2, Plane, Vec2};
+    use solidcraft_geom::{Loop2, Plane, Vec2};
 
     fn basin(fall: bool) -> Body {
         let rect = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
@@ -927,7 +934,12 @@ mod tests {
                 let patch = |f: &&mt::Face| matches!(f.surface(), mt::Surface::BSplineSurface(s) if matches!(s.degrees(),(3,3)|(5,5)));
                 let cylinder = |f: &&mt::Face| matches!(f.surface(), mt::Surface::NurbsSurface(s) if matches!(s.degrees(),(2,1)|(1,2)));
                 if adjacent.len() == 2 && adjacent.iter().any(patch) && adjacent.iter().all(|f| patch(f) || cylinder(f)) {
-                    assert!(mesh.seams[index], "a smooth transition join is still drawn");
+                    assert!(
+                        !mesh.shaded_edge_visible(index),
+                        "a smooth transition join is still drawn: edge {index}, {:?} to {:?}",
+                        edge.front().point(),
+                        edge.back().point()
+                    );
                     joins += 1;
                 }
                 index += 1;
@@ -948,6 +960,12 @@ mod tests {
                     continue;
                 }
                 for p in edge.iter().skip(1).take(edge.len().saturating_sub(2)) {
+                    // Very close samples can be merged into the singular
+                    // endpoint by the triangulator. That display vertex has a
+                    // direction-dependent normal; test the regular seam.
+                    if edge.first().into_iter().chain(edge.last()).any(|end| p.dist(*end) < b.size() * 1e-6) {
+                        continue;
+                    }
                     let normals: Vec<_> = [a, b2]
                         .into_iter()
                         .map(|face| {
