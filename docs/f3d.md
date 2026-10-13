@@ -2199,3 +2199,35 @@ That expectation now requires the branch's healthy finite-union attachment, and
 the focused stacked-face tests pass. Other suites pass: 353 kernel, 148 document,
 166 I/O, 177 sketch, 413 UI and 86 UI scenarios. The imported two-group chamfer was
 rendered in isometric and top views; the two independent setbacks are visible.
+
+
+### Asymmetric native chamfer orientation
+
+The ordered cyclic face incidence at each endpoint identifies the primary native
+setback face. The two endpoints must have opposite orientation. Reconstructing
+that face through the explicit producer label table and the exact oriented
+surface normal translates the native flip into SolidCraft's face convention.
+Sorting incident face labels or using their registration order does not preserve
+this information.
+
+Two-distance and distance/angle chamfers now reconstruct on orthogonal planar
+edges of supported independent line-profile extrusions. Twenty-four original
+controls pass analytic triangular-prism volume and centroid checks, including
+setback, angle and source-height edits, suppression, reopening and undo. Another
+288 local controls cover all twelve edges in XY, YZ and XZ sketches, both rectangle
+creation orders, both modes and flipped sides. Their reconstructed volumes and
+centroids agree with the independent local measurements. A permanent authored
+schema test covers every cyclic endpoint permutation and rejects inconsistent
+orientation. The previously documented asymmetric rejection is superseded for
+this verified subset.
+
+Nonorthogonal edges and a single native group whose edges require different
+SolidCraft flip values still reject explicitly. No source archive or native
+measurement is committed. General native F3D import remains incomplete.
+
+Validation: all 780 engine, 353 kernel, 167 I/O, 148 document, 177 sketch,
+413 UI and 86 UI scenario tests pass, along with the 128 saved histories.
+The HardEdgeBasin opening guard passes in 0.98 seconds. Formatting, clippy,
+assets, licenses, layers and WASM pass. The localhost socket test requires
+socket access outside the sandbox and passes there. All three local native
+chamfer groups and both native fillet groups pass after the orientation change.

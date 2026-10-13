@@ -145,12 +145,13 @@ impl Design {
                 face.anchor(&doc, &projection_model.state(), id, &contributions)
             };
             let import_edges = |container,
+                                native_flip: Option<bool>,
                                 body: &mut Option<String>,
                                 edges: &mut Vec<Vec3>,
                                 operation_owners: &mut Option<BTreeMap<u64, u64>>,
                                 projection_model: &mut solidcraft_doc::Model,
                                 new_edge_names: &mut Vec<String>|
-             -> Result<usize> {
+             -> Result<(usize, bool)> {
                 if operation_owners.is_none() {
                     *operation_owners = Some(self.operation_owners()?);
                 }
@@ -165,6 +166,7 @@ impl Design {
                 if !(1..=64).contains(&count) || edges.len() + count > 1000 {
                     return Err(invalid("invalid blend edge count"));
                 }
+                let mut resolved_flip = None;
                 for object in objects {
                     let edge = super::fillets::edge(&records, &classes, object, f.id)?;
                     if owners.get(&edge.operation) != Some(&edge.feature) {
@@ -199,6 +201,39 @@ impl Design {
                         };
                         face_names.insert(*label, name);
                     }
+                    if let Some(native_flip) = native_flip {
+                        let primary = super::chamfers::primary_face(&edge)?;
+                        let names = solidcraft_doc::naming::face_names(target);
+                        let mut normals = Vec::new();
+                        for label in &edge.faces {
+                            let expected = face_names.get(label).ok_or_else(|| invalid("missing chamfer side identity"))?;
+                            let matches: Vec<_> =
+                                names.iter().enumerate().filter(|(_, name)| solidcraft_doc::naming::strip_piece(name) == expected).collect();
+                            let [(index, _)] = matches.as_slice() else {
+                                return Err(invalid("ambiguous chamfer side identity"));
+                            };
+                            normals.push((
+                                *label,
+                                target.body.planar_face(*index).ok_or_else(|| invalid("nonplanar asymmetric chamfer face"))?.normal(),
+                            ));
+                        }
+                        let [(a, na), (_, nb)] = normals.as_slice() else {
+                            return Err(invalid("missing chamfer side planes"));
+                        };
+                        if na.dot(*nb).abs() > 1e-8 {
+                            return Err(invalid("nonorthogonal native asymmetric chamfers are not supported yet"));
+                        }
+                        let up = Vec3::new(1e-6, 1e-3, 1.);
+                        let score = na.dot(up) - nb.dot(up);
+                        if score.abs() < 1e-12 {
+                            return Err(invalid("ambiguous asymmetric chamfer face ranking"));
+                        }
+                        let flip = ((primary == *a) != (score > 0.)) ^ native_flip;
+                        if resolved_flip.is_some_and(|old| old != flip) {
+                            return Err(invalid("mixed native chamfer face orientations within one group are not supported yet"));
+                        }
+                        resolved_flip = Some(flip);
+                    }
                     let adjacent = edge
                         .faces
                         .iter()
@@ -228,7 +263,7 @@ impl Design {
                     edges.push((*start + *end) * 0.5);
                     new_edge_names.push(selected.clone());
                 }
-                Ok(count)
+                Ok((count, resolved_flip.unwrap_or(false)))
             };
             let kind = match f.kind {
                 HistoryKind::Chamfer { sets } => {
@@ -237,23 +272,32 @@ impl Design {
                     let mut groups = Vec::new();
                     let mut dimensions = BTreeSet::new();
                     for set in &sets {
-                        if set.distance2.is_some() || set.angle.is_some() || set.flip {
-                            return Err(invalid("asymmetric native chamfer face orientation is not supported yet"));
+                        let parameter = |binding, label, kind| -> Result<String> {
+                            let p = bindings.get(&binding).ok_or_else(|| invalid("missing chamfer parameter"))?;
+                            if p.owner != Some(f.id) || p.label != label || Kind::from_unit(&p.display_unit) != kind {
+                                return Err(invalid("invalid chamfer parameter role or ownership"));
+                            }
+                            Ok(p.name.clone())
+                        };
+                        let distance = parameter(set.distance, if set.distance2.is_some() { "Distance 1" } else { "Distance" }, Kind::Length)?;
+                        let distance2 = set.distance2.map(|b| parameter(b, "Distance 2", Kind::Length)).transpose()?;
+                        let angle = set.angle.map(|b| parameter(b, "Rotate Angle", Kind::Angle)).transpose()?;
+                        for binding in [Some(set.distance), set.distance2, set.angle].into_iter().flatten() {
+                            if !dimensions.insert(binding) {
+                                return Err(invalid("chamfer groups reuse a dimension binding"));
+                            }
                         }
-                        let distance = length_parameter(&bindings, set.distance)?;
-                        if distance.owner != Some(f.id) || distance.label != "Distance" || !dimensions.insert(set.distance) {
-                            return Err(invalid("invalid chamfer distance ownership"));
-                        }
-                        let count =
-                            import_edges(set.container, &mut body, &mut edges, &mut operation_owners, &mut projection_model, &mut new_edge_names)?;
-                        groups.push(solidcraft_doc::ChamferGroup {
-                            count,
-                            distance: distance.name.clone(),
-                            distance2: None,
-                            angle: None,
-                            flip: false,
-                            tangent_chain: set.tangent_chain,
-                        });
+                        let asymmetric = distance2.is_some() || angle.is_some();
+                        let (count, flip) = import_edges(
+                            set.container,
+                            asymmetric.then_some(set.flip),
+                            &mut body,
+                            &mut edges,
+                            &mut operation_owners,
+                            &mut projection_model,
+                            &mut new_edge_names,
+                        )?;
+                        groups.push(solidcraft_doc::ChamferGroup { count, distance, distance2, angle, flip, tangent_chain: set.tangent_chain });
                     }
                     if groups.is_empty() {
                         return Err(invalid("missing chamfer group"));
@@ -262,9 +306,9 @@ impl Design {
                     FeatureKind::Chamfer {
                         edges,
                         distance: first.distance,
-                        distance2: None,
-                        angle: None,
-                        flip: false,
+                        distance2: first.distance2,
+                        angle: first.angle,
+                        flip: first.flip,
                         tangent_chain: first.tangent_chain,
                         groups,
                         body,
@@ -290,8 +334,15 @@ impl Design {
                         if !radius_bindings.insert(set.radius) {
                             return Err(invalid("fillet groups reuse a radius binding"));
                         }
-                        let count =
-                            import_edges(set.container, &mut body, &mut edges, &mut operation_owners, &mut projection_model, &mut new_edge_names)?;
+                        let (count, _) = import_edges(
+                            set.container,
+                            None,
+                            &mut body,
+                            &mut edges,
+                            &mut operation_owners,
+                            &mut projection_model,
+                            &mut new_edge_names,
+                        )?;
                         if index == 0 {
                             primary_radius = Some(radius.name.clone());
                         } else {

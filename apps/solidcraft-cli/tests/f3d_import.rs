@@ -67,23 +67,67 @@ fn chamfers_preserve_equal_distance_groups_and_source_edits() {
 
 #[test]
 #[ignore = "requires local native asymmetric chamfer controls"]
-fn native_asymmetric_chamfers_are_inspectable_without_guessing_face_orientation() {
-    use solidcraft_engine::io::f3d::{HistoryKind, read_f3d};
+fn native_asymmetric_chamfers_preserve_setbacks_angles_and_edits() {
+    use solidcraft_engine::doc::Document;
     let dir = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
     for mode in ["two", "two-flipped", "angle", "angle-flipped"] {
+        let check = |s: &mut Session, distance: f64, second: f64, angle: f64, height: f64, suppressed: bool| {
+            let other = if mode.starts_with("two") { second } else { distance * angle.to_radians().tan() };
+            let (x, y) = if mode.ends_with("flipped") { (distance, other) } else { (other, distance) };
+            let removed = if suppressed { 0. } else { x * y * height / 2. };
+            let base = 600. * height;
+            let expected = base - removed;
+            let m = volume(s, expected / 1000., mode);
+            assert!((m["total"]["volume_mm3"].as_f64().unwrap() - expected).abs() < 0.01, "{mode}");
+            for (axis, (center, cut_center)) in [(10., x / 3.), (15., y / 3.), (height / 2., height / 2.)].into_iter().enumerate() {
+                let want = (base * center - removed * cut_center) / expected;
+                assert!((m["bodies"][0]["center_of_mass"][axis].as_f64().unwrap() - want).abs() < 1e-6, "{mode} axis {axis}");
+            }
+            assert!(s.model.results.iter().all(|r| r.warning.is_none()));
+        };
         for suffix in ["baseline", "distance4", "height50", "suppressed", "restored", if mode.starts_with("two") { "second5" } else { "angle60" }] {
-            let bytes = std::fs::read(dir.join(format!("chamfer-{mode}-{suffix}.f3d"))).unwrap();
-            let design = read_f3d(&bytes).unwrap().remove(0);
-            let h = design.history().unwrap();
-            let HistoryKind::Chamfer { sets } = &h[2].kind else {
-                panic!("chamfer schema");
-            };
-            assert_eq!(sets.len(), 1);
-            assert_eq!(sets[0].flip, mode.ends_with("flipped"));
-            assert_eq!(sets[0].angle.is_some(), mode.starts_with("angle"));
-            assert_eq!(sets[0].distance2.is_some(), mode.starts_with("two"));
-            assert_eq!(sets[0].suppressed, suffix == "suppressed");
-            assert!(design.to_document("test").unwrap_err().to_string().contains("face orientation"));
+            let mut session = Session::default();
+            session
+                .execute("doc.open", &json!({"path":dir.join(format!("chamfer-{mode}-{suffix}.f3d"))}))
+                .unwrap_or_else(|e| panic!("{mode}/{suffix}: {e}"));
+            let d = if suffix == "distance4" { 4. } else { 2. };
+            let other = if suffix == "second5" { 5. } else { 3. };
+            let a = if suffix == "angle60" { 60. } else { 30. };
+            let h = if suffix == "height50" { 50. } else { 40. };
+            check(&mut session, d, other, a, h, suffix == "suppressed");
+            if suffix == "baseline" {
+                let original = session.doc.to_json();
+                for (name, value, d, other, a, h) in [
+                    ("d3", "4 mm", 4., 3., 30., 40.),
+                    ("d4", if mode.starts_with("two") { "5 mm" } else { "60 deg" }, 2., 5., 60., 40.),
+                    ("d1", "50 mm", 2., 3., 30., 50.),
+                ] {
+                    session.execute("parameters.change", &json!({"name":name,"expression":value})).unwrap();
+                    check(&mut session, d, other, a, h, false);
+                    check(&mut Session::new(Document::from_json(&session.doc.to_json()).unwrap()), d, other, a, h, false);
+                    session.execute("edit.undo", &json!({})).unwrap();
+                    assert_eq!(session.doc.to_json(), original);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires local rotated and reordered chamfer controls"]
+fn native_asymmetric_chamfer_orientation_matches_every_edge_in_reordered_frames() {
+    let dir = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
+    let measurements: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-chamfer-frame-measurements.json")).unwrap()).unwrap();
+    assert_eq!(measurements.as_object().unwrap().len(), 288);
+    for (name, expected) in measurements.as_object().unwrap() {
+        let mut s = Session::default();
+        s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let m = volume(&mut s, expected["volume_cm3"].as_f64().unwrap(), name);
+        assert!((m["total"]["volume_mm3"].as_f64().unwrap() - expected["volume_cm3"].as_f64().unwrap() * 1000.).abs() < 0.01, "{name}");
+        for axis in 0..3 {
+            let actual = m["bodies"][0]["center_of_mass"][axis].as_f64().unwrap();
+            let want = expected["centers_cm"][0][axis].as_f64().unwrap() * 10.;
+            assert!((actual - want).abs() < 1e-6, "{name} axis {axis}: {actual} vs {want}");
         }
     }
 }

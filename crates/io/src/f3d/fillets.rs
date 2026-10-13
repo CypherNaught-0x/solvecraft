@@ -85,6 +85,7 @@ pub(super) struct Edge {
     pub operation: u64,
     pub faces: [u32; 2],
     pub labels: Vec<u32>,
+    pub endpoint_cycles: [[u32; 3]; 2],
 }
 
 pub(super) fn edge(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<Edge> {
@@ -94,7 +95,7 @@ pub(super) fn edge(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u
     let identity = r.reference()?;
     require_class(classes, identity, "7ACC2A03-0261-4879-A14A-A93D661A5BDC", 3)?;
     let mut recipe = payload(records.primary(identity)?, identity)?;
-    let (operation, labels) = edge_recipe(&mut recipe)?;
+    let (operation, labels, endpoint_cycles) = edge_recipe(&mut recipe)?;
     if r.u32()? != 1 {
         return Err(invalid("unsupported fillet edge source count"));
     }
@@ -113,12 +114,13 @@ pub(super) fn edge(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u
     let handle = super::loft_faces::selector_tail(&mut r, records, owner)?;
     let feature = super::loft_faces::producer(records, classes, handle)?;
     let faces = [*labels.first().ok_or_else(|| invalid("missing fillet face"))?, *labels.get(1).ok_or_else(|| invalid("missing fillet face"))?];
-    Ok(Edge { feature, operation, faces, labels })
+    Ok(Edge { feature, operation, faces, labels, endpoint_cycles })
 }
 
 // Two incident faces and two endpoint faces. The ordered incidence branches
 // validate the selected edge; face labels are resolved through the producer table.
-fn edge_recipe(r: &mut Reader<'_>) -> Result<(u64, Vec<u32>)> {
+type EdgeRecipe = (u64, Vec<u32>, [[u32; 3]; 2]);
+fn edge_recipe(r: &mut Reader<'_>) -> Result<EdgeRecipe> {
     zeros(r, 6)?;
     for n in [1, 3, 4] {
         if r.u32()? != n {
@@ -156,13 +158,15 @@ fn edge_recipe(r: &mut Reader<'_>) -> Result<(u64, Vec<u32>)> {
             return Err(invalid("invalid fillet edge face incidence"));
         }
     }
-    for end in [2, 3] {
+    let mut endpoint_cycles = [[0; 3]; 2];
+    for (end, cycle) in [2, 3].into_iter().zip(&mut endpoint_cycles) {
         if r.u32()? != u32::MAX || r.u32()? != 3 {
             return Err(invalid("invalid fillet edge endpoint"));
         }
         let mut terms = BTreeSet::new();
-        for _ in 0..3 {
-            if !terms.insert(r.u32()?) || r.u32()? != u32::MAX {
+        for term in cycle {
+            *term = r.u32()?;
+            if !terms.insert(*term) || r.u32()? != u32::MAX {
                 return Err(invalid("invalid fillet edge endpoint incidence"));
             }
         }
@@ -175,7 +179,7 @@ fn edge_recipe(r: &mut Reader<'_>) -> Result<(u64, Vec<u32>)> {
         return Err(invalid("unsupported fillet edge tracking"));
     }
     finish(r)?;
-    Ok((operation.ok_or_else(|| invalid("missing fillet operation"))?, labels))
+    Ok((operation.ok_or_else(|| invalid("missing fillet operation"))?, labels, endpoint_cycles))
 }
 
 #[cfg(test)]
@@ -287,7 +291,7 @@ mod tests {
     fn edge_incidence_accepts_explicit_nonordinal_labels_and_rejects_wrong_ownership() {
         let parse = |b: &[u8]| edge_recipe(&mut Reader { bytes: b, at: 0 });
         let b = recipe();
-        assert_eq!(parse(&b).unwrap(), (8001, vec![19, 42, 1, 2]));
+        assert_eq!(parse(&b).unwrap(), (8001, vec![19, 42, 1, 2], [[1, 0, 2], [1, 3, 0]]));
         for keep in 0..b.len() {
             assert!(parse(&b[..keep]).is_err(), "{keep}");
         }
@@ -339,7 +343,10 @@ mod tests {
             let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
             edge(&Records::new(&d), &classes, 301, owner)
         };
-        assert_eq!(resolve(authored_edge(), 19).unwrap(), Edge { feature: 9, operation: 8001, faces: [19, 42], labels: vec![19, 42, 1, 2] });
+        assert_eq!(
+            resolve(authored_edge(), 19).unwrap(),
+            Edge { feature: 9, operation: 8001, faces: [19, 42], labels: vec![19, 42, 1, 2], endpoint_cycles: [[1, 0, 2], [1, 3, 0]] }
+        );
         assert!(resolve(authored_edge(), 9).is_err());
         for id in [80, 301, 302] {
             for keep in 0..authored_edge().0[&id].2.len() {

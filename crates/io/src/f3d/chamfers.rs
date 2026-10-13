@@ -117,11 +117,48 @@ pub(super) fn inputs(
     Ok(sets)
 }
 
+// Cyclic incidence at the two endpoints distinguishes the primary setback face.
+// A face-label sort or geometric edge-cache point loses this orientation.
+pub(super) fn primary_face(edge: &super::fillets::Edge) -> Result<u32> {
+    let forward = |cycle: &[u32; 3]| -> Result<bool> {
+        let zero = cycle.iter().position(|n| *n == 0).ok_or_else(|| invalid("missing chamfer incident face"))?;
+        Ok(cycle.get((zero + 1) % 3) == Some(&1))
+    };
+    let [a, b] = &edge.endpoint_cycles;
+    let first = forward(a)?;
+    if first == forward(b)? {
+        return Err(invalid("inconsistent chamfer endpoint orientation"));
+    }
+    edge.faces.get(usize::from(first)).copied().ok_or_else(|| invalid("missing primary chamfer face"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::f3d::import_tests::{Fixture, common, fixture};
     use crate::f3d::relationship_tests::{reference, refs, u32, u64};
+
+    #[test]
+    fn endpoint_cycles_preserve_primary_face_through_rotations_and_reject_inconsistent_orientation() {
+        for (cycle, expected) in [([0, 1, 2], 42), ([1, 2, 0], 42), ([2, 0, 1], 42), ([0, 2, 1], 19), ([2, 1, 0], 19), ([1, 0, 2], 19)] {
+            let mut other = cycle.map(|n| if n == 2 { 3 } else { n });
+            other.swap(0, 1);
+            for rotation in 0..3 {
+                let mut second = other;
+                second.rotate_left(rotation);
+                let mut edge = super::super::fillets::Edge {
+                    feature: 9,
+                    operation: 8001,
+                    faces: [19, 42],
+                    labels: vec![19, 42, 71, 95],
+                    endpoint_cycles: [cycle, second],
+                };
+                assert_eq!(primary_face(&edge).unwrap(), expected);
+                edge.endpoint_cycles[1].swap(0, 1);
+                assert!(primary_face(&edge).is_err());
+            }
+        }
+    }
 
     fn authored(version: u32, mode: u32, flip: bool, chain: bool, suppressed: bool) -> Fixture {
         let mut f = fixture(false);

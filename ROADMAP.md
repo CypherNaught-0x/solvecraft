@@ -356,8 +356,10 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   in format 26, including edit dialogs and feature-pattern replay. Four analytic
   group/rim fixtures bring the saved suite to 128 designs. Native equal-distance
   groups now import on independent line-profile extrusion edges, preserving
-  dimensions, chain choices and suppression. Two-distance and angle records
-  decode for inspection; their first-face orientation still blocks reconstruction.
+  dimensions, chain choices and suppression. Two-distance and angle groups also
+  import on orthogonal planar extrusion edges, resolving native face orientation
+  from endpoint cycles; 288 rotated/reordered controls validate the face mapping.
+  Nonorthogonal edges and mixed-orientation groups remain unsupported.
   More source topologies and the other native feature families remain unfinished.
 - Persistent naming follows the kernel's exact face history (docs/book/src/dev/naming.md):
   references resolve by name first, follow splits and merges, and warn when the entity split,
