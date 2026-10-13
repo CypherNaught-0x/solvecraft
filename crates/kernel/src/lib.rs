@@ -44,6 +44,7 @@ mod mesh_convert;
 mod meshbody;
 #[cfg(test)]
 mod modify_history_tests;
+mod native;
 mod numbered;
 mod offset;
 mod ops;
@@ -74,7 +75,7 @@ mod tspline;
 pub use blend::{ChamferSet, ChamferSide, chamfer, chamfer_sets, chamfer_sides, fillet, fillet_max};
 pub use blend_corner::fillet_radii;
 pub use blend_variable::{fillet_chord, fillet_variable, fillet_variable_points};
-pub use body::{Body, CapSignature, EdgeInfo, FaceInfo, FacePaint, FaceSource, Paint};
+pub use body::{Body, CapSignature, DISPLAY_ANGLE, EdgeInfo, FaceInfo, FacePaint, FaceSource, Paint};
 pub use boolean_diagnostics::{BooleanDiagnostics, BooleanFallback, BooleanStrategy, capture_boolean_diagnostics};
 pub use build::{
     PathSeg, box_solid, canonical_revolve_axis, cylinder, extrude, extrude_tapered, loft, loft_circular_chord, revolve, sphere, sweep, torus,
@@ -88,6 +89,7 @@ pub use lip::raise_band;
 pub use measure::{BodyMeasure, measure};
 pub use mesh_convert::convert_prismatic_mesh;
 pub use meshbody::{MAX_TRIANGLES, mesh_body};
+pub use native::{decode_native_body, encode_native_body, native_preview_mesh};
 pub use offset::with_same_surface;
 pub use ops::{BoolOp, boolean, can_join_touching_faces, split_by_plane, transform, transform_matrix, union_apart};
 pub use polybool::{faceted_boolean, planar_boolean};

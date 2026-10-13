@@ -144,17 +144,133 @@ impl Design {
                 }
                 face.anchor(&doc, &projection_model.state(), id, &contributions)
             };
+            let import_edges = |container,
+                                body: &mut Option<String>,
+                                edges: &mut Vec<Vec3>,
+                                operation_owners: &mut Option<BTreeMap<u64, u64>>,
+                                projection_model: &mut solidcraft_doc::Model,
+                                new_edge_names: &mut Vec<String>|
+             -> Result<usize> {
+                if operation_owners.is_none() {
+                    *operation_owners = Some(self.operation_owners()?);
+                }
+                let owners = operation_owners.as_ref().ok_or_else(|| invalid("missing blend operations"))?;
+                projection_model.evaluate(&doc);
+                if projection_model.results.iter().any(|r| r.error.is_some()) {
+                    return Err(invalid("cannot regenerate blend dependencies"));
+                }
+                let state = projection_model.state();
+                let objects = super::loft_faces::objects(&records, &classes, container, f.id)?;
+                let count = objects.len();
+                if !(1..=64).contains(&count) || edges.len() + count > 1000 {
+                    return Err(invalid("invalid blend edge count"));
+                }
+                for object in objects {
+                    let edge = super::fillets::edge(&records, &classes, object, f.id)?;
+                    if owners.get(&edge.operation) != Some(&edge.feature) {
+                        return Err(invalid("blend edge operation belongs to another producer"));
+                    }
+                    let source_id = *feature_ids.get(&edge.feature).ok_or_else(|| invalid("blend precedes its source"))?;
+                    let source = doc.feature(source_id).filter(|f| !f.suppressed).ok_or_else(|| invalid("blend source is suppressed"))?;
+                    let FeatureKind::Extrude { extent, .. } = &source.kind else { return Err(invalid("unsupported blend source feature")) };
+                    if extent.direction != solidcraft_doc::Direction::Positive
+                        || extent.start_offset.is_some()
+                        || extent.taper.as_ref().map(|e| doc.eval(e, Kind::Angle)).transpose()?.is_some_and(|a| a.abs() > 1e-12)
+                        || doc.eval(&extent.distance, Kind::Length)? <= 0.
+                    {
+                        return Err(invalid("unsupported blend source extent"));
+                    }
+                    let [name] = source.body_names.as_slice() else { return Err(invalid("blend requires one source body")) };
+                    if !active_bodies.contains(name) || body.as_ref().is_some_and(|body| body != name) {
+                        return Err(invalid("blend edges belong to different or unavailable bodies"));
+                    }
+                    *body = Some(name.clone());
+                    let target = state.body(name).filter(|b| b.feature == source_id).ok_or_else(|| invalid("blend source body is unavailable"))?;
+                    let profile = *source_profiles.get(&edge.feature).ok_or_else(|| invalid("missing blend source profile"))?;
+                    let mut face_names = BTreeMap::new();
+                    for label in &edge.labels {
+                        let name = match label {
+                            1 => format!("F{source_id}:start"),
+                            2 => format!("F{source_id}:top"),
+                            _ => {
+                                let curve = super::side_roles::curve(&records, &classes, edge.feature, u64::from(*label), profile, &lines)?;
+                                format!("F{source_id}:side:c{curve}")
+                            }
+                        };
+                        face_names.insert(*label, name);
+                    }
+                    let adjacent = edge
+                        .faces
+                        .iter()
+                        .map(|label| face_names.get(label).map(String::as_str).ok_or_else(|| invalid("missing blend side")))
+                        .collect::<Result<BTreeSet<_>>>()?;
+                    let selected: Vec<_> = solidcraft_doc::naming::edge_names(target)
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(_, name)| name.split('|').map(solidcraft_doc::naming::strip_piece).collect::<BTreeSet<_>>() == adjacent)
+                        .collect();
+                    let [(index, selected)] = selected.as_slice() else {
+                        return Err(invalid("blend edge incidence is missing or ambiguous"));
+                    };
+                    if new_edge_names.contains(selected) {
+                        return Err(invalid("duplicate blend edge selection"));
+                    }
+                    // The current supported profile-line extrusion edges are
+                    // straight. Pick their interior: a shared vertex is also
+                    // on neighboring edges and is ambiguous to the kernel.
+                    let mesh = target.mesh();
+                    let edge = mesh.edges.get(*index).ok_or_else(|| invalid("missing regenerated blend edge"))?;
+                    let start = edge.first().ok_or_else(|| invalid("empty regenerated blend edge"))?;
+                    let end = edge.last().ok_or_else(|| invalid("empty regenerated blend edge"))?;
+                    if start.dist(*end) < 1e-8 {
+                        return Err(invalid("degenerate regenerated blend edge"));
+                    }
+                    edges.push((*start + *end) * 0.5);
+                    new_edge_names.push(selected.clone());
+                }
+                Ok(count)
+            };
             let kind = match f.kind {
+                HistoryKind::Chamfer { sets } => {
+                    let mut body = None;
+                    let mut edges = Vec::new();
+                    let mut groups = Vec::new();
+                    let mut dimensions = BTreeSet::new();
+                    for set in &sets {
+                        if set.distance2.is_some() || set.angle.is_some() || set.flip {
+                            return Err(invalid("asymmetric native chamfer face orientation is not supported yet"));
+                        }
+                        let distance = length_parameter(&bindings, set.distance)?;
+                        if distance.owner != Some(f.id) || distance.label != "Distance" || !dimensions.insert(set.distance) {
+                            return Err(invalid("invalid chamfer distance ownership"));
+                        }
+                        let count =
+                            import_edges(set.container, &mut body, &mut edges, &mut operation_owners, &mut projection_model, &mut new_edge_names)?;
+                        groups.push(solidcraft_doc::ChamferGroup {
+                            count,
+                            distance: distance.name.clone(),
+                            distance2: None,
+                            angle: None,
+                            flip: false,
+                            tangent_chain: set.tangent_chain,
+                        });
+                    }
+                    if groups.is_empty() {
+                        return Err(invalid("missing chamfer group"));
+                    }
+                    let first = groups.remove(0);
+                    FeatureKind::Chamfer {
+                        edges,
+                        distance: first.distance,
+                        distance2: None,
+                        angle: None,
+                        flip: false,
+                        tangent_chain: first.tangent_chain,
+                        groups,
+                        body,
+                    }
+                }
                 HistoryKind::Fillet { sets } => {
-                    if operation_owners.is_none() {
-                        operation_owners = Some(self.operation_owners()?);
-                    }
-                    let owners = operation_owners.as_ref().ok_or_else(|| invalid("missing fillet operations"))?;
-                    projection_model.evaluate(&doc);
-                    if projection_model.results.iter().any(|r| r.error.is_some()) {
-                        return Err(invalid("cannot regenerate fillet dependencies"));
-                    }
-                    let state = projection_model.state();
                     let mut body = None;
                     let mut edges = Vec::new();
                     let mut primary_radius = None;
@@ -174,82 +290,12 @@ impl Design {
                         if !radius_bindings.insert(set.radius) {
                             return Err(invalid("fillet groups reuse a radius binding"));
                         }
-                        let objects = super::loft_faces::objects(&records, &classes, set.container, f.id)?;
-                        if !(1..=64).contains(&objects.len()) || edges.len() + objects.len() > 1000 {
-                            return Err(invalid("invalid fillet edge count"));
-                        }
+                        let count =
+                            import_edges(set.container, &mut body, &mut edges, &mut operation_owners, &mut projection_model, &mut new_edge_names)?;
                         if index == 0 {
                             primary_radius = Some(radius.name.clone());
                         } else {
-                            groups.push(solidcraft_doc::FilletRadiusGroup {
-                                count: objects.len(),
-                                radius: radius.name.clone(),
-                                tangent_chain: set.tangent_chain,
-                            });
-                        }
-                        for object in objects {
-                            let edge = super::fillets::edge(&records, &classes, object, f.id)?;
-                            if owners.get(&edge.operation) != Some(&edge.feature) {
-                                return Err(invalid("fillet edge operation belongs to another producer"));
-                            }
-                            let source_id = *feature_ids.get(&edge.feature).ok_or_else(|| invalid("fillet precedes its source"))?;
-                            let source = doc.feature(source_id).filter(|f| !f.suppressed).ok_or_else(|| invalid("fillet source is suppressed"))?;
-                            let FeatureKind::Extrude { extent, .. } = &source.kind else { return Err(invalid("unsupported fillet source feature")) };
-                            if extent.direction != solidcraft_doc::Direction::Positive
-                                || extent.start_offset.is_some()
-                                || extent.taper.as_ref().map(|e| doc.eval(e, Kind::Angle)).transpose()?.is_some_and(|a| a.abs() > 1e-12)
-                                || doc.eval(&extent.distance, Kind::Length)? <= 0.
-                            {
-                                return Err(invalid("unsupported fillet source extent"));
-                            }
-                            let [name] = source.body_names.as_slice() else { return Err(invalid("fillet requires one source body")) };
-                            if !active_bodies.contains(name) || body.as_ref().is_some_and(|body| body != name) {
-                                return Err(invalid("fillet edges belong to different or unavailable bodies"));
-                            }
-                            body = Some(name.clone());
-                            let target =
-                                state.body(name).filter(|b| b.feature == source_id).ok_or_else(|| invalid("fillet source body is unavailable"))?;
-                            let profile = *source_profiles.get(&edge.feature).ok_or_else(|| invalid("missing fillet source profile"))?;
-                            let mut face_names = BTreeMap::new();
-                            for label in &edge.labels {
-                                let name = match label {
-                                    1 => format!("F{source_id}:start"),
-                                    2 => format!("F{source_id}:top"),
-                                    _ => {
-                                        let curve = super::side_roles::curve(&records, &classes, edge.feature, u64::from(*label), profile, &lines)?;
-                                        format!("F{source_id}:side:c{curve}")
-                                    }
-                                };
-                                face_names.insert(*label, name);
-                            }
-                            let adjacent = edge
-                                .faces
-                                .iter()
-                                .map(|label| face_names.get(label).map(String::as_str).ok_or_else(|| invalid("missing fillet side")))
-                                .collect::<Result<BTreeSet<_>>>()?;
-                            let selected: Vec<_> = solidcraft_doc::naming::edge_names(target)
-                                .into_iter()
-                                .enumerate()
-                                .filter(|(_, name)| name.split('|').map(solidcraft_doc::naming::strip_piece).collect::<BTreeSet<_>>() == adjacent)
-                                .collect();
-                            let [(index, selected)] = selected.as_slice() else {
-                                return Err(invalid("fillet edge incidence is missing or ambiguous"));
-                            };
-                            if new_edge_names.contains(selected) {
-                                return Err(invalid("duplicate fillet edge selection"));
-                            }
-                            // The current supported profile-line extrusion edges are
-                            // straight. Pick their interior: a shared vertex is also
-                            // on neighboring edges and is ambiguous to the kernel.
-                            let mesh = target.mesh();
-                            let edge = mesh.edges.get(*index).ok_or_else(|| invalid("missing regenerated fillet edge"))?;
-                            let start = edge.first().ok_or_else(|| invalid("empty regenerated fillet edge"))?;
-                            let end = edge.last().ok_or_else(|| invalid("empty regenerated fillet edge"))?;
-                            if start.dist(*end) < 1e-8 {
-                                return Err(invalid("degenerate regenerated fillet edge"));
-                            }
-                            edges.push((*start + *end) * 0.5);
-                            new_edge_names.push(selected.clone());
+                            groups.push(solidcraft_doc::FilletRadiusGroup { count, radius: radius.name.clone(), tangent_chain: set.tangent_chain });
                         }
                     }
                     FeatureKind::Fillet {

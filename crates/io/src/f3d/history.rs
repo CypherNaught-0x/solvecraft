@@ -20,6 +20,9 @@ pub struct HistoryFeature {
 
 #[derive(Debug, PartialEq)]
 pub enum HistoryKind {
+    Chamfer {
+        sets: Vec<ChamferSet>,
+    },
     Fillet {
         sets: Vec<FilletSet>,
     },
@@ -211,6 +214,9 @@ impl Design {
                             }
                             (HistoryKind::OffsetPlane { geometry, definition, extra_offset }, String::new())
                         }
+                        (super::chamfers::CLASS, version @ (2 | 3)) => {
+                            (HistoryKind::Chamfer { sets: super::chamfers::inputs(&mut r, &records, &classes, id, version)? }, String::new())
+                        }
                         (super::fillets::CLASS, version @ (2 | 3)) => {
                             (HistoryKind::Fillet { sets: super::fillets::inputs(&mut r, &records, &classes, version)? }, String::new())
                         }
@@ -263,6 +269,11 @@ impl Design {
                         _ => return Err(invalid("inconsistent feature suppression flags")),
                     };
                     finish(&r)?;
+                    if let HistoryKind::Chamfer { sets } = &kind
+                        && sets.iter().any(|s| s.suppressed != suppressed)
+                    {
+                        return Err(invalid("inconsistent chamfer suppression"));
+                    }
                     let name = if !custom.is_empty() {
                         custom
                     } else if !feature_name.is_empty() {

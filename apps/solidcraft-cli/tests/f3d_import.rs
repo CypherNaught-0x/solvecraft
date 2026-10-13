@@ -3,6 +3,92 @@ use serde_json::{Value, json};
 use solidcraft_engine::Session;
 
 #[test]
+#[ignore = "requires local native chamfer controls"]
+fn chamfers_preserve_equal_distance_groups_and_source_edits() {
+    use solidcraft_engine::doc::{Document, FeatureKind};
+    let dir = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
+    for mode in ["vertical", "bottom", "top", "pair", "tangent", "sets"] {
+        let check = |s: &mut Session, d: f64, second: f64, height: f64, suppressed: bool| {
+            let length = if matches!(mode, "bottom" | "top") { 20. } else { height };
+            let removed = if suppressed {
+                0.
+            } else {
+                length
+                    * (d * d
+                        + if mode == "pair" {
+                            d * d
+                        } else if mode == "sets" {
+                            second * second
+                        } else {
+                            0.
+                        })
+                    / 2.
+            };
+            let expected = 20. * 30. * height - removed;
+            let measured = volume(s, expected / 1000., mode);
+            assert!((measured["total"]["volume_mm3"].as_f64().unwrap() - expected).abs() < 0.01, "{mode}: exact triangular prism removal");
+            assert!(s.model.results.iter().all(|r| r.warning.is_none()), "{mode}: references must survive source edits");
+        };
+        for (suffix, d, height, suppressed) in [
+            ("baseline", 2., 40., false),
+            ("distance4", 4., 40., false),
+            ("height50", 2., 50., false),
+            ("suppressed", 2., 40., true),
+            ("restored", 2., 40., false),
+        ] {
+            let mut s = Session::default();
+            let path = dir.join(format!("chamfer-{mode}-{suffix}.f3d"));
+            s.execute("doc.open", &json!({"path":path})).unwrap_or_else(|e| panic!("{mode}/{suffix}: {e}"));
+            assert_eq!(s.doc.features.len(), 3);
+            assert!(
+                matches!(&s.doc.features[2].kind, FeatureKind::Chamfer { tangent_chain, groups, .. } if *tangent_chain == (mode == "tangent") && groups.len() == usize::from(mode == "sets"))
+            );
+            assert_eq!(s.doc.features[2].suppressed, suppressed);
+            assert_eq!(s.doc.features[2].edge_names.len(), if matches!(mode, "pair" | "sets") { 2 } else { 1 });
+            check(&mut s, d, 3., height, suppressed);
+            if suffix == "baseline" {
+                let original = s.doc.to_json();
+                let mut edits = vec![(2, 0, "4 mm", 4., 3., 40.), (1, 0, "50 mm", 2., 3., 50.)];
+                if mode == "sets" {
+                    edits.push((2, 1, "5 mm", 2., 5., 40.));
+                }
+                for (feature, input, value, d, second, height) in edits {
+                    let parameter = s.doc.features[feature].param_names[input].clone();
+                    s.execute("parameters.change", &json!({"name":parameter,"expression":value})).unwrap();
+                    check(&mut s, d, second, height, false);
+                    check(&mut Session::new(Document::from_json(&s.doc.to_json()).unwrap()), d, second, height, false);
+                    s.execute("edit.undo", &json!({})).unwrap();
+                    assert_eq!(s.doc.to_json(), original);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires local native asymmetric chamfer controls"]
+fn native_asymmetric_chamfers_are_inspectable_without_guessing_face_orientation() {
+    use solidcraft_engine::io::f3d::{HistoryKind, read_f3d};
+    let dir = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
+    for mode in ["two", "two-flipped", "angle", "angle-flipped"] {
+        for suffix in ["baseline", "distance4", "height50", "suppressed", "restored", if mode.starts_with("two") { "second5" } else { "angle60" }] {
+            let bytes = std::fs::read(dir.join(format!("chamfer-{mode}-{suffix}.f3d"))).unwrap();
+            let design = read_f3d(&bytes).unwrap().remove(0);
+            let h = design.history().unwrap();
+            let HistoryKind::Chamfer { sets } = &h[2].kind else {
+                panic!("chamfer schema");
+            };
+            assert_eq!(sets.len(), 1);
+            assert_eq!(sets[0].flip, mode.ends_with("flipped"));
+            assert_eq!(sets[0].angle.is_some(), mode.starts_with("angle"));
+            assert_eq!(sets[0].distance2.is_some(), mode.starts_with("two"));
+            assert_eq!(sets[0].suppressed, suffix == "suppressed");
+            assert!(design.to_document("test").unwrap_err().to_string().contains("face orientation"));
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires local independent-radius fillet controls"]
 fn grouped_fillets_preserve_native_radius_parameters_and_source_edits() {
     use solidcraft_engine::doc::{Document, FeatureKind, FilletStyle};

@@ -2158,3 +2158,44 @@ HardEdgeBasin opened in 1.00 second. The supplied Minimal and editable-parameter
 failed-import controls passed again against the changed opening code; the full
 43-group native run passed immediately before this follow-up. The sandbox-only
 localhost test again passed separately with socket access.
+
+
+### Native chamfer records and equal-distance reconstruction
+
+Controlled single edits distinguish equal-distance, two-distance and distance/angle
+sets, flip and tangent-chain choices, independent group bindings and suppression.
+The decoder validates group order, selection containers, binding classes and owner
+relationships. Helper suppression must agree with the timeline feature. Output
+labels never select an edge in regenerated geometry.
+
+Equal-distance sets on independent positive, untapered line-profile extrusions
+now reconstruct as editable chamfers using explicit producer/face incidence and
+persistent edge names. Thirty local controls pass analytic triangular-prism volume
+checks, distance/group edits, source-height edits, suppression, JSON reopening and
+undo. The existing 128 original saved histories remain the committed regression
+corpus; native archives and measurements stay local.
+
+Twenty-four asymmetric controls expose their distance, angle and flip bindings
+for inspection. Reconstruction rejects these modes until the native first-face
+convention is established; importing a plausible bevel with reversed setbacks
+would silently change the model. Other source topologies and general F3D history
+remain unfinished.
+
+
+Integration with upstream through `9089edf` retains the new preview cache,
+visibility, Move-copy and text-font behavior. Document format 27 includes those
+optional fields without changing old defaults. Version-one native-cache metadata
+cannot represent the branch's compound planar-face certificates: those bodies
+produce a cache miss, preserving authoritative history and save behavior rather
+than dropping certificate contributors. A focused regression checks this refusal.
+
+
+Validation for this integration: 45 local native-import groups pass; all 128 saved
+histories pass; HardEdgeBasin's opening guard passes in 1.03 seconds. The quality
+gate passes formatting, clippy, assets, licenses, layers and WASM. Its only
+failures were a sandbox-denied localhost socket test (passed separately with
+socket access) and an upstream test expecting merged-side attachment refusal.
+That expectation now requires the branch's healthy finite-union attachment, and
+the focused stacked-face tests pass. Other suites pass: 353 kernel, 148 document,
+166 I/O, 177 sketch, 413 UI and 86 UI scenarios. The imported two-group chamfer was
+rendered in isometric and top views; the two independent setbacks are visible.

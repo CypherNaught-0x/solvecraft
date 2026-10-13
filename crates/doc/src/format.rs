@@ -73,13 +73,14 @@
 //! - 26: chamfers retain independent edge groups and persistent tangent chains.
 //!   Includes upstream 15: cylinder-cap certificates and sheet-panel attachments.
 //!   Sketch-axis links were already incorporated with upstream 14 in format 23.
+//! - 27: includes upstream 16 corner-relief shapes, text fonts, Move copies and saved visibility.
 
 use serde_json::Value;
 
 use crate::{DocError, Document, Result};
 
 /// The format this build writes.
-pub const FORMAT: u32 = 26;
+pub const FORMAT: u32 = 27;
 
 pub fn format_string(n: u32) -> String {
     format!("solidcraft/{n}")
@@ -96,7 +97,7 @@ pub fn version_of(s: &str) -> Option<u32> {
 
 /// JSON-level upgrades: entry `i` turns format `i + 1` into `i + 2`.
 type JsonStep = fn(&mut Value) -> Result<()>;
-const JSON_STEPS: [JsonStep; 25] = [
+const JSON_STEPS: [JsonStep; 26] = [
     |_| Ok(()),
     v2_to_v3,
     v3_to_v4,
@@ -124,6 +125,8 @@ const JSON_STEPS: [JsonStep; 25] = [
     // 24 -> 25: older fillets retain explicit selection semantics.
     |_| Ok(()),
     // 25 -> 26: older chamfers retain one explicit selection group.
+    |_| Ok(()),
+    // 26 -> 27: new optional fields preserve their historical defaults.
     |_| Ok(()),
 ];
 

@@ -14,6 +14,25 @@ The SHEET METAL tab builds parts from a sheet of constant thickness under a **sh
 Bends follow the rule's K-factor, so flat lengths match what a press brake will make. Tests
 check flat lengths against hand-computed bend allowances.
 
+Where two bends of one edge flange feature meet at a corner of the base, the rule's **corner
+relief shape** (`corner_relief_shape`; Corner Relief Shape in Sheet Metal Rules) says what is
+cut there. `notch`, the default, cuts nothing more: the bends end square at the corner. `round`
+and `rectangular` cut a relief the rule's **corner relief** across, centred on the corner where
+the two bend lines meet: out of the base a round with half that size as its radius, or a square
+with half that size as its side, and both bends stop where it begins, cut straight across. The
+flange panels keep their ends. The relief is in the folded part, the flat pattern, the bend
+table (the bends are shorter) and the DXF (a round relief is an arc). At a corner that isn't
+square the round follows the angle of the base and the square becomes a kite, its two cuts
+square to the edges. Changing the shape in a rule changes the parts made with that rule. A
+relief that doesn't fit (under 0.01 mm across, leaving nothing of a bend, or reaching as far
+from its corner as another edge of the base is) is left out, and the flange feature reports a
+warning saying where.
+
+```json
+{"command":"sheet.manage_rules","params":{"name":"Sheet 2 mm","thickness":"2 mm","k_factor":0.5,
+ "bend_radius":"1 mm","corner_relief_shape":"round","corner_relief":"8 mm","active":true}}
+```
+
 Where the edge flanges of one feature meet at a corner of the base, their panels are closed
 toward each other at any bend angle: each end is cut square to the sheet, on a line in the flat
 chosen so that the edges nearest each other (on the inner faces) run parallel, the rule's
@@ -45,7 +64,10 @@ per edge with an angle and a height box; an empty box takes the value above.
 For a shop drawing or spreadsheet, `sheet.export_bend_table` returns CSV by default; choose
 `format: "json"` for structured data. It includes the sheet rule, thickness, bend angles,
 radii, allowances and flat centre-line coordinates. Lengths use millimetres and angles use
-degrees. Supply `path` to save it, or omit `path` to receive the content through the command
+degrees. A bend is listed where its centre line has material: one that a cut-out has shortened
+gives the length and ends it has left, and one that cut-outs split gives a row for every piece,
+all with the bend's number (the flat pattern and the DXF draw the same pieces as bend lines).
+Supply `path` to save it, or omit `path` to receive the content through the command
 response. `body` defaults to the last sheet body. Exporting does not add a timeline entry or
 consume an undo step.
 
@@ -61,11 +83,18 @@ Base-flange profiles keep their interior holes. Through cuts that cross a sheet 
 notches in the flat outline; overlapping and repeated cuts remove their combined area once.
 The flat preview, DXF and unfolded solid use the same material boundaries. Lines and circular
 arcs remain exact; other profile curves use a 0.001 mm chord tolerance.
+Flat-pattern JSON lists each cut-out twice, in the same order: as points (`cutouts`), and
+exactly (`cutout_shapes`): a round hole as `{"circle": {"center", "radius"}}`, any other as its
+`line`, `arc` (centre, radius, start and sweep in degrees) and `polyline` segments.
 
 Cuts can leave separate material pieces, including the centre of a ring cut. These pieces
 remain one logical sheet group through Unfold / Refold and export as separate flat outlines.
 Large profiles that exceed the geometry processing budget report an error instead of
 exporting a partial outline.
+
+A Box cut, or a Cylinder cut whose axis is the sheet's normal, machines the sheet like the
+extrude of its footprint: through the sheet it is a cut-out (a cylinder a round one), and
+part way it is a pocket. A primitive cut at any other angle, or across a folded bend, is refused.
 
 Parallel, untapered extrude cuts also preserve shallow pockets through Unfold / Refold.
 The pocket floor and side walls remain solid geometry; overlapping cuts from opposite sides

@@ -14,6 +14,7 @@ mod attribute_tests;
 mod attributes;
 mod body_labels;
 mod body_projections;
+mod chamfers;
 mod circles;
 mod combines;
 mod constraints;
@@ -49,6 +50,7 @@ mod radial_tests;
 #[cfg(test)]
 mod round_profile_tests;
 mod side_roles;
+pub use chamfers::ChamferSet;
 pub use circles::{SketchArc, SketchCircle};
 pub use constraints::{CurveRelation, LinearOrientation, SketchConstraint, SketchConstraintGraph, SketchConstraints};
 pub use entity::EntityMetadata;
