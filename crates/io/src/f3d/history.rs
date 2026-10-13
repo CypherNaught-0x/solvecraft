@@ -300,7 +300,16 @@ impl Design {
                         )
                     };
                     Ok(HistoryFeature { id, name, suppressed, dependencies, kind })
-                })();
+                })()
+                .map_err(|error| {
+                    let message = error.to_string();
+                    invalid(&format!(
+                        "timeline feature {id} ({} v{}): {}",
+                        class.id,
+                        class.version,
+                        message.strip_prefix("F3D: ").unwrap_or(&message)
+                    ))
+                });
                 Ok(TimelineEntry { id, class: class.id.clone(), version: class.version, feature })
             })
             .collect()
@@ -444,7 +453,10 @@ fn placement(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, geometry: u
     let entities = references(&mut r)?;
     validate_refs(classes, &entities)?;
     let mut legacy_entity_metadata = Vec::new();
-    if version == 17 {
+    // Legacy v17 appears both with an extension table and with only the final
+    // marked parent reference (the knob corpus). The record boundary makes the
+    // latter unambiguous; never interpret that reference as a u32 table count.
+    if version == 17 && r.bytes.len().saturating_sub(r.at) != 11 {
         for _ in 0..r.count(15)? {
             let id = r.reference()?;
             validate_refs(classes, &[id])?;
@@ -512,8 +524,9 @@ pub(super) fn finish(r: &Reader<'_>) -> Result<()> {
     Ok(())
 }
 pub(super) fn require_class(classes: &BTreeMap<u64, &Class>, id: u64, guid: &str, version: u32) -> Result<()> {
-    if !classes.get(&id).is_some_and(|c| c.id == guid && c.version == version) {
-        return Err(invalid("unsupported history reference class or version"));
+    let actual = classes.get(&id).ok_or_else(|| invalid(&format!("missing history reference {id}")))?;
+    if actual.id != guid || actual.version != version {
+        return Err(invalid(&format!("history reference {id} has class {} v{}; expected {guid} v{version}", actual.id, actual.version)));
     }
     Ok(())
 }

@@ -2,6 +2,31 @@ use serde_json::json;
 use solidcraft_engine::Session;
 
 #[test]
+#[ignore = "requires the original adapter and unchanged construction-point resave"]
+fn legacy_adapter_points_preserve_their_two_edge_construction() {
+    use solidcraft_engine::io::f3d::{HistoryKind, read_f3d};
+    let corpus = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_CORPUS").unwrap());
+    let probes = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
+    let mut results = Vec::new();
+    for path in [corpus.join("adapter-x20-makita.f3d"), probes.join("adapter-construction-resaved.f3d")] {
+        let designs = read_f3d(&std::fs::read(path).unwrap()).unwrap();
+        let timeline = designs[0].timeline().unwrap();
+        let mut points = Vec::new();
+        for (id, expected_definition, expected_edges, expected_z) in [(17126, 17127, [17130, 17134], -26.3), (15316, 15317, [15320, 15324], 26.3)] {
+            let feature = &timeline.iter().find(|f| f.id == id).unwrap().feature;
+            let feature = feature.as_ref().unwrap();
+            let HistoryKind::TwoEdgePoint { definition, edges, position } = &feature.kind else { panic!("two-edge point") };
+            assert_eq!(*definition, expected_definition);
+            assert_eq!(*edges, expected_edges);
+            assert!(position.dist(solidcraft_engine::geom::Vec3::new(-17.1, -13., expected_z)) < 1e-7);
+            points.push((feature.name.clone(), *definition, *edges, *position));
+        }
+        results.push(points);
+    }
+    assert_eq!(results[0], results[1]);
+}
+
+#[test]
 #[ignore = "requires original Gridfinity archive and unchanged modern resave"]
 fn legacy_fillet_sets_match_the_unchanged_modern_resave() {
     use solidcraft_engine::io::f3d::{HistoryKind, read_f3d};

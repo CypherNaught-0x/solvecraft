@@ -246,6 +246,11 @@ PCB / Package, Render, Animation, Simulation, Manufacture/CAM, Drawings.
   General multi-section interpolation, other native face recipes and the larger supplied
   designs remain incomplete.
 - Native F3D investigation: bounded archive/index inspection via `file.inspect_f3d`
+  now has a [whole-corpus acceptance gate and external decoder evaluation](docs/f3d-reference-evaluation.md).
+  The 17 supplied designs still expose broad compatibility gaps; isolated feature
+  tests do not establish complete imports. Legacy two-edge point records preserve
+  their source references, and import errors identify the failing timeline record.
+  The archive/index inspection
   validates four supplied local files without changing the current design. Layout 8
   supports Zstandard archives and inspection of parameter expressions, values,
   owner references, ordered timelines, names/suppression, sketch placement, circle

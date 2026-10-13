@@ -194,7 +194,7 @@ fn malformed_or_unrecognized_history_is_not_silently_partial() {
 
 #[test]
 fn legacy_sketch_versions_preserve_names_placement_and_entity_metadata() {
-    for (layout, version, base, body_version) in [(4, 3, 1, 1), (5, 4, 1, 2), (5, 4, 2, 2)] {
+    for (layout, version, base, body_version, metadata) in [(4, 3, 1, 1, false), (5, 4, 1, 2, true), (5, 4, 2, 2, true), (5, 4, 1, 2, false)] {
         let mut f = crate::f3d::import_tests::fixture(false);
         // Replace only versioned fields in these original authored records.
         let sketch = &mut f.0.get_mut(&8).unwrap();
@@ -211,7 +211,7 @@ fn legacy_sketch_versions_preserve_names_placement_and_entity_metadata() {
         geo.1 = version + 13;
         let secondary = geo.3.as_mut().unwrap();
         secondary.drain(21..32);
-        if version == 4 {
+        if metadata {
             let mut metadata = Vec::new();
             u32(&mut metadata, 1);
             reference(&mut metadata, 43);
@@ -238,7 +238,7 @@ fn legacy_sketch_versions_preserve_names_placement_and_entity_metadata() {
         assert_eq!(features[1].name, "Extrude1");
         let HistoryKind::Sketch { placement, .. } = &features[0].kind else { panic!("sketch") };
         assert_eq!(placement.entities, [42, 41, 31, 56]);
-        assert_eq!(placement.legacy_entity_metadata, if version == 4 { vec![(43, 1)] } else { vec![] });
+        assert_eq!(placement.legacy_entity_metadata, if metadata { vec![(43, 1)] } else { vec![] });
         assert_eq!(placement.matrix, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
         // The native import remains atomic; decoded entries do not silently skip
         // unknown geometry schemas or legacy metadata during reconstruction.

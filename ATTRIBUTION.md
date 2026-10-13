@@ -15,6 +15,12 @@ Generated-in-code assets are original and have no file to list:
 
 ## Files
 
+The native construction-point reader uses the public WorkPoint field grammar in
+[cadmpeg's F3D format notes](https://github.com/cadmpeg/cadmpeg/blob/8c19a6021ef70fe5134c9d4d08fb631725510c16/docs/formats/f3d.md)
+(cadmpeg contributors, Apache-2.0). The implementation and authored byte fixtures
+are original; no cadmpeg runtime or source code is bundled. The notes identify
+the unused bounding-box field and the version gates for point-data records.
+
 | File | Author | Source | Licence |
 |---|---|---|---|
 | apps/solidcraft-cli/tests/history/user-parameters.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |

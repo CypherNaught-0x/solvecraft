@@ -254,7 +254,38 @@ pub(super) fn source_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Cl
     zeros(&mut r, 10)?;
     let source_geometry = r.u64()?;
     let source_tag = r.u64()?;
-    require_class(classes, source_geometry, "44A64366-4BD3-4B24-881A-F94C206E8F2D", 18)?;
+    // The identity record's own v0 schema is unchanged across these sketch
+    // generations. The referenced sketch is decoded by its versioned reader.
+    if !classes.get(&source_geometry).is_some_and(|c| c.id == "44A64366-4BD3-4B24-881A-F94C206E8F2D" && matches!(c.version, 16..=18)) {
+        return Err(invalid("unsupported source sketch identity schema"));
+    }
     finish(&r)?;
     Ok((source_geometry, source_tag))
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    use crate::f3d::import_tests::Fixture;
+
+    #[test]
+    fn persistent_curve_identity_is_scoped_to_a_supported_sketch_generation() {
+        for version in [15, 16, 17, 18, 19] {
+            let mut fixture = Fixture(BTreeMap::new());
+            let mut identity = vec![0; 14];
+            identity.extend(21_u64.to_le_bytes());
+            identity.extend(37_u64.to_le_bytes());
+            fixture.put(20, "E2CEFD18-D755-4E09-8E7F-953A2F6D43F8", 0, identity, None);
+            fixture.put(21, "44A64366-4BD3-4B24-881A-F94C206E8F2D", version, vec![], None);
+            let design = fixture.design();
+            let records = Records::new(&design);
+            let classes = design.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+            let decoded = source_identity(&records, &classes, 20);
+            if (16..=18).contains(&version) {
+                assert_eq!(decoded.unwrap(), (21, 37));
+            } else {
+                assert!(decoded.is_err());
+            }
+        }
+    }
 }

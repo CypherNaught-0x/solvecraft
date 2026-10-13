@@ -170,12 +170,13 @@ impl<'a> Reader<'a> {
         Ok(u64::from_le_bytes(bytes))
     }
     fn reference(&mut self) -> Result<u64> {
+        let at = self.at;
         if self.take(1)? != [1] {
-            return Err(invalid("missing object reference"));
+            return Err(invalid(&format!("missing object reference at record byte {at}")));
         }
         let id = self.u64()?;
         if self.take(2)? != [0, 0] {
-            return Err(invalid("unsupported object reference"));
+            return Err(invalid(&format!("unsupported object reference at record byte {at}")));
         }
         Ok(id)
     }
