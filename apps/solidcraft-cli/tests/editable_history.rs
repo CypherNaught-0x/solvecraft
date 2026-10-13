@@ -161,7 +161,17 @@ fn simple_history_files_replay_reopen_edit_and_undo() {
         let mut rebuilt = replay(&recipe);
         let mut s = Session::default();
         s.execute("doc.open", &json!({"path":native})).unwrap();
-        assert_recipe_equal(&recipe_structure(&s), &recipe_structure(&rebuilt), &label);
+        // Opening a design with the default title now uses its file stem.
+        // Check that title explicitly, then compare the complete feature history.
+        let title = if rebuilt.doc.name.trim().is_empty() || rebuilt.doc.name.trim() == "Untitled" {
+            native.file_stem().unwrap().to_string_lossy().into_owned()
+        } else {
+            rebuilt.doc.name.clone()
+        };
+        assert_eq!(s.doc.name, title, "{label}: file title");
+        let mut rebuilt_history = recipe_structure(&rebuilt);
+        rebuilt_history["name"] = json!(title);
+        assert_recipe_equal(&recipe_structure(&s), &rebuilt_history, &label);
         let expected = &recipe["expected"];
         let original_volume = expected_volume(expected);
         bounds(&volume(&mut rebuilt, original_volume, &format!("{label}: fresh recipe")), expected, &label);

@@ -2142,3 +2142,19 @@ test; the same binary passed separately with socket access. The mixed chamfer
 model was rendered and visually checked. The native chamfer probe remains
 unexecuted because the local Mac is locked; native chamfer decoding and the
 remaining feature families are still incomplete.
+
+
+A follow-up merge includes upstream through `219816d`: untitled designs take
+their file name when opened or saved, and Combine dialogs preview successfully.
+Saved-history checks now assert that title rule separately while comparing all
+feature-history fields. The F3D open branch still creates an unsaved imported
+document, so these naming changes cannot turn its source archive into a save
+path.
+
+
+The follow-up quality gate passed 735 engine and 390 UI tests, all 128 saved
+histories, and the unchanged kernel/document/I/O/scenario/WASM gates.
+HardEdgeBasin opened in 1.00 second. The supplied Minimal and editable-parameter/
+failed-import controls passed again against the changed opening code; the full
+43-group native run passed immediately before this follow-up. The sandbox-only
+localhost test again passed separately with socket access.
