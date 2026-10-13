@@ -15,7 +15,8 @@
 //!   with six sides, or four when one radius exceeds the other two combined.
 //!
 //! A fillet that ends on an earlier round (of any radius) takes the round off
-//! ([`crate::delete_faces`]) and blends both edges together.
+//! ([`crate::delete_faces`]) and blends both edges together. Equal-radius concave
+//! rounds can also use this recovery, by retrying the planar-loop blend builder.
 
 use std::collections::{HashMap, HashSet};
 
@@ -43,11 +44,23 @@ pub fn fillet_radii(body: &Body, edges: &[(Vec3, f64)]) -> Result<Body> {
     let mut sel = edges.to_vec();
     let mut first: Option<KernelError> = None;
     // Earlier rounds at the edges' ends come off and are blended again with the new edges.
-    for _ in 0..4 {
+    for attempt in 0..4 {
         let err = match build(&cur, &sel, true) {
             Ok(b) => return Ok(crate::record::after(b, &cur, &counts)),
             Err(e) => e,
         };
+        // Equal-radius concave rounds can meet along a planar face's loop. Once their
+        // earlier rounds are removed, reuse the simultaneous-edge path that handles that
+        // geometry. Do not retry on the original body or change an earlier round's radius.
+        if attempt > 0
+            && let Some((_, r)) = sel.first()
+            && sel.iter().all(|(_, other)| (other - r).abs() <= r * 1e-9)
+        {
+            let points: Vec<Vec3> = sel.iter().map(|(p, _)| *p).collect();
+            if let Ok(b) = crate::blend::fillet_local(&cur, &points, *r) {
+                return Ok(crate::record::after(b, &cur, &counts));
+            }
+        }
         let rounds = rounds_at(&cur, &sel);
         if rounds.is_empty() {
             return Err(first.unwrap_or(err));
@@ -932,7 +945,12 @@ fn round_of(faces: &[&mt::Face], f: &mt::Face, size: f64) -> Option<(Vec3, f64)>
             let a = (*a0 + *a1) * 0.5;
             let b = *b0 + d * (a - *b0).dot(d);
             let dn = *nb - *na;
-            let r = (b - a).len() / dn.len();
+            // Signed radius: concave rounds offset toward the outward side of the
+            // neighboring planes, while convex rounds offset into the material.
+            let r = (b - a).dot(dn) / dn.dot(dn);
+            if !(r.is_finite() && r.abs() > 1e-6 && r.abs() < 1e6) {
+                continue;
+            }
             if (b - a - dn * r).len() > size * 1e-6 {
                 continue;
             }
@@ -945,7 +963,7 @@ fn round_of(faces: &[&mt::Face], f: &mt::Face, size: f64) -> Option<(Vec3, f64)>
                 continue;
             }
             let p = planes3((*na, a), (*nb, b), (d, a)).ok()?;
-            return Some((p, r));
+            return Some((p, r.abs()));
         }
     }
     None
@@ -1397,6 +1415,53 @@ mod tests {
 
     fn vol(b: &Body) -> f64 {
         measure(b).unwrap().volume
+    }
+
+    fn straight_pocket() -> (Body, [Vec3; 2]) {
+        let slab = box_solid(Vec3::ZERO, Vec3::new(90.0, 48.0, 16.0)).unwrap();
+        let cut = box_solid(Vec3::new(17.0, 10.0, 4.0), Vec3::new(73.0, 34.0, 16.0)).unwrap();
+        let pocket = crate::boolean(&slab, &cut, crate::BoolOp::Cut).unwrap().unwrap();
+        (pocket, [Vec3::new(17.0, 22.0, 4.0), Vec3::new(45.0, 34.0, 4.0)])
+    }
+
+    #[test]
+    fn sequential_concave_rounds_match_simultaneous_selection() {
+        let (pocket, picks) = straight_pocket();
+        let together = fillet(&pocket, &picks, 1.5).unwrap();
+        for [a, b] in [picks, [picks[1], picks[0]]] {
+            let first = fillet(&pocket, &[a], 1.5).unwrap();
+            let result = fillet(&first, &[b], 1.5).unwrap();
+            assert!(result.validity().is_empty());
+            assert_eq!(result.unmeshed_faces(), 0);
+            assert_eq!(result.face_count(), together.face_count());
+            assert!((vol(&result) - vol(&together)).abs() < 1e-5);
+            // Rebuilding a round after Delete Face can have no exact history: the
+            // restored sharp edge is new. Never attach an invalid certificate.
+            if let Some(history) = result.history() {
+                history.check(&result, &[&first]).unwrap();
+            }
+            for vertex in together.solid.vertex_iter() {
+                assert!(result.solid.vertex_iter().any(|v| vtx(&v).dist(vtx(&vertex)) < 1e-7));
+            }
+        }
+    }
+
+    #[test]
+    fn sequential_concave_rounds_preserve_distant_rounds_and_refuse_unsupported_sizes() {
+        let (pocket, [a, b]) = straight_pocket();
+        let outer = fillet(&pocket, &[Vec3::new(45.0, 0.0, 16.0)], 0.7).unwrap();
+        let first = fillet(&outer, &[a], 1.5).unwrap();
+        let before = vol(&first);
+        let together = fillet(&outer, &[a, b], 1.5).unwrap();
+        let result = fillet(&first, &[b], 1.5).unwrap();
+        assert_eq!(result.face_count(), together.face_count());
+        assert!((vol(&result) - vol(&together)).abs() < 1e-5);
+        assert!(result.validity().is_empty());
+        // The equal-radius retry must not silently replace an earlier radius.
+        assert!(fillet_radii(&first, &[(b, 2.0)]).is_err());
+        assert!(fillet(&first, &[b], 50.0).is_err());
+        assert_eq!(vol(&first), before);
+        assert!(first.validity().is_empty());
     }
 
     /// The body minus the material outside each round (the strips between the faces and the

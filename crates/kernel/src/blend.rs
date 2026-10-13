@@ -1400,6 +1400,10 @@ fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, c
                         && !(shape == Shape::Round && into_round(ids))
                 });
             let local = || guard(what, || blend_one(&solid, &edge, size, r, shape)).or_else(|e| {
+                // Preserve a conclusive local size refusal at perpendicular end caps.
+                if matches!(e, KernelError::TooLarge(_)) && perpendicular_end_caps(&solid, &edge) {
+                    return Err(e);
+                }
                 if shape == Shape::Round && crate::blend_end::can_trim(&solid, &edge) {
                     guard(what, || crate::blend_end::fillet_one(&solid, &edge, size, r))
                         .or_else(|_| guard(what, || crate::blend_trim::fillet_one(&solid, &edge, size, r)))
@@ -1474,6 +1478,15 @@ fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, c
         }
     }
     if todo.is_empty() { Ok(cur) } else { Err(unsupported("blending these edges together")) }
+}
+
+fn perpendicular_end_caps(solid: &Solid, edge: &mt::Edge) -> bool {
+    let Some(d) = (vtx(edge.absolute_back()) - vtx(edge.absolute_front())).normalized() else { return false };
+    [edge.absolute_front(), edge.absolute_back()].iter().all(|vertex| {
+        let mut ends = solid.face_iter().filter(|f| !f.edge_iter().any(|e| e.id() == edge.id()) && f.vertex_iter().any(|v| v.id() == vertex.id()));
+        let Some(face) = ends.next() else { return false };
+        ends.next().is_none() && plane_normal(face).is_some_and(|n| n.cross(d).len() <= 1e-9)
+    })
 }
 
 #[cfg(test)]
@@ -1895,6 +1908,12 @@ fn corners(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Res
     }
     let (made, rec) = guard(what, || crate::curveblend::corner_blend(&solid, &ids, size, r, shape == Shape::Round))?;
     Ok(record::after(record::rebuilt(made, &[&solid], &rec)?, &cur, &counts))
+}
+
+/// The multi-edge path without the corner fallback. Removing earlier rounds may make this
+/// path applicable again; keeping the retry separate prevents recursive remove/rebuild attempts.
+pub(crate) fn fillet_local(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
+    blend(body, edges, radius, Shape::Round, "fillet").and_then(closed)
 }
 
 /// The step of the radius search: three significant digits of the requested radius.

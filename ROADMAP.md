@@ -281,7 +281,10 @@ retain their saved two-finger scroll preference; camera motion is available thro
   rounds next to earlier rounds of another radius, and smooth corner patches where three rounds
   meet (a sphere for equal radii). At orthogonal corners with a unique smallest radius,
   a single trimmed setback patch meets all six neighboring faces; a dominant radius uses a
-  four-sided patch. Sequential fillets rebuild connected earlier rounds together. Both patch
+  four-sided patch. Sequential fillets rebuild connected earlier rounds together; equal-radius
+  concave rounds between planar faces retry the simultaneous-edge path after healing earlier
+  rounds. Features remain separate, and unequal radii are never coerced to match. Exact face
+  history can remain unavailable where healing creates a new sharp edge. Both patch
   forms preserve ten faces on the reference box, with checked boundary
   tangency and control-hull containment. The interior is an approximation (reference volumes
   within 0.1%), not an exact reproduction of another kernel's proprietary surface;
