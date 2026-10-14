@@ -83,7 +83,7 @@ pub(super) fn shell(source: &mt::Shell, deflection: Deflection) -> MeshedShell {
             // surface's parameter domain. Interior normal refinement cannot
             // split that shared boundary later, so resolve its sag more closely.
             let boundary_deflection = if supports.contains_key(&edge.id()) {
-                Deflection { chord: tol * 0.1, angle: deflection.angle, floor: deflection.floor * 0.1 }
+                Deflection { chord: tol * 0.1, floor: deflection.floor * 0.1, ..deflection }
             } else {
                 deflection
             };
