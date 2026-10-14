@@ -12,6 +12,19 @@ Editable drawing code, native projects and shipped exports are collected under `
 
 ## Files
 
+The native construction-point reader uses the public WorkPoint field grammar in
+[cadmpeg's F3D format notes](https://github.com/cadmpeg/cadmpeg/blob/8c19a6021ef70fe5134c9d4d08fb631725510c16/docs/formats/f3d.md)
+(cadmpeg contributors, Apache-2.0). The implementation and authored byte fixtures
+are original. The notes identify
+the unused bounding-box field and the version gates for point-data records.
+
+Desktop F3D native-body recovery links `cadmpeg-codec-f3d`,
+`cadmpeg-codec-step`, `cadmpeg-ir` and `cadmpeg-core` 0.6.1
+([cadmpeg contributors](https://github.com/cadmpeg/cadmpeg), Apache-2.0).
+The adapter is original. Transitive compression libraries and their notices are
+included in the generated dependency license inventory. No commercial CAD
+exports or external decoder source fixtures are bundled.
+
 | File | Author | Source | Licence |
 |---|---|---|---|
 | examples/render-studio.json | SolidCraft contributors | original procedural box/cylinder enclosure script for the integrated Render workspace | MIT OR Apache-2.0 |
@@ -39,6 +52,43 @@ Editable drawing code, native projects and shipped exports are collected under `
 | docs/screenshots/class-a-blend.png | SolidCraft contributors | screenshot of SolidCraft itself: two boxes bridged by `surface.blend` (a 40x10 sheet, `solidcraft-cli snapshot` of plan/evidence script ev_blend) | MIT OR Apache-2.0 |
 | docs/screenshots/class-a-crown.png | SolidCraft contributors | screenshot of SolidCraft itself: a patch crowned with `surface.patch crown=0.3` over a saddle rim (`solidcraft-cli snapshot`) | MIT OR Apache-2.0 |
 | docs/screenshots/class-a-boundary.png | SolidCraft contributors | screenshot of SolidCraft itself: a patch through two sketch lines built by `surface.boundary` with `crown: 0.4` (`solidcraft-cli snapshot`) | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/user-parameters.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/plane-xy.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/plane-xz.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/plane-chained.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/annulus-extrude.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/arc-extrude.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/rectangle-extrude.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/projected-circle.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/projected-body-edge.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/extrusion-start-offset.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/symmetric-cylinders.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/offset-dimension-prism.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/line-midpoint-prism.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fixed-arc-support.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/angular-prism.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/projected-body-rectangle.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/projected-body-circle.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/centerline-extrude.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/aligned-dimension.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/rectangle-negative.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/circle-extrude.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/negative-extrude.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/placed-circle.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/suppressed-extrude.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/new_body-extrude.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/join-extrude.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/cut-extrude.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/intersect-extrude.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/reordered-sketch.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/offset-circle-ring.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/multiple-circles.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/multiple-rings.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/partial-lens.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/partial-left-crescent.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/partial-right-crescent.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/partial-left-rectangle.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/partial-right-rectangle.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
 | docs/screenshots/sample-plate.png | SolidCraft contributors | screenshot of SolidCraft itself (`solidcraft --sample`) | MIT OR Apache-2.0 |
 | docs/screenshots/demo-0.8.gif | SolidCraft contributors | original screen recording of the actual SolidCraft 0.8 English desktop UI modelling an original Raspberry Pi 4 case (no logos or branding; the engraved text is set in the system's DejaVu Sans Bold), generated with examples/demo/record_ui.sh and its original animated pointer overlay (9× playback) | MIT OR Apache-2.0 |
 | docs/screenshots/demo-0.8.mp4 | SolidCraft contributors | original screen recording of the actual SolidCraft 0.8 English desktop UI modelling an original Raspberry Pi 4 case (no logos or branding; the engraved text is set in the system's DejaVu Sans Bold), generated with examples/demo/record_ui.sh and its original animated pointer overlay (9× playback) | MIT OR Apache-2.0 |
@@ -192,3 +242,101 @@ and shares that effective count with the surface attachments and CAD callbacks.
 Vulkan, DirectX 12, Metal and WebGPU retain their requested multisampling.
 A frame whose meshes the GPU refuses to stage (device lost or out of memory) is
 skipped with a warning instead of panicking (#1469).
+
+| apps/solidcraft-cli/tests/history/pieces-phase-lens.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/pieces-phase-crescent.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/pieces-quarter.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/pieces-arc-left.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/pieces-arc-right.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+
+| apps/solidcraft-cli/tests/history/plane-yz.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+
+| apps/solidcraft-cli/tests/history/loft-circle.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-circle-reversed.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-rectangle.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-face-new.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-face-join.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-face-bottom.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-face-rectangle-new.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-face-rectangle-join.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-face-rectangle-bottom.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-three-circle-chord.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-three-circle-chord-reversed.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-three-circle-uniform.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-face-joined-side.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/rotated-offset-sketch.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-face-mixed-sketches.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-face-polygon-side.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-join-mixed-sketches.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-join-polygon-side.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-serial-join.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/loft-triple-join.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/extrusion-to-cap.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/extrusion-to-plane.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/extrusion-to-bottom.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/extrusion-travel-cap.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/extrusion-travel-negative-cap.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/mirror-body-origin.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/mirror-body-plane.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/mirror-body-xz.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/mirror-feature-new.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/mirror-feature-join.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/mirror-feature-cut.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-join-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-join-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-cut-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-cut-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-intersect-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-intersect-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+
+| apps/solidcraft-cli/tests/history/combine-source-cut-cut-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-cut-cut-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-cut-intersect-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-cut-intersect-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-cut-join-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-cut-join-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-join-cut-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-join-cut-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-join-intersect-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-join-intersect-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-join-join-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-join-join-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-mirror-cut-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-mirror-cut-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-mirror-intersect-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-mirror-intersect-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-mirror-join-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-mirror-join-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-mirror-target-cut-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-mirror-target-cut-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-mirror-target-intersect-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-mirror-target-intersect-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-mirror-target-join-consume.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/combine-source-mirror-target-join-keep.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-vertical.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-bottom.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-pair.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-groups-pair.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-groups-three.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-groups-shared.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-groups-caps.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-chain-capsule-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-chain-capsule-bottom.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-chain-circle-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/fillet-chain-groups.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-vertical.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-bottom.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-pair.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-two-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-two-top-flipped.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-angle-top.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-angle-top-flipped.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-groups-pair.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-groups-mixed.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-chain-circle.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/chamfer-chain-groups.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+
+| apps/solidcraft-cli/tests/history/construction-point-body.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |
+| apps/solidcraft-cli/tests/history/construction-point-sketch.solidcraft | SolidCraft contributors | original authored command recipe beside the fixture | MIT OR Apache-2.0 |

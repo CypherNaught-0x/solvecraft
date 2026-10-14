@@ -377,6 +377,9 @@ fn boolean_via(a: &Body, b: &Body, op: BoolOp, whole: &dyn Fn(&Body, &Body, Bool
             other => other,
         });
     }
+    if op == BoolOp::Union {
+        r = r.and_then(|result| result.map(|body| body.with_union_planar_sources(a, b)).transpose());
+    }
     if r.is_ok() {
         merge(diagnostics);
     }

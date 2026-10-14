@@ -161,6 +161,16 @@ replace any Dock shortcut with the old name (open `SolidCraft.app`, then
 `flatpak remote-modify --user --url=https://bherbruck.github.io/solidcraft/flatpak/repo/ solvecraft`
 (use your remote's name), then `flatpak update --user`.
 
+## F3D development formats
+
+The unpublished F3D branch used format numbers 14–22 independently of upstream.
+Its authored history fixtures now use the explicit `solidcraft-f3d-dev/N` tag;
+the reader applies their development migrations and saves them as `solidcraft/29`.
+Ordinary upstream `solidcraft/N` files retain upstream topology identities and
+piece ordering. Untagged development files in that overlapping range cannot be
+distinguished reliably from upstream files and must be explicitly retagged before
+import. Development formats 23–28 remain readable without retagging.
+
 ## Draft design containers
 
 The #303 draft used `solvecraft-container/1`. `crates/io/src/design.rs` accepts that

@@ -579,7 +579,7 @@ fn role_name(f: &Feature, before: &ModelState, ps: &[Vec3], ns: &[Vec3], fi: usi
         FeatureKind::Sweep { .. } | FeatureKind::Loft { .. } => {
             let sk = match &f.kind {
                 FeatureKind::Sweep { sketch, .. } => Some(*sketch),
-                FeatureKind::Loft { sections, .. } => sections.first().map(|x| x.sketch),
+                FeatureKind::Loft { sections, .. } => sections.first().filter(|s| s.face.is_none()).map(|x| x.sketch),
                 _ => None,
             };
             let Some(ss) = sk.and_then(|k| before.sketch(k.0)) else { return format!("F{fid}:face:{fi}") };

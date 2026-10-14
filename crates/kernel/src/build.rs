@@ -1537,6 +1537,18 @@ pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {
     })
 }
 
+/// Smooth interpolation through three coaxial circular sections with one chord parameter.
+pub fn loft_circular_chord(sections: &[(Plane, Loop2)]) -> Result<Body> {
+    let (wires, sources, reversed) = loft_wires(sections)?;
+    let ordered: Vec<_> = if reversed { sections.iter().rev().collect() } else { sections.iter().collect() };
+    let middle = crate::loft_chord::middle_parameter(&ordered)?;
+    guard("circular chord loft", || {
+        let faces = smooth_loft_faces_at(&wires, &sources, true, Some(middle))?;
+        let (Some(first), Some(last)) = (wires.first(), wires.last()) else { return Err(KernelError::Invalid("no sections".into())) };
+        cap_and_close(faces, std::slice::from_ref(first), std::slice::from_ref(last), reversed)
+    })
+}
+
 /// The wires of a loft's closed sections, matched: oriented alike, resampled to the same
 /// segment count and turned to start alike; with the profile segments under each wire edge, and
 /// whether the sections were turned round into the canonical order.
@@ -1674,6 +1686,10 @@ fn section_parameters(edges: &[Vec<mt::Edge>]) -> Vec<f64> {
 /// more, quadratic across three), neighbours sharing their seams. `closed` wires join their
 /// last edge to their first; open ones have a seam at each end.
 pub(crate) fn smooth_loft_faces(wires: &[mt::Wire], numbers: &[Vec<Vec<usize>>], closed: bool) -> Result<Vec<Side>> {
+    smooth_loft_faces_at(wires, numbers, closed, None)
+}
+
+fn smooth_loft_faces_at(wires: &[mt::Wire], numbers: &[Vec<Vec<usize>>], closed: bool, middle: Option<f64>) -> Result<Vec<Side>> {
     let fail = |m: &str| KernelError::Failed(format!("smooth loft: {m}"));
     let edges: Vec<Vec<mt::Edge>> = wires.iter().map(|w| w.edge_iter().cloned().collect()).collect();
     let n = edges.first().map(Vec::len).ok_or_else(|| fail("no sections"))?;
@@ -1687,7 +1703,11 @@ pub(crate) fn smooth_loft_faces(wires: &[mt::Wire], numbers: &[Vec<Vec<usize>>],
         }
     };
     let (Some(first), Some(last)) = (edges.first(), edges.last()) else { return Err(fail("sections")) };
-    let along = section_parameters(&edges);
+    let along = match middle {
+        Some(t) if edges.len() == 3 => vec![0.0, t, 1.0],
+        Some(_) => return Err(fail("circular chord requires three sections")),
+        None => section_parameters(&edges),
+    };
     // Seams: through the k-th vertex of every section (an open wire's last one at the end of
     // its last edge).
     let vertex = |e: &mt::Edge, end: bool| if end { e.back().clone() } else { e.front().clone() };
