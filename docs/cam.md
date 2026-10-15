@@ -231,14 +231,32 @@ Run `cargo xtask cam-oracle --dir plan/fusion/cam/oracle` for local Fusion packa
 requires separate `face`, `contour`, `pocket`, `drill` directories. Missing evidence is a failure
 to establish parity, never a skipped pass. Each directory requires:
 
-- `manifest.json`: nonempty `fusion_version`, `captured_at`, `input_fingerprint`, SHA-256
-  `post_sha256`, and `capture_complete: true` only after actual capture.
+- `manifest.json`: nonempty `fusion_version`, `captured_at`, `input_fingerprint`,
+  `post_identity`, SHA-256 `post_sha256`, and `capture_complete: true` only after actual capture.
+  `capabilities` records a nonempty `license` string and an array of available `strategies`.
+  `source_geometry` names the captured source file inside the package (for example `source.step`).
+  `artifact_sha256` maps every required artifact below, including source geometry and both input
+  snapshots, to its SHA-256 hash. Hashes bind the captured set and reject stale replacements;
+  they do not establish that the input transcription or original capture was correct.
 - `post.cps`, `post-properties.json`, `input.json`, independently captured `reference-input.json`.
   Input snapshots must match exactly, including frames, geometry, tools, allowance and settings.
 - `reference.nc`, Fusion `setup-sheet.html`, `setup-sheet-values.json` with `setup`, `tools`,
-  `operations` values transcribed from the captured sheet/API, and `simulation.json` with status.
+  `operations` values transcribed from the captured sheet/API, and `simulation.json` as below.
 - `stock.stl` in setup millimetres, captured after the operation. Each first fixture has one
   operation; multi-operation coverage must capture and validate every intermediate state.
+
+`simulation.json` must record `status` (`pass`, `fail`, or `inconclusive`), `complete: true`,
+`at_program_end: true`, a captured `findings` array, `completed_operations` in canonical input
+ID order, and `stock_after_operation` equal to the final operation ID. Its `accuracy` object
+records the actual UI `setting` and positive `resolution_mm` when available. If Fusion does
+not report a numeric resolution, use `resolution_mm: null` and `resolution_status: "not_reported"`;
+do not infer a resolution from the slider or confuse it with the independent verifier budget.
+Missing accuracy/end-position evidence is incomplete. Captured failure or uncertainty prevents
+a pass even when the independent checks pass. `post-properties.json` must contain valid JSON
+(an object or array), including an empty object when the post has no properties.
+Each finding has nonempty `detail` and `severity` (`error`, `unresolved`, or `information`).
+An error or unresolved finding prevents a pass even if the captured summary says `pass`;
+unknown severities are rejected. Add operation/motion/line locations when the reference exposes them.
 
 The harness verifies provenance/input fingerprints and the actual post hash, interprets both
 programs, simulates them through the same independent verifier, compares local spatial stock
@@ -246,6 +264,16 @@ bounds and the exported reference STL, checks setup values and reports distance/
 deltas. Spatial indexing bounds local comparisons. HTML path overlays link to numbered NC listings and diagnostics. Stock heatmaps show sampled
 remaining material relative to protected geometry; they are diagnostic views, not acceptance tests. Intermediate roughing must be judged against protected geometry and allowed stock;
 identical roughing paths, retract counts or execution times are not acceptance criteria.
+
+All three stock pairs must pass directly: SolveCraft NC versus reference NC, SolveCraft NC
+versus reference STL, and reference NC versus its own exported STL. Tolerance comparisons
+are not transitive: two results can each lie within 0.01 mm of a third while differing by
+0.012 mm from each other. An original analytic regression exercises that failure. Reports
+retain definite failures even alongside inconclusive checks and include `cam-oracle/2`
+comparison provenance, capture settings, artifact hashes, generator/post identities and error
+budgets. The imported NC report identifies the captured post, rather than attributing it to
+SolveCraft's post. Synthetic unit-test packages are original expectations and never count
+as Fusion parity evidence.
 
 Create geometry from the original analytic recipe in each application. Record Fusion version,
 license/capabilities, all resolved settings and capture timestamps. Use its current

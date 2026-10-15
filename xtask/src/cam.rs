@@ -4,6 +4,11 @@ use sha2::{Digest, Sha256};
 use solvecraft_cam::{self as cam, JobInput, nc, verify};
 use std::path::{Path, PathBuf};
 
+mod reference;
+#[cfg(test)]
+mod tests;
+const COMPARISON_VERSION: &str = "cam-oracle/2";
+
 fn write(path: &Path, content: impl AsRef<[u8]>) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| format!("{}: {e}", path.display()))
 }
@@ -182,22 +187,17 @@ fn compare_case(dir: &Path, out: &Path) -> Result<Value, String> {
     if cam::fingerprint(&unhashed).map_err(|e| e.to_string())? != input.fingerprint {
         return Err("input fingerprint does not describe supplied geometry and settings".into());
     }
-    for name in ["setup-sheet.html", "stock.stl", "simulation.json", "post-properties.json"] {
-        if read(&dir.join(name))?.is_empty() {
-            return Err(format!("empty artifact {name}"));
-        }
-    }
-    let simulation = json_file(&dir.join("simulation.json"))?;
-    if simulation["status"] != "pass" {
-        return Err("reference simulation not passing".into());
-    }
+    let capture = reference::validate(dir, &manifest, &input)?;
     let reference = String::from_utf8(read(&dir.join("reference.nc"))?).map_err(|e| e.to_string())?;
     let reference_code = reference;
     let reference = nc::parse(&reference_code, &input.tools).map_err(|e| e.to_string())?;
     let path = cam::generate::generate(input.clone()).map_err(|e| e.to_string())?;
     let own = nc::round_trip(&path, &input.setup, &input.tools).map_err(|e| e.to_string())?;
     let ours = verify::simulate(&input, &own, Default::default()).map_err(|e| e.to_string())?;
-    let theirs = verify::simulate(&input, &reference, Default::default()).map_err(|e| e.to_string())?;
+    let mut theirs = verify::simulate(&input, &reference, Default::default()).map_err(|e| e.to_string())?;
+    // The verifier interprets the reference dialect, but did not create this post.
+    // Attribute the imported program to its captured post rather than our own.
+    theirs.post_version = format!("{}; sha256={digest}", manifest["post_identity"].as_str().unwrap_or_default());
     directory(out)?;
     write(&out.join("solve.html"), program_html(&nc::post(&path, &input.setup).map_err(|e| e.to_string())?, &ours))?;
     write(&out.join("fusion.html"), program_html(&reference_code, &theirs))?;
@@ -208,21 +208,38 @@ fn compare_case(dir: &Path, out: &Path) -> Result<Value, String> {
     let mesh = cam::compare::read_stl(&read(&dir.join("stock.stl"))?).map_err(|e| e.to_string())?;
     let stock = cam::compare::stock_reports(&ours, &theirs, cam::TOLERANCE).map_err(|e| e.to_string())?;
     let mesh_check = cam::compare::stock_mesh(&ours, &mesh, input.setup.stock.min.z, cam::TOLERANCE).map_err(|e| e.to_string())?;
+    let reference_mesh_check = cam::compare::stock_mesh(&theirs, &mesh, input.setup.stock.min.z, cam::TOLERANCE).map_err(|e| e.to_string())?;
     let metadata = json_file(&dir.join("setup-sheet-values.json"))?;
     let setup_values_match =
         metadata["setup"] == json!(input.setup) && metadata["tools"] == json!(input.tools) && metadata["operations"] == json!(input.operations);
-    let pass = ours.status == verify::Status::Pass
-        && theirs.status == verify::Status::Pass
-        && ours.finished_dimensions == verify::Status::Pass
-        && theirs.finished_dimensions == verify::Status::Pass
-        && stock.status == verify::Status::Pass
-        && mesh_check.status == verify::Status::Pass
-        && setup_values_match;
+    let status = combined_status([
+        ours.status,
+        theirs.status,
+        ours.finished_dimensions,
+        theirs.finished_dimensions,
+        stock.status,
+        mesh_check.status,
+        reference_mesh_check.status,
+        capture.simulation_status,
+        if setup_values_match { verify::Status::Pass } else { verify::Status::Fail },
+    ]);
+    let pass = status == verify::Status::Pass;
     let solve_metrics = metrics(&input, &own, &ours)?;
     let reference_metrics = metrics(&input, &reference, &theirs)?;
-    Ok(
-        json!({"pass":pass,"status":if pass{"pass"}else{"inconclusive"},"solve":ours.status,"reference":theirs.status,"finished_dimensions":[ours.finished_dimensions,theirs.finished_dimensions],"stock":stock,"reference_stl":mesh_check,"setup_values_match":setup_values_match,"distance_delta":ours.cutting_distance-theirs.cutting_distance,"minutes_delta":ours.cutting_minutes-theirs.cutting_minutes,"volume_intervals":[[ours.remaining_volume_low,ours.remaining_volume_high],[theirs.remaining_volume_low,theirs.remaining_volume_high]],"metrics":{"solve":solve_metrics,"reference":reference_metrics}}),
-    )
+    Ok(json!({"pass":pass,"status":status,"comparison_version":COMPARISON_VERSION,"provenance":capture.provenance,
+            "solve":ours.status,"reference":theirs.status,"finished_dimensions":[ours.finished_dimensions,theirs.finished_dimensions],
+            "stock":stock,"reference_stl":mesh_check,"reference_nc_vs_reference_stl":reference_mesh_check,
+            "setup_values_match":setup_values_match,"distance_delta":ours.cutting_distance-theirs.cutting_distance,
+            "minutes_delta":ours.cutting_minutes-theirs.cutting_minutes,
+            "volume_intervals":[[ours.remaining_volume_low,ours.remaining_volume_high],[theirs.remaining_volume_low,theirs.remaining_volume_high]],
+            "metrics":{"solve":solve_metrics,"reference":reference_metrics}}))
+}
+fn combined_status(statuses: impl IntoIterator<Item = verify::Status>) -> verify::Status {
+    statuses.into_iter().fold(verify::Status::Pass, |result, next| match (result, next) {
+        (verify::Status::Fail, _) | (_, verify::Status::Fail) => verify::Status::Fail,
+        (verify::Status::Inconclusive, _) | (_, verify::Status::Inconclusive) => verify::Status::Inconclusive,
+        _ => verify::Status::Pass,
+    })
 }
 fn overlay(input: &JobInput, a: &nc::Parsed, b: Option<&nc::Parsed>) -> Result<String, String> {
     let min = input.setup.stock.min;
@@ -260,7 +277,7 @@ fn overlay(input: &JobInput, a: &nc::Parsed, b: Option<&nc::Parsed>) -> Result<S
     Ok(svg)
 }
 fn report(out: &Path, cases: &[Value], title: &str) -> Result<(), String> {
-    write(&out.join("report.json"), pretty(&json!({"version":cam::VERSION,"cases":cases}))?)?;
+    write(&out.join("report.json"), pretty(&json!({"version":cam::VERSION,"comparison_version":COMPARISON_VERSION,"cases":cases}))?)?;
     let mut html = format!(
         "<!doctype html><meta charset=utf-8><title>{title}</title><style>body{{font:16px system-ui;margin:40px;max-width:1100px}}pre{{white-space:pre-wrap;background:#eee;padding:16px}}img{{width:480px}}a{{color:#145aa8}}</style><h1>{title}</h1><p>Blue: SolveCraft; orange: Fusion. Path and time differences are diagnostic, not equivalence gates.</p>"
     );
