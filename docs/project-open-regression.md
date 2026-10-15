@@ -127,3 +127,23 @@ the limiting-normal refinement they need. On Linux this routing change reduced
 the small sloped-corner test's worst interpolated normal error from 41.47 degrees
 to 0.735 degrees, and its display mesh from 79,258 triangles to 19,029. The test's
 one-degree error limit and 20,000-triangle budget are unchanged.
+
+The complete opening test subsequently measured 53.40 seconds on an isolated
+Linux runner (47.87 seconds in `doc.open`, 5.52 seconds meshing the basin), but
+still exceeded 60 seconds on another runner. A same-run `bench-open` measured
+52.78 seconds, so it did not expose a different opening path. Profiling identified
+repeated scans over zero spline coefficients in projected-map evaluation. The
+fit now trims each basis's zero tails before its tensor products, preserving the
+coefficient threshold and accumulation order. A regression compares projection
+values and constraint coefficients exactly at every supported density, including
+endpoint and derivative bases. The opening test reports its `doc.open` phase
+separately, retaining its 60-second deadline and all document assertions.
+
+The QR update remained the main fitting cost in the lightly optimized CI kernel.
+The CI profile now builds only `solidcraft-kernel` at optimization level 2, as it
+already does for third-party numerical dependencies; other workspace crates keep
+level 1. With this setting, the complete Linux opening test, including its real
+child-process watchdog, passed in 43.20 seconds (38.38 seconds opening, 4.79 seconds
+meshing), with zero errors, 14 bodies and 98,761 triangles. Seven focused numerical
+and display tests passed in the same run. These are runner-specific measurements,
+not a controlled estimate of the compiler setting's speedup.

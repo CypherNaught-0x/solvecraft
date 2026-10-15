@@ -46,6 +46,7 @@ fn check_basin() {
     let start = Instant::now();
     let mut session = Session::default();
     let result = session.execute("doc.open", &json!({"path": path})).unwrap();
+    eprintln!("HardEdgeBasin: doc.open {:?}", start.elapsed());
     assert_eq!(result["features"], 58);
     assert_eq!(session.path.as_deref(), path.to_str());
     assert!(!session.is_dirty());
