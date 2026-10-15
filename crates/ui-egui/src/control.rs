@@ -127,6 +127,7 @@ pub fn handle(app: &mut SolveApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 "program": app.manufacturing.program,
                 "job": app.manufacturing.job,
                 "completed_motions": app.manufacturing.playback,
+                "finding": app.manufacturing.finding,
                 "playing": app.manufacturing.playing,
                 "workpiece": format!("{:?}", app.manufacturing.view.workpiece),
                 "fixtures": app.manufacturing.view.fixtures,

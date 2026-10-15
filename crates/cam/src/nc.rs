@@ -59,10 +59,31 @@ pub struct Record {
     pub line: usize,
     pub motion: Motion,
 }
+/// Provenance established only after the independent reader matches a posted block.
+/// `block` is one-based and also the completed-block count used by playback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceLocation {
+    pub line: usize,
+    pub block: usize,
+    pub operation: u64,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Parsed {
     pub records: Vec<Record>,
     pub work_offset: u8,
+    // Never accept provenance from comments or deserialized external programs.
+    #[serde(skip)]
+    sources: Vec<SourceLocation>,
+}
+impl Parsed {
+    pub fn source_for_line(&self, line: usize) -> Option<SourceLocation> {
+        self.sources.binary_search_by_key(&line, |s| s.line).ok().and_then(|i| self.sources.get(i).copied())
+    }
+    /// First interpreted record on a physical NC line, using a zero-based index.
+    pub fn record_for_line(&self, line: usize) -> Option<usize> {
+        let i = self.records.partition_point(|r| r.line < line);
+        self.records.get(i).filter(|r| r.line == line).map(|_| i)
+    }
 }
 
 /// Strictly consumes every word. Units and distance mode must be declared before motion.
@@ -302,7 +323,7 @@ pub fn parse(source: &str, tools: &[Tool]) -> Result<Parsed> {
     if !ended || !have_pos {
         return invalid("NC program requires motion and an explicit program end");
     }
-    Ok(Parsed { records: out, work_offset: offset.ok_or_else(|| Error("missing work offset".into()))? })
+    Ok(Parsed { records: out, work_offset: offset.ok_or_else(|| Error("missing work offset".into()))?, sources: Vec::new() })
 }
 fn words(line: &str) -> Result<Vec<(char, f64)>> {
     if line.len() > 4096 {
@@ -358,14 +379,15 @@ fn words(line: &str) -> Result<Vec<(char, f64)>> {
 }
 
 pub fn round_trip(path: &Toolpath, setup: &Setup, tools: &[Tool]) -> Result<Parsed> {
-    let parsed = parse(&post(path, setup)?, tools)?;
+    let mut parsed = parse(&post(path, setup)?, tools)?;
     if parsed.work_offset != setup.work_offset || parsed.records.len() != path.blocks.len() + 1 {
         return invalid("post changed block count or work offset");
     }
-    for (a, b) in path.blocks.iter().zip(parsed.records.iter().skip(1)) {
+    for (i, (a, b)) in path.blocks.iter().zip(parsed.records.iter().skip(1)).enumerate() {
         if !equivalent(&a.motion, &b.motion) {
             return invalid(format!("post mismatch at NC line {}", b.line));
         }
+        parsed.sources.push(SourceLocation { line: b.line, block: i + 1, operation: a.operation });
     }
     Ok(parsed)
 }
@@ -462,4 +484,109 @@ pub fn segments(parsed: &Parsed, setup: &Setup) -> Result<Vec<Segment>> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod provenance_tests {
+    use super::*;
+    #[test]
+    fn diagnostic_sources_follow_checked_records_and_ignore_untrusted_annotations() {
+        let input = corpus::fixture("face").unwrap();
+        let path = Toolpath {
+            fingerprint: input.fingerprint.clone(),
+            blocks: vec![
+                Block { operation: 10, motion: Motion::Tool { tool: 1, number: 1 } },
+                Block { operation: 10, motion: Motion::Spindle { rpm: 5000. } },
+                Block { operation: 10, motion: Motion::Rapid { to: Vec3::new(1., 0., 15.) } },
+                Block {
+                    operation: 20,
+                    motion: Motion::Arc { to: Vec3::new(1., 0., 15.), center: Vec3::new(0., 0., 15.), clockwise: true, feed: 100. },
+                },
+                Block { operation: 20, motion: Motion::Spindle { rpm: 0. } },
+                Block { operation: 20, motion: Motion::Stop },
+            ],
+        };
+        let parsed = round_trip(&path, &input.setup, &input.tools).unwrap();
+        for (i, record) in parsed.records.iter().skip(1).enumerate() {
+            assert_eq!(
+                parsed.source_for_line(record.line),
+                Some(SourceLocation { line: record.line, block: i + 1, operation: path.blocks[i].operation })
+            );
+            assert_eq!(parsed.record_for_line(record.line), Some(i + 1));
+        }
+        assert!(parsed.source_for_line(4).is_none()); // startup pose
+        assert!(parsed.source_for_line(5).is_none()); // comment
+        let arc = &parsed.records[4];
+        let segments = segments(&parsed, &input.setup).unwrap();
+        assert!(segments.iter().filter(|s| s.line == arc.line).count() > 10);
+        assert!(segments.iter().filter(|s| s.line == arc.line).all(|s| parsed.source_for_line(s.line).unwrap().block == 4));
+        let raw = parse(&post(&path, &input.setup).unwrap().replace("Operation 20", "Operation 999"), &input.tools).unwrap();
+        assert!(raw.source_for_line(arc.line).is_none());
+        let mut serialized = serde_json::to_value(&parsed).unwrap();
+        serialized["sources"] = serde_json::json!([{"line":arc.line,"block":4,"operation":999}]);
+        let decoded: Parsed = serde_json::from_value(serialized).unwrap();
+        assert!(decoded.source_for_line(arc.line).is_none());
+    }
+    #[test]
+    fn diagnostic_fault_findings_retain_checked_block_but_raw_nc_has_only_record() {
+        let input = corpus::fixture("face").unwrap();
+        let mut path = generate::generate(input.clone()).unwrap();
+        for block in &mut path.blocks {
+            if let Motion::Linear { to, .. } = &mut block.motion
+                && to.z == 5.
+            {
+                to.z = 4.;
+            }
+        }
+        let parsed = round_trip(&path, &input.setup, &input.tools).unwrap();
+        let report = verify::simulate(&input, &parsed, Default::default()).unwrap();
+        assert_eq!(report.status, verify::Status::Fail);
+        let finding = report.findings.iter().find(|f| f.kind == "gouge").unwrap();
+        assert_eq!(finding.severity, verify::FindingSeverity::Error);
+        assert_eq!(report.findings[0].severity, verify::FindingSeverity::Error);
+        let source = finding.source.unwrap();
+        assert_eq!(Some(source.line), finding.line);
+        assert_eq!(source.operation, path.blocks[source.block - 1].operation);
+        assert_eq!(finding.record, Some(source.block + 1)); // initial pose is the first NC record
+        let raw = parse(&post(&path, &input.setup).unwrap(), &input.tools).unwrap();
+        let raw_report = verify::simulate(&input, &raw, Default::default()).unwrap();
+        assert_eq!(raw_report.status, report.status);
+        assert_eq!(raw_report.finished_dimensions, report.finished_dimensions);
+        assert!(raw_report.findings.iter().filter(|f| f.line.is_some()).all(|f| f.source.is_none() && f.record.is_some()));
+        let legacy: verify::Finding =
+            serde_json::from_value(serde_json::json!({"kind":"legacy","line":4,"at":[0,0,0],"detail":"old report"})).unwrap();
+        assert!(legacy.record.is_none() && legacy.source.is_none());
+    }
+    #[test]
+    fn diagnostic_retention_keeps_errors_and_budget_reasons_bounded() {
+        let input = corpus::fixture("face").unwrap();
+        let path = generate::generate(input.clone()).unwrap();
+        let parsed = round_trip(&path, &input.setup, &input.tools).unwrap();
+        let mut report = verify::simulate(&input, &parsed, Default::default()).unwrap();
+        report.findings.clear();
+        let finding = |line, severity, kind: &str| verify::Finding {
+            line,
+            severity,
+            kind: kind.into(),
+            record: None,
+            source: None,
+            at: Vec3::ZERO,
+            detail: "witness".into(),
+        };
+        for line in 1..=250 {
+            report.finding(finding(Some(line), verify::FindingSeverity::Unresolved, "clearance_unresolved"));
+        }
+        assert_eq!(report.findings.len(), 200);
+        report.finding(finding(None, verify::FindingSeverity::Unresolved, "budget_exhausted"));
+        report.finding(finding(Some(999), verify::FindingSeverity::Error, "gouge"));
+        for _ in 0..250 {
+            report.finding(finding(Some(999), verify::FindingSeverity::Error, "gouge"));
+        }
+        assert_eq!(report.findings.len(), 200);
+        assert_eq!(report.findings.iter().filter(|f| f.kind == "gouge").count(), 1);
+        assert!(report.findings.iter().any(|f| f.kind == "budget_exhausted"));
+        // Diagnostic storage is not an input to acceptance decisions.
+        assert_eq!(report.status, verify::Status::Pass);
+    }
 }

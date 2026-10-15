@@ -14,12 +14,33 @@ pub enum Status {
     Fail,
     Inconclusive,
 }
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingSeverity {
+    Information,
+    #[default]
+    Unresolved,
+    Error,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Finding {
+    #[serde(default)]
+    pub severity: FindingSeverity,
     pub kind: String,
     pub line: Option<usize>,
+    /// One-based interpreted NC record, not a tessellated arc segment.
+    #[serde(default)]
+    pub record: Option<usize>,
+    /// Present only for an independently checked SolveCraft post round trip.
+    #[serde(default)]
+    pub source: Option<nc::SourceLocation>,
     pub at: Vec3,
     pub detail: String,
+}
+impl Finding {
+    fn priority(&self) -> (FindingSeverity, bool) {
+        (self.severity, self.line.is_none())
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Cell {
@@ -56,6 +77,23 @@ pub struct Report {
     pub remaining_volume_low: f64,
     pub remaining_volume_high: f64,
     pub work: usize,
+}
+impl Report {
+    /// Bounded representative witnesses. Repeated cells on one NC line must not
+    /// crowd out a definite failure found later in the verification traversal.
+    pub(crate) fn finding(&mut self, finding: Finding) {
+        if self.findings.iter().any(|old| old.kind == finding.kind && old.line == finding.line && old.severity == finding.severity) {
+            return;
+        }
+        if self.findings.len() < 200 {
+            self.findings.push(finding);
+        } else if let Some((index, old)) = self.findings.iter().enumerate().min_by_key(|(_, old)| old.priority())
+            && old.priority() < finding.priority()
+            && let Some(slot) = self.findings.get_mut(index)
+        {
+            *slot = finding;
+        }
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
@@ -167,7 +205,10 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
         work: 0,
     };
     if finished.is_none() {
-        r.findings.push(Finding {
+        r.finding(Finding {
+            record: None,
+            severity: FindingSeverity::Unresolved,
+            source: None,
             kind: "finished_region_unsupported".into(),
             line: None,
             at: stock.min,
@@ -197,7 +238,10 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
         if r.work > limits.work || r.cells.len() + pending.len() >= limits.cells {
             r.stock_complete = false;
             r.status = if r.status == Status::Fail { Status::Fail } else { Status::Inconclusive };
-            r.findings.push(Finding {
+            r.finding(Finding {
+                record: None,
+                severity: FindingSeverity::Unresolved,
+                source: None,
                 kind: "budget_exhausted".into(),
                 line: None,
                 at: stock.min,
@@ -304,14 +348,15 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
         if let Some(dimension) = dimension {
             if dimension == Status::Fail {
                 r.finished_dimensions = Status::Fail;
-                if r.findings.len() < 200 {
-                    r.findings.push(Finding {
-                        kind: "finished_region_error".into(),
-                        line: removal_line,
-                        at,
-                        detail: expected.map_or_else(String::new, |e| e.description()),
-                    });
-                }
+                r.finding(Finding {
+                    record: None,
+                    severity: FindingSeverity::Error,
+                    source: None,
+                    kind: "finished_region_error".into(),
+                    line: removal_line,
+                    at,
+                    detail: expected.map_or_else(String::new, |e| e.description()),
+                });
             } else if dimension == Status::Inconclusive && r.finished_dimensions == Status::Pass {
                 r.finished_dimensions = Status::Inconclusive;
             }
@@ -322,29 +367,34 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
             } else if r.status == Status::Pass {
                 r.status = Status::Inconclusive;
             }
-            if r.findings.len() < 200 {
-                r.findings.push(Finding {
-                    kind: kind.into(),
-                    line: Some(line),
-                    at,
-                    detail: "Swept cutter or non-cutting tool envelope intersects remaining stock".into(),
-                });
-            }
+            r.finding(Finding {
+                record: None,
+                severity: if kind.ends_with("unresolved") { FindingSeverity::Unresolved } else { FindingSeverity::Error },
+                source: None,
+                kind: kind.into(),
+                line: Some(line),
+                at,
+                detail: "Swept cutter or non-cutting tool envelope intersects remaining stock".into(),
+            });
         }
         if protection == Status::Fail {
             r.status = Status::Fail;
-            if r.findings.len() < 200 {
-                r.findings.push(Finding {
-                    kind: "gouge".into(),
-                    line: removal_line,
-                    at,
-                    detail: format!("A definitely removed point lies more than {:.6} mm inside the protected height-field solid", tol),
-                });
-            }
+            r.finding(Finding {
+                record: None,
+                severity: FindingSeverity::Error,
+                source: None,
+                kind: "gouge".into(),
+                line: removal_line,
+                at,
+                detail: format!("A definitely removed point lies more than {:.6} mm inside the protected height-field solid", tol),
+            });
         }
         // Rest is reported separately: intermediate roughing is not required to finish a part.
         if rest && !r.findings.iter().any(|f| f.kind == "remaining_material") {
-            r.findings.push(Finding {
+            r.finding(Finding {
+                record: None,
+                severity: FindingSeverity::Information,
+                source: None,
                 kind: "remaining_material".into(),
                 line: None,
                 at,
@@ -355,14 +405,15 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
             if r.status == Status::Pass {
                 r.status = Status::Inconclusive;
             }
-            if r.findings.len() < 200 {
-                r.findings.push(Finding {
-                    kind: "protected_surface_unresolved".into(),
-                    line: removal_line,
-                    at,
-                    detail: "Local surface-distance bounds cannot yet certify the protected CAD boundary at this resolution or work budget".into(),
-                });
-            }
+            r.finding(Finding {
+                record: None,
+                severity: FindingSeverity::Unresolved,
+                source: None,
+                kind: "protected_surface_unresolved".into(),
+                line: removal_line,
+                at,
+                detail: "Local surface-distance bounds cannot yet certify the protected CAD boundary at this resolution or work budget".into(),
+            });
         }
         let area = (max[0] - min[0]) * (max[1] - min[1]);
         r.remaining_volume_low += area * (low - stock.min.z);
@@ -378,6 +429,13 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
     }
     if (!r.stock_complete || r.status != Status::Pass) && r.finished_dimensions == Status::Pass {
         r.finished_dimensions = Status::Inconclusive;
+    }
+    r.findings.sort_by_key(|finding| std::cmp::Reverse(finding.priority()));
+    for finding in &mut r.findings {
+        if let Some(line) = finding.line {
+            finding.record = nc.record_for_line(line).map(|i| i + 1);
+            finding.source = nc.source_for_line(line);
+        }
     }
     Ok(r)
 }

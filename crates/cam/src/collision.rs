@@ -160,14 +160,15 @@ fn finding(report: &mut Report, status: Status, s: &Segment, part: &Part, index:
     if status == Status::Fail || report.status == Status::Pass {
         report.status = status;
     }
-    if report.findings.len() < 200 {
-        report.findings.push(Finding {
-            kind: if status == Status::Fail { format!("fixture_{}_collision", part.label) } else { "fixture_clearance_unresolved".into() },
-            line: Some(s.line),
-            at: s.from,
-            detail: format!("{} of tool {} at motion {}: {detail}", part.label, s.tool, index + 1),
-        });
-    }
+    report.finding(Finding {
+        severity: if status == Status::Fail { crate::verify::FindingSeverity::Error } else { crate::verify::FindingSeverity::Unresolved },
+        record: None,
+        source: None,
+        kind: if status == Status::Fail { format!("fixture_{}_collision", part.label) } else { "fixture_clearance_unresolved".into() },
+        line: Some(s.line),
+        at: s.from,
+        detail: format!("{} of tool {} at motion {}: {detail}", part.label, s.tool, index + 1),
+    });
 }
 
 pub(crate) async fn fixtures<F: std::future::Future<Output = ()>>(

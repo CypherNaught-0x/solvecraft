@@ -250,6 +250,20 @@ pub fn segments(path: &cam::Toolpath, setup: &cam::Setup, completed: usize, mut 
         }
     }
 }
+pub fn severity_color(severity: cam::verify::FindingSeverity) -> Color32 {
+    match severity {
+        cam::verify::FindingSeverity::Error => Tokens::get().error,
+        cam::verify::FindingSeverity::Unresolved => Tokens::get().warning,
+        cam::verify::FindingSeverity::Information => Tokens::get().cam_stock,
+    }
+}
+pub fn finding_marker(app: &SolveApp) -> Option<(Vec3, Color32)> {
+    let index = app.manufacturing.finding?;
+    let job = fresh_job(app)?;
+    let JobState::Verified(_, report) = job.state().ok()? else { return None };
+    let finding = report.findings.get(index)?;
+    Some((job.input().ok()?.setup.frame.world(finding.at), severity_color(finding.severity)))
+}
 pub fn cpu_overlays(app: &SolveApp, scene: &mut Scene) {
     if app.ui.tab != "MILLING" {
         return;
@@ -264,6 +278,12 @@ pub fn cpu_overlays(app: &SolveApp, scene: &mut Scene) {
         let points = corners(setup.stock).map(|p| setup.frame.world(p));
         for (a, b) in [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)] {
             line(points[a], points[b], tokens.cam_stock);
+        }
+    }
+    if let Some((point, color)) = finding_marker(app) {
+        let size = setup(app).map_or(1., |s| (s.stock.max - s.stock.min).len() / 100.);
+        for delta in [Vec3::X * size, Vec3::Y * size, Vec3::Z * size] {
+            line(point - delta, point + delta, color);
         }
     }
     if !app.manufacturing.view.paths {

@@ -25,7 +25,7 @@ The Manufacture workspace, CLI and MCP share these registered commands:
 | `cam.delete` | `{kind,id}`: refuses removal while referenced |
 | `cam.generate` | `{program, background?}`: immutable job; returns job ID/status |
 | `cam.job.status`, `cam.job.cancel` | `{job}` |
-| `cam.inspect` | `{job?, include_path?, include_stock?, motion?}`: world-space stock display mesh and machine state after the requested number of motion blocks |
+| `cam.inspect` | `{job?, include_path?, include_stock?, motion?, finding?}`: world-space stock display mesh and machine state after the requested number of motion blocks |
 | `cam.simulate` | `{job, background?}`: independent post round trip and stock/clearance checks |
 | `cam.post` | `{job,path?}`: requires fresh generated paths and passing verification |
 | `cam.export` | `{job,format,path?}`: `toolpath`, `setup_sheet`, `stock`, `validation` |
@@ -75,7 +75,7 @@ checks catch stationary contact and tools already inside fixtures. Body groups p
 cavities and prevent opposite winding in separate fixtures from cancelling. Open/nonmanifold
 meshes, clearance within the interpolation/refinement margin, and failed numerical queries remain
 **inconclusive**. It does not call offset or toolpath-generation algorithms and observes cancellation
-during topology preparation and collision queries. The current algorithm fingerprint is `cam/8`.
+during topology preparation and collision queries. The current algorithm fingerprint is `cam/9`.
 No target fitting, translation, unit guessing or discarded unknown NC commands is allowed.
 
 Default dimensional tolerance is 0.01 mm; interpolation/post error is 0.001 mm; requested spatial
@@ -233,3 +233,26 @@ is included in the outstanding browser latency acceptance gate. Native UI tests 
 placement, visibility, stale results and playback boundaries. The four-strategy headless UI
 walkthrough exercises background generation/simulation, posting, stock selection and playback zero,
 with CPU-rendered stock views. Interactive desktop-window coverage remains an acceptance task.
+
+
+Verification findings include a one-based interpreted NC `record` when a physical line is
+known. SolveCraft's independent post round trip also attaches `source` with physical line,
+operation ID and one-based IR block (the completed-block count used by playback). Attribution
+is added after verification and never influences clearance or dimensional decisions. Raw NC
+comments and deserialized data cannot supply this trusted mapping; imported programs retain
+line/record attribution without a guessed SolveCraft operation. Arc subdivisions share their
+original source block. Program-wide and missing-cut findings may have no responsible line.
+
+`cam.inspect {job, finding: index}` uses a zero-based finding index and returns the reported
+world-space point, operation definition, associated CAD source, exact NC line and playback state
+where mapped. It rejects stale jobs and invalid indices; failed verification still blocks posting.
+The Manufacture panel's **Locate issue** action uses that command to center the reported witness
+and seek the completed source block. The marker remains visible when paths are hidden, can be
+cleared, and disappears when inputs change. The marked witness is not a claim of the exact first
+collision contact, and the stock view remains the final conservative stock surface. Validation
+JSON and HTML NC diagnostics retain the operation/block/line attribution.
+
+Findings have explicit information, unresolved or error severity. The bounded list keeps one
+representative witness per kind/NC line/severity, prioritizes definite errors when full, and
+shows errors first. This list is diagnostic sampling, not an exhaustive inventory of affected
+points; verification status and stock intervals are computed independently of finding retention.

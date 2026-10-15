@@ -12,6 +12,7 @@ pub struct State {
     pub job: Option<u64>,
     pub playback: usize,
     pub playing: bool,
+    pub finding: Option<usize>,
     error: String,
     pub view: view::View,
 }
@@ -98,6 +99,7 @@ pub fn start(app: &mut SolveApp, id: &str) {
                 app.manufacturing.playback = 0;
                 app.manufacturing.playing = false;
                 app.manufacturing.view.loaded_job = None;
+                app.manufacturing.finding = None;
             }
         }
         "cam.simulate" => {
@@ -222,19 +224,32 @@ pub fn panel(app: &mut SolveApp, ui: &mut egui::Ui) {
                             ui.label(format!("Finished dimensions: {:?}", r.finished_dimensions));
                             ui.label(format!("Cutting: {:.1} mm · {:.2} min", r.cutting_distance, r.cutting_minutes));
                             egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
-                                for f in r.findings.iter().take(15) {
-                                    ui.label(format!(
-                                        "{}{}: {}",
-                                        f.kind.replace('_', " "),
-                                        f.line.map(|l| format!(" (line {l})")).unwrap_or_default(),
-                                        f.detail
-                                    ));
+                                for (index, f) in r.findings.iter().enumerate() {
+                                    ui.colored_label(view::severity_color(f.severity), format!("{}: {}", f.kind.replace('_', " "), f.detail));
+                                    if let Some(source) = f.source {
+                                        let name = job
+                                            .input()
+                                            .ok()
+                                            .and_then(|input| input.operations.iter().find(|o| o.id == source.operation))
+                                            .map(|o| o.name.as_str())
+                                            .unwrap_or("Unknown operation");
+                                        ui.label(format!("{name} · motion {} · NC line {}", source.block, source.line));
+                                    } else if let Some(line) = f.line {
+                                        ui.label(format!("NC line {line} · operation unmapped"));
+                                    }
+                                    if ui.small_button(format!("Locate issue {}", index + 1)).clicked() {
+                                        locate_finding(app, id, index);
+                                    }
+                                    ui.separator();
                                 }
                             });
                         }
                         Err(e) => {
                             ui.label(e.to_string());
                         }
+                    }
+                    if app.manufacturing.finding.is_some() && ui.small_button("Clear issue marker").clicked() {
+                        app.manufacturing.finding = None;
                     }
                     if ui.button("Cancel job").clicked() {
                         let _ = app.run("cam.job.cancel", json!({"job":id}));
@@ -343,6 +358,7 @@ pub fn panel(app: &mut SolveApp, ui: &mut egui::Ui) {
         app.manufacturing.playing = false;
         app.manufacturing.playback = 0;
         app.manufacturing.view.loaded_job = None;
+        app.manufacturing.finding = None;
     }
     if let Some(id) = action {
         start(app, id);
@@ -706,6 +722,25 @@ fn edit_program(app: &mut SolveApp, ui: &mut egui::Ui, p: &mut cam::Program) {
         p.operations = app.session.doc.manufacturing.operations.iter().filter(|o| o.setup == p.setup).map(|o| o.id).collect();
     }
 }
+fn locate_finding(app: &mut SolveApp, job: u64, index: usize) {
+    match app.run("cam.inspect", json!({"job":job,"finding":index})) {
+        Ok(result) => {
+            if let Ok(point) = serde_json::from_value(result["diagnostic"]["world"].clone()) {
+                app.cam.target = point;
+                app.cam_anim = None;
+            }
+            if let Some(block) = result["diagnostic"]["playback"]["completed"].as_u64().and_then(|n| usize::try_from(n).ok()) {
+                app.manufacturing.playback = block;
+                app.manufacturing.view.loaded_job = Some(job);
+            }
+            app.manufacturing.playing = false;
+            app.manufacturing.view.fraction = 0.;
+            app.manufacturing.finding = Some(index);
+            app.manufacturing.error.clear();
+        }
+        Err(error) => app.manufacturing.error = error,
+    }
+}
 pub fn overlay(app: &SolveApp, painter: &egui::Painter, proj: &crate::viewport::Proj) {
     if app.ui.tab != "MILLING" {
         return;
@@ -721,6 +756,12 @@ pub fn overlay(app: &SolveApp, painter: &egui::Painter, proj: &crate::viewport::
         let corners = view::corners(s.stock);
         for (i, j) in [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)] {
             line(s.frame.world(corners[i]), s.frame.world(corners[j]), Tokens::get().cam_stock);
+        }
+    }
+    if let Some((at, color)) = view::finding_marker(app).and_then(|(point, color)| proj.to_screen(point).map(|point| (point, color))) {
+        painter.circle_stroke(at, 8., Stroke::new(2., color));
+        for delta in [egui::vec2(11., 0.), egui::vec2(0., 11.)] {
+            painter.line_segment([at - delta, at + delta], Stroke::new(1.5, color));
         }
     }
     if !app.manufacturing.view.paths {
@@ -787,5 +828,44 @@ mod tests {
         h.app.run("solid.box", json!({"length":1,"width":1,"height":1})).unwrap();
         assert!(view::stock(&h.app).is_none());
         assert!(h.app.run("cam.inspect", json!({"job":job,"include_stock":true})).is_err());
+    }
+    #[test]
+    fn diagnostic_location_uses_inspection_and_hides_after_edit() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("solid.box", json!({"length":20,"width":20,"height":5})).unwrap();
+        for command in ["cam.setup.put", "cam.tool.put", "cam.operation.put", "cam.program.put"] {
+            h.step(&json!({"start":command})).unwrap();
+            h.step(&json!({"widget":"Save"})).unwrap();
+        }
+        let mut operation = h.app.session.doc.manufacturing.operations[0].clone();
+        operation.bottom = 4.;
+        h.app.run("cam.operation.put", json!({"operation":operation})).unwrap();
+        let id = h.app.run("cam.generate", json!({"program":1})).unwrap()["job"].as_u64().unwrap();
+        let report = h.app.run("cam.simulate", json!({"job":id})).unwrap();
+        assert_eq!(report["verification"]["status"], "fail");
+        h.app.manufacturing.job = Some(id);
+        h.frames(3);
+        let findings = report["verification"]["findings"].as_array().unwrap();
+        let index = findings.iter().position(|f| f["source"].is_object()).unwrap();
+        // The first issue is visible in the nested findings scroll area.
+        assert_eq!(index, 0);
+        h.step(&json!({"widget":"Locate issue 1"})).unwrap();
+        assert_eq!(h.app.manufacturing.finding, Some(0));
+        let block = findings[0]["source"]["block"].as_u64().unwrap() as usize;
+        assert_eq!(h.app.manufacturing.playback, block);
+        assert!(!h.app.manufacturing.playing);
+        assert_eq!(view::finding_marker(&h.app).map(|(point, _)| point), Some(h.app.cam.target));
+        h.app.manufacturing.view.paths = false;
+        let mut scene = solvecraft_engine::view::scene(&h.app.session, &h.app.cam);
+        view::cpu(&h.app, &mut scene);
+        view::cpu_overlays(&h.app, &mut scene);
+        let color = Tokens::get().error;
+        assert!(scene.lines.iter().any(|line| line.color == solvecraft_engine::render::Rgb(color.r(), color.g(), color.b())));
+        h.app.run("solid.box", json!({"length":1,"width":1,"height":1})).unwrap();
+        assert!(view::finding_marker(&h.app).map(|(point, _)| point).is_none());
+        let previous = h.app.cam.target;
+        locate_finding(&mut h.app, id, 0);
+        assert_eq!(h.app.cam.target, previous);
+        assert!(!h.app.manufacturing.error.is_empty());
     }
 }

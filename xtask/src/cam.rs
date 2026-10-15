@@ -225,7 +225,8 @@ fn program_html(code: &str, validation: &verify::Report) -> String {
         "<!doctype html><meta charset=utf-8><title>NC diagnostics</title><style>body{font:16px system-ui;margin:30px}pre{line-height:1.6}pre a{display:block;color:inherit;text-decoration:none}a:target{background:#ffc}code{white-space:pre}</style><h1>NC diagnostics</h1><ul>",
     );
     for f in &validation.findings {
-        let label = esc(&format!("{}: {}", f.kind, f.detail));
+        let location = f.source.map(|source| format!("Operation {}, motion {} · ", source.operation, source.block)).unwrap_or_default();
+        let label = esc(&format!("{location}{}: {}", f.kind, f.detail));
         if let Some(line) = f.line {
             html.push_str(&format!("<li><a href=\"#L{line}\">Line {line}: {label}</a></li>"));
         } else {

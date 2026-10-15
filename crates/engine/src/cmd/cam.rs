@@ -26,7 +26,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("kind: setup|tool|operation|program, id; referenced items cannot be deleted"),
     CommandSpec::new("cam.inspect", "Inspect Manufacturing", inspect)
         .noundo()
-        .params("job?: ID; include_path?: bool; include_stock?: bool (world-space display mesh); motion?: completed block count"),
+        .params("job?: ID; include_path?: bool; include_stock?: bool (world-space display mesh); motion?: completed block count; finding?: zero-based verification finding index"),
     CommandSpec::new("cam.generate", "Generate Toolpaths", generate)
         .at("MILLING", "TOOLPATHS")
         .icon("cam_generate")
@@ -136,6 +136,12 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 }
 fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("job").is_none() {
+        if p.get("finding").is_some()
+            || p.get("motion").is_some()
+            || ["include_path", "include_stock"].iter().any(|key| p.get(key).and_then(Value::as_bool) == Some(true))
+        {
+            return Err(EngineError::Other("job is required for result inspection".into()));
+        }
         return Ok(json!({"manufacturing":s.doc.manufacturing,"jobs":s.cam_jobs.jobs.keys().collect::<Vec<_>>()}));
     }
     let job = jobs::job(s, id(p, "job")?)?;
@@ -159,6 +165,22 @@ fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
         let state = cam::playback::at(&path, &job.input()?.setup, motion).map_err(jobs::error)?;
         result["playback"] = json!(state);
         result["source"] = json!(job.input()?.operations.iter().find(|o| Some(o.id) == state.operation).and_then(|o| o.source.as_ref()));
+    }
+    if let Some(index) = p.get("finding") {
+        jobs::current(s, &job)?;
+        let index =
+            index.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| EngineError::Other("finding must be a nonnegative index".into()))?;
+        let jobs::JobState::Verified(path, report) = job.state()? else {
+            return Err(EngineError::Other("simulate before inspecting findings".into()));
+        };
+        let finding = report.findings.get(index).ok_or_else(|| EngineError::Other("finding index out of range".into()))?;
+        let input = job.input()?;
+        let operation = finding.source.and_then(|source| input.operations.iter().find(|o| o.id == source.operation));
+        let code = cam::nc::post(&path, &input.setup).map_err(jobs::error)?;
+        let line = finding.line.and_then(|line| line.checked_sub(1)).and_then(|index| code.lines().nth(index));
+        result["diagnostic"] = json!({"index":index,"finding":finding,"world":input.setup.frame.world(finding.at),"operation":operation,
+            "source":operation.and_then(|o|o.source.as_ref()),"gcode_line":line,
+            "playback":finding.source.map(|source|cam::playback::at(&path,&input.setup,source.block)).transpose().map_err(jobs::error)?});
     }
     if p.get("include_stock").and_then(Value::as_bool) == Some(true) {
         jobs::current(s, &job)?;
@@ -403,5 +425,38 @@ mod tests {
             let verified = reopened.execute("cam.simulate", &json!({"job":generated["job"]})).unwrap();
             assert_eq!(verified["verification"]["finished_dimensions"], "pass", "{name}: {verified}");
         }
+    }
+    #[test]
+    fn diagnostic_inspection_identifies_posted_operation_and_rejects_stale_results() {
+        let mut s = configured();
+        assert!(s.execute("cam.inspect", &json!({"finding":0})).is_err());
+        let origin = crate::geom::Vec3::new(100., 200., 0.);
+        let mut setup = s.doc.manufacturing.setups[0].clone();
+        setup.frame.origin = origin;
+        setup.stock.min -= origin;
+        setup.stock.max -= origin;
+        s.execute("cam.setup.put", &json!({"setup":setup})).unwrap();
+        let mut operation = s.doc.manufacturing.operations[0].clone();
+        operation.bottom = 3.;
+        s.execute("cam.operation.put", &json!({"operation":operation})).unwrap();
+        let id = s.execute("cam.generate", &json!({"program":1})).unwrap()["job"].clone();
+        assert!(s.execute("cam.inspect", &json!({"job":id,"finding":0})).is_err());
+        let report = s.execute("cam.simulate", &json!({"job":id})).unwrap();
+        assert_eq!(report["verification"]["status"], "fail");
+        let index = report["verification"]["findings"].as_array().unwrap().iter().position(|f| f["source"].is_object()).unwrap();
+        let inspected = s.execute("cam.inspect", &json!({"job":id,"finding":index})).unwrap();
+        let diagnostic = &inspected["diagnostic"];
+        assert_eq!(diagnostic["operation"]["id"], 1);
+        assert_eq!(diagnostic["playback"]["completed"], diagnostic["finding"]["source"]["block"]);
+        assert!(diagnostic["gcode_line"].as_str().unwrap().starts_with("G1"));
+        let at: crate::geom::Vec3 = serde_json::from_value(diagnostic["finding"]["at"].clone()).unwrap();
+        assert_eq!(diagnostic["world"], json!(at + origin));
+        assert!(s.execute("cam.inspect", &json!({"job":id,"finding":-1})).is_err());
+        assert!(s.execute("cam.inspect", &json!({"job":id,"finding":999999})).is_err());
+        assert!(s.execute("cam.post", &json!({"job":id})).is_err());
+        let exported = s.execute("cam.export", &json!({"job":id,"format":"validation"})).unwrap();
+        assert!(exported["content"].as_str().unwrap().contains("source"));
+        s.execute("solid.box", &json!({"length":1,"width":1,"height":1})).unwrap();
+        assert!(s.execute("cam.inspect", &json!({"job":id,"finding":index})).is_err());
     }
 }
