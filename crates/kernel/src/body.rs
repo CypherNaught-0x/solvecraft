@@ -233,6 +233,11 @@ fn mesh_shells_within(solid: &Solid, deflection: Deflection) -> Vec<MeshedShell>
         // face can also come back as an empty mesh rather than none (boolean results with
         // approximate intersection curves), so always use it.
         .map(|sh| {
+            // The bounded spline search is for the new endpoint fills. Keep ordinary
+            // bodies on the established mesher: its results also drive later operations.
+            if !sh.face_iter().any(|f| matches!(f.surface(), mt::Surface::BSplineSurface(s) if s.degrees() == (5, 5))) {
+                return sh.robust_triangulation_within(deflection);
+            }
             let evaluated: truck_topology::Shell<mt::Point3, mt::Curve, evaluation::Surface> = sh
                 .face_iter()
                 .map(|face| {
@@ -265,10 +270,13 @@ fn refined_with_cache(pm: &PolygonMesh, surf: &mt::Surface, tol: f64, memoize: b
 #[allow(clippy::type_complexity)]
 fn refined_quality(pm: &PolygonMesh, surf: &mt::Surface, tol: f64, memoize: bool, shading: bool) -> Option<Vec<[(Vec3, Vec3); 3]>> {
     use mt::{ParametricSurface, ParametricSurface3D};
-    let surf = evaluation::Surface(surf.clone());
+    let evaluated = evaluation::Surface(surf.clone());
+    // Display-only limiting normals must not change measurement refinement.
+    let subs = |u, v| if shading { evaluated.subs(u, v) } else { surf.subs(u, v) };
+    let normal = |u, v| if shading { evaluated.normal(u, v) } else { surf.normal(u, v) };
     let (pos, uvs, nor) = (pm.positions(), pm.uv_coords(), pm.normals());
     let direction = if shading {
-        let direction = match &surf.0 {
+        let direction = match surf {
             mt::Surface::BSplineSurface(s) if matches!(s.degrees(), (3, 3) | (5, 5)) => evaluation::display_projection(s, nor),
             _ => nor.iter().map(|n| Vec3::new(n.x, n.y, n.z)).fold(Vec3::ZERO, |a, b| a + b).normalized(),
         }?;
@@ -295,7 +303,7 @@ fn refined_quality(pm: &PolygonMesh, surf: &mt::Surface, tol: f64, memoize: bool
         tris.push(t);
     }
     // The parameters must be the surface's own.
-    let check = tris.iter().take(8).flat_map(|t| t.iter()).all(|(p, (u, v), _)| from_p3(surf.subs(*u, *v)).dist(*p) < tol * 4.0 + 1e-9);
+    let check = tris.iter().take(8).flat_map(|t| t.iter()).all(|(p, (u, v), _)| from_p3(subs(*u, *v)).dist(*p) < tol * 4.0 + 1e-9);
     // Bounded work: a face may grow to a few times its triangles (wild surfaces sag
     // everywhere and are left as meshed).
     let cap = (tris.len() * 8).clamp(if shading { 4_000 } else { 2_000 }, 60_000);
@@ -336,10 +344,10 @@ fn refined_quality(pm: &PolygonMesh, surf: &mt::Surface, tol: f64, memoize: bool
                     [[1.0 / 3.0; 3], [0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]].into_iter().any(|[wa, wb, wc]| {
                         let point = a.0 * wa + b.0 * wb + c.0 * wc;
                         let seed = (a.1.0 * wa + b.1.0 * wb + c.1.0 * wc, a.1.1 * wa + b.1.1 * wb + c.1.1 * wc);
-                        let Some((u, v)) = evaluation::projected_parameter(&surf, p3(point), direction, seed) else {
+                        let Some((u, v)) = evaluation::projected_parameter(&evaluated, p3(point), direction, seed) else {
                             return false;
                         };
-                        let normal = surf.normal(u, v);
+                        let normal = normal(u, v);
                         let normal = Vec3::new(normal.x, normal.y, normal.z);
                         (a.2 * wa + b.2 * wb + c.2 * wc).normalized().is_some_and(|n| n.dot(normal) < 0.5_f64.to_radians().cos())
                     })
@@ -395,17 +403,17 @@ fn refined_quality(pm: &PolygonMesh, surf: &mt::Surface, tol: f64, memoize: bool
                 }
                 let seed = ((a.1.0 + b.1.0) / 2.0, (a.1.1 + b.1.1) / 2.0);
                 let (u, v) = if let Some(direction) = direction {
-                    evaluation::projected_parameter(&surf, p3((a.0 + b.0) * 0.5), direction, seed)?
+                    evaluation::projected_parameter(&evaluated, p3((a.0 + b.0) * 0.5), direction, seed)?
                 } else {
                     seed
                 };
-                let q = from_p3(surf.subs(u, v));
+                let q = from_p3(subs(u, v));
                 // Within tolerance, or so far off that the parameters wrapped (a seam).
                 let sag = q.dist((a.0 + b.0) * 0.5);
                 if !sag.is_finite() || (!shading && sag >= 0.5 * a.0.dist(b.0)) {
                     return None;
                 }
-                let n = surf.normal(u, v);
+                let n = normal(u, v);
                 let mut n = Vec3::new(n.x, n.y, n.z);
                 // A projected patch has one certified normal side. Widely
                 // separated endpoint normals need not bracket an interior
@@ -1396,6 +1404,11 @@ impl Body {
         // triangles wide. Give cubic and quintic patches local display detail, with a
         // bounded refinement factor for the shared shell mesh.
         let tol = if tol.is_finite() && tol > 0.0 { tol } else { 0.05 };
+        // Ordinary cubic lofts and rounds keep the established display sampling.
+        // Face picks and later modelling operations can depend on those samples.
+        if !self.solid.face_iter().any(|f| matches!(f.surface(), mt::Surface::BSplineSurface(s) if s.degrees() == (5, 5))) {
+            return tol;
+        }
         let local = self
             .solid
             .face_iter()

@@ -1166,8 +1166,13 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
 /// [`blend`]; `curved_ends`: also roll a ball along a straight edge between planes that ends at
 /// a curved face (the last resort, after the corner build for an earlier round there).
 fn blend_with(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, curved_ends: bool) -> Result<Body> {
+    blend_with_endpoints(body, edges, r, shape, what, curved_ends, false)
+}
+
+/// Preserve the established builders before trying the bounded endpoint fallback.
+fn blend_with_endpoints(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, curved_ends: bool, endpoints: bool) -> Result<Body> {
     let sound = |b: &Body| crate::tess::boundaries_on_surfaces(&b.solid, (b.size() * 1e-4).max(1e-6));
-    let first = blend_in_order(body, edges, r, shape, what, curved_ends);
+    let first = blend_in_order(body, edges, r, shape, what, curved_ends, endpoints);
     let reorder = (2..=MAX_REORDERED).contains(&edges.len())
         && match &first {
             Ok(b) => !sound(b),
@@ -1179,7 +1184,7 @@ fn blend_with(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, cur
     }
     let mut fallback: Option<Body> = None;
     for order in orders(edges).into_iter().skip(1) {
-        if let Ok(done) = blend_in_order(body, &order, r, shape, what, curved_ends) {
+        if let Ok(done) = blend_in_order(body, &order, r, shape, what, curved_ends, endpoints) {
             if sound(&done) {
                 return Ok(done);
             }
@@ -1196,7 +1201,7 @@ fn blend_with(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, cur
     }
 }
 
-fn blend_in_order(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, curved_ends: bool) -> Result<Body> {
+fn blend_in_order(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, curved_ends: bool, endpoints: bool) -> Result<Body> {
     if !(r.is_finite() && r > 1e-6 && r < 1e6) {
         return Err(KernelError::Invalid(format!("{what} size must be positive")));
     }
@@ -1249,8 +1254,8 @@ fn blend_in_order(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str,
     {
         let _ = groups;
         let loop_pts: Vec<Vec3> = edges.iter().filter(|p| !rest.iter().any(|q| q.dist(**p) < 1e-12)).copied().collect();
-        cur = record::after(blend_in_order(&cur, &rest, r, shape, what, curved_ends)?, &cur, &counts);
-        return Ok(record::after(blend_in_order(&cur, &loop_pts, r, shape, what, curved_ends)?, &cur, &counts));
+        cur = record::after(blend_in_order(&cur, &rest, r, shape, what, curved_ends, endpoints)?, &cur, &counts);
+        return Ok(record::after(blend_in_order(&cur, &loop_pts, r, shape, what, curved_ends, endpoints)?, &cur, &counts));
     }
     // A loop the loop blend refuses for its shape (seams that aren't straight, walls it can't
     // trim) is blended edge by edge below instead: a ball rolls along its smooth chain.
@@ -1278,11 +1283,20 @@ fn blend_in_order(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str,
             Err(_) => {}
         }
     }
-    blend_each(cur, edges, r, shape, what, &counts, curved_ends)
+    blend_each(cur, edges, r, shape, what, &counts, curved_ends, endpoints)
 }
 
 /// The edges blended one at a time (see [`blend`]), `cur` being the healed body.
-fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, counts: &[(usize, usize)], curved_ends: bool) -> Result<Body> {
+fn blend_each(
+    mut cur: Body,
+    edges: &[Vec3],
+    r: f64,
+    shape: Shape,
+    what: &str,
+    counts: &[(usize, usize)],
+    curved_ends: bool,
+    endpoints: bool,
+) -> Result<Body> {
     let counts = counts.to_vec();
     // One at a time, in whatever order works: a run along a planar face's loop (bridging arcs
     // that earlier blends left between selected edges, so corners round off), a single edge,
@@ -1405,7 +1419,7 @@ fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, c
                     if matches!(e, KernelError::TooLarge(_)) && perpendicular_end_caps(&solid, &edge) {
                         return Err(e);
                     }
-                    if shape == Shape::Round && crate::blend_end::can_trim(&solid, &edge) {
+                    if endpoints && shape == Shape::Round && crate::blend_end::can_trim(&solid, &edge) {
                         guard(what, || crate::blend_end::fillet_one(&solid, &edge, size, r))
                             .or_else(|_| guard(what, || crate::blend_trim::fillet_one(&solid, &edge, size, r)))
                             .or_else(|_| guard(what, || crate::blend_end::with_transitions(&solid, &edge, size, r)))
@@ -1625,8 +1639,13 @@ fn curved_case(solid: &Solid, edge: &mt::Edge, curved_ends: bool) -> bool {
 /// Whether the two faces of `edge` meet tangentially along it (sampled at a quarter, the
 /// middle and three quarters of the edge): a seam, not a corner.
 fn tangent_faces(solid: &Solid, edge: &mt::Edge) -> bool {
-    use mt::{BoundedCurve, ParametricCurve, ParametricSurface3D, SearchParameter};
     let faces: Vec<&mt::Face> = solid.face_iter().filter(|f| f.edge_iter().any(|e| e.id() == edge.id())).take(3).collect();
+    tangent_faces_for_fit(&faces, edge)
+}
+
+pub(crate) fn tangent_faces_for_fit(faces: &[&mt::Face], edge: &mt::Edge) -> bool {
+    use mt::{BoundedCurve, ParametricCurve, ParametricSurface3D, SearchParameter};
+    let faces: Vec<_> = faces.iter().copied().filter(|f| f.edge_iter().any(|e| e.id() == edge.id())).take(3).collect();
     let [f1, f2] = faces[..] else { return false };
     let c = edge.curve();
     let (t0, t1) = c.range_tuple();
@@ -1852,13 +1871,53 @@ fn closed(b: Body) -> Result<Body> {
 /// largest that works).
 pub fn fillet(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
     body.require_brep("fillet")?;
+    let (endpoint, inner) = guard("fillet endpoints", || endpoint_case(body, edges))?;
     // A round that would run past its faces into other geometry or another round (#1080).
     // Checked once built, so a refusal of the build itself stands as it is.
     let size = crate::blend_fit::Size::Round(radius);
-    match fillet_built(body, edges, radius) {
+    let bounded = || {
+        blend_with_endpoints(body, edges, radius, Shape::Round, "fillet", false, true)
+            .and_then(closed)
+            .and_then(|b| crate::blend_fit::accept(body, b, edges, size))
+    };
+    // At a single concave junction the bounded section preserves the exact cylindrical
+    // strip. Prefer it to a rolling-ball approximation whose collapsed chart can ripple.
+    // A selection of several edges retains the established common-corner construction.
+    if inner && let Ok(b) = bounded() {
+        return Ok(b);
+    }
+    let original = match fillet_built(body, edges, radius) {
         Ok(b) => crate::blend_fit::accept(body, b, edges, size),
         Err(e) => Err(crate::blend_fit::explain(body, edges, size, e)),
+    };
+    original.or_else(|e| if endpoint && !inner { bounded().map_err(|e2| keep_size(e, e2)) } else { Err(e) })
+}
+
+/// Whether this selection can use endpoint trimming, and whether it is one inner corner.
+/// Perpendicular caps and edges between curved faces gain nothing from this fallback; do
+/// not repeat their rolling-ball attempts just because another selected edge is straight.
+fn endpoint_case(body: &Body, points: &[Vec3]) -> Result<(bool, bool)> {
+    let solid = &*body.solid;
+    let edges = Body::unique_edges(solid);
+    let mut candidate = false;
+    let mut inner = false;
+    for p in points {
+        let Some((index, _)) = body.nearest_edge(*p, (body.size() * 2e-3).max(1e-3))? else { continue };
+        let Some(edge) = edges.get(index) else { continue };
+        if !crate::blend_end::can_trim(solid, edge) || perpendicular_end_caps(solid, edge) {
+            continue;
+        }
+        candidate = true;
+        let faces: Vec<_> = solid.face_iter().filter(|f| f.edge_iter().any(|e| e.id() == edge.id())).collect();
+        let [a, b] = faces.as_slice() else { continue };
+        if let (Some(na), Some(nb)) = (plane_normal(a), plane_normal(b))
+            && let Some(e) = a.edge_iter().find(|e| e.id() == edge.id())
+            && let Some(d) = (vtx(e.back()) - vtx(e.front())).normalized()
+        {
+            inner = points.len() == 1 && nb.dot(na.cross(d)) > 1e-6;
+        }
     }
+    Ok((candidate, inner))
 }
 
 /// [`fillet`], once the radius is known to fit.
@@ -1915,7 +1974,7 @@ fn corners(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Res
 /// The multi-edge path without the corner fallback. Removing earlier rounds may make this
 /// path applicable again; keeping the retry separate prevents recursive remove/rebuild attempts.
 pub(crate) fn fillet_local(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
-    blend(body, edges, radius, Shape::Round, "fillet").and_then(closed)
+    blend_with_endpoints(body, edges, radius, Shape::Round, "fillet", false, true).and_then(closed)
 }
 
 /// The step of the radius search: three significant digits of the requested radius.

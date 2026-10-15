@@ -617,7 +617,36 @@ mod tests {
         let left = Vec3::new(15.0 + inset, 40.0 - inset, 4.0);
         let back = Vec3::new(45.0, 45.0 - inset, 4.0);
         let left = check(&b, left, 1.5);
+        crate::blend_fit::check(&left, &[back], crate::blend_fit::Size::Round(1.5)).unwrap();
         check(&left, back, 1.5);
+    }
+
+    #[test]
+    fn traced_end_continuation_does_not_exempt_an_end_hole() {
+        let inset = 12.0 * 10.0_f64.to_radians().tan();
+        let left = Vec3::new(15.0 + inset, 40.0 - inset, 4.0);
+        let back = Vec3::new(45.0, 45.0 - inset, 4.0);
+        let body = crate::fillet(&shallow_basin(), &[left], 1.5).unwrap();
+        let rounded = crate::fillet(&body, &[back], 1.5).unwrap();
+        // Drill through the actual end section on the earlier left round. A hole
+        // farther down the floor need not intersect this concave fillet at all.
+        let q = rounded
+            .solid
+            .face_iter()
+            .last()
+            .unwrap()
+            .edge_iter()
+            .filter(|e| !matches!(e.curve(), mt::Curve::Line(_)))
+            .map(|e| {
+                let c = e.curve();
+                let (a, b) = c.range_tuple();
+                from_p3(c.subs((a + b) * 0.5))
+            })
+            .find(|p| p.x < 20.0)
+            .unwrap();
+        let tool = crate::box_solid(Vec3::new(q.x - 0.05, q.y - 0.05, -1.0), Vec3::new(q.x + 0.05, q.y + 0.05, 12.0)).unwrap();
+        let body = crate::boolean(&body, &tool, BoolOp::Cut).unwrap().unwrap();
+        assert!(crate::fillet(&body, &[back], 1.5).is_err());
     }
 
     #[test]
@@ -1092,7 +1121,7 @@ mod tests {
             .unwrap();
         // Keep the fixture planar: a cylinder cut at this shallow wall/floor
         // meeting can fail before it reaches the endpoint-containment check.
-        let hole = crate::box_solid(Vec3::new(q.x - 0.15, q.y - 0.15, -1.0), Vec3::new(0.3, 0.3, 12.0)).unwrap();
+        let hole = crate::box_solid(Vec3::new(q.x - 0.15, q.y - 0.15, -1.0), Vec3::new(q.x + 0.15, q.y + 0.15, 12.0)).unwrap();
         let drilled = crate::boolean(&b, &hole, BoolOp::Cut).unwrap().unwrap();
         assert!(crate::fillet(&drilled, &[pick], 2.0).is_err());
         assert!(drilled.validity().is_empty());

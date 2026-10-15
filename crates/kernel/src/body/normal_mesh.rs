@@ -60,7 +60,7 @@ pub(super) fn shell(source: &mt::Shell, deflection: Deflection) -> MeshedShell {
     // Endpoint fills use quintic patches. Leave unrelated lofts and sweeps
     // on their existing bounded meshing path.
     if !source.face_iter().any(|f| matches!(f.surface(),mt::Surface::BSplineSurface(s) if s.degrees()==(5,5))) {
-        return fallback();
+        return source.robust_triangulation_within(deflection);
     }
     let mut supports = std::collections::HashMap::new();
     for face in source.face_iter() {

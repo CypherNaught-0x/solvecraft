@@ -57,7 +57,9 @@ measurement, not a controlled speedup comparison against the earlier runs.
 
 `cargo xtask test` and `ci` run binaries named `*_performance` after all functional
 test binaries and side jobs finish, so their timing budgets do not compete with
-the same runner's kernel tests or compiler jobs. Geometry acceptance tolerances,
+the same runner's kernel tests or compiler jobs. The CI nextest profile also reserves
+all runner CPUs for `open_performance`, isolating its deadline from other tests in
+the shard. Geometry acceptance tolerances,
 boundary sampling density and the containment certificate are unchanged.
 
 Full CI passed formatting, attribution/licence/layer checks, workspace Clippy,
