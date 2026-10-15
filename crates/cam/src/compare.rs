@@ -41,7 +41,7 @@ fn compare_covered(a: &Report, b: &Report, tolerance: f64) -> Result<Comparison>
         checked_regions: 0,
         detail: "Common-coordinate height intervals; no geometry alignment or rescaling".into(),
     };
-    if a.status != Status::Pass || b.status != Status::Pass || a.cells.is_empty() || b.cells.is_empty() {
+    if a.status != Status::Pass || b.status != Status::Pass || !a.stock_complete || !b.stock_complete || a.cells.is_empty() || b.cells.is_empty() {
         result.status = Status::Inconclusive;
     }
     let index = Index::new(b.cells.iter().enumerate().map(|(id, c)| (id, c.min, c.max)).collect());
@@ -88,7 +88,7 @@ pub fn stock_mesh(report: &Report, mesh: &[[Vec3; 3]], bottom: f64, tolerance: f
         return invalid("comparison tolerance must be positive");
     }
     let mut r = Comparison {
-        status: if report.status == Status::Pass { Status::Pass } else { Status::Inconclusive },
+        status: if report.status == Status::Pass && report.stock_complete { Status::Pass } else { Status::Inconclusive },
         maximum_possible_error: 0.0,
         maximum_definite_error: 0.0,
         checked_regions: 0,
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(stock_reports(&full, &partial, TOLERANCE).unwrap().status, Status::Inconclusive);
         let stl = verify::stock_stl(&full, 0.0).unwrap();
         let mesh = read_stl(stl.as_bytes()).unwrap();
-        assert_eq!(mesh.len(), 12); // exact coplanar column merge
+        assert_eq!(mesh.len(), 12); // exact coplanar merge, conforming boundary
         let volume: f64 = mesh.iter().map(|t| t[0].dot(t[1].cross(t[2])) / 6.0).sum();
         assert!((volume - 2000.0).abs() < 1e-9);
         assert!(read_stl(stl.replace("endfacet", "unknown").as_bytes()).is_err());

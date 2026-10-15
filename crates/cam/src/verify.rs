@@ -42,6 +42,9 @@ pub struct Report {
     /// Requested spatial refinement budget, not a claim about height uncertainty.
     pub uncertainty: f64,
     pub maximum_height_interval: f64,
+    /// False when resource limits prevented evaluating all stock cells/motions.
+    #[serde(default)]
+    pub stock_complete: bool,
     pub cells: Vec<Cell>,
     pub findings: Vec<Finding>,
     pub cutting_distance: f64,
@@ -120,6 +123,7 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
         tolerance: tol,
         uncertainty: limits.uncertainty,
         maximum_height_interval: 0.0,
+        stock_complete: true,
         cells: Vec::new(),
         findings: Vec::new(),
         cutting_distance: 0.0,
@@ -150,6 +154,7 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
             return invalid("simulation cancelled");
         }
         if r.work > limits.work || r.cells.len() + pending.len() >= limits.cells {
+            r.stock_complete = false;
             r.status = if r.status == Status::Fail { Status::Fail } else { Status::Inconclusive };
             r.findings.push(Finding {
                 kind: "budget_exhausted".into(),
@@ -284,8 +289,11 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
         r.maximum_height_interval = r.maximum_height_interval.max(high - low);
         r.cells.push(Cell { min, max, low, high, target_low, target_high });
     }
-    if r.work > limits.work && r.status == Status::Pass {
-        r.status = Status::Inconclusive;
+    if r.work > limits.work {
+        r.stock_complete = false;
+        if r.status == Status::Pass {
+            r.status = Status::Inconclusive;
+        }
     }
     // Facing has an independently specified finished plane over the entire stock.
     // Wall and hole dimensional checks remain explicitly unimplemented, rather
@@ -385,80 +393,9 @@ pub(crate) fn target_height(p: [f64; 2], half: f64, tris: &[[Vec3; 3]], bottom: 
     let complete = area >= 4.0 * half * half * (1.0 - 1e-8);
     (if complete { lo } else { bottom }, hi, !complete)
 }
+/// Export the conforming boundary of the conservative upper stock envelope.
 pub fn stock_stl(report: &Report, bottom: f64) -> Result<String> {
-    if !bottom.is_finite() || report.cells.is_empty() || report.cells.len() > 1_000_000 {
-        return invalid("invalid stock export bounds");
-    }
-    // Merge exactly coplanar adjacent columns before serialization. No resampling
-    // or rounding changes the certified upper envelope.
-    let mut cells = report.cells.clone();
-    for _ in 0..24 {
-        let before = cells.len();
-        for axis in 0..2 {
-            let other = 1 - axis;
-            cells.sort_unstable_by(|a, b| {
-                a.min[other]
-                    .total_cmp(&b.min[other])
-                    .then(a.max[other].total_cmp(&b.max[other]))
-                    .then(a.high.total_cmp(&b.high))
-                    .then(a.min[axis].total_cmp(&b.min[axis]))
-            });
-            let mut merged: Vec<Cell> = Vec::new();
-            for c in cells {
-                if let Some(last) = merged.last_mut()
-                    && last.min[other] == c.min[other]
-                    && last.max[other] == c.max[other]
-                    && last.high == c.high
-                    && last.max[axis] == c.min[axis]
-                {
-                    last.max[axis] = c.max[axis];
-                    continue;
-                }
-                merged.push(c);
-            }
-            cells = merged;
-        }
-        if cells.len() == before {
-            break;
-        }
-    }
-    if cells.len() > 40_000 {
-        return invalid("stock STL exceeds 40000 merged columns; use validation JSON for this resolution");
-    }
-    let mut out = String::from("solid cam_remaining_stock\n");
-    for c in &cells {
-        if c.high <= bottom {
-            continue;
-        }
-        let [x, y] = c.min;
-        let [u, v] = c.max;
-        let z = c.high;
-        let p = [
-            Vec3::new(x, y, bottom),
-            Vec3::new(u, y, bottom),
-            Vec3::new(u, v, bottom),
-            Vec3::new(x, v, bottom),
-            Vec3::new(x, y, z),
-            Vec3::new(u, y, z),
-            Vec3::new(u, v, z),
-            Vec3::new(x, v, z),
-        ];
-        for q in [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]] {
-            for ids in [[q[0], q[1], q[2]], [q[0], q[2], q[3]]] {
-                out.push_str("facet normal 0 0 0\nouter loop\n");
-                for i in ids {
-                    let a = p[i];
-                    out.push_str(&format!("vertex {} {} {}\n", a.x, a.y, a.z));
-                }
-                out.push_str("endloop\nendfacet\n");
-            }
-        }
-    }
-    if out.len() > 128 * 1024 * 1024 {
-        return invalid("stock STL exceeds 128 MiB");
-    }
-    out.push_str("endsolid cam_remaining_stock\n");
-    Ok(out)
+    crate::stock_mesh::stl(report, bottom)
 }
 
 /// Independently evaluate a point on the upper stock surface. Used for analytic

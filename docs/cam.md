@@ -83,6 +83,15 @@ refinement is 0.0025 mm. Reports distinguish requested refinement from the actua
 height interval. Limits are 250,000 cells and 30 million work units by default. Exhaustion or an
 unresolved collision blocks posting. Remaining-stock volume is an interval, not an exact number.
 
+Stock STL now contains a conforming exterior of the upper height envelope. Shared edges and
+vertical steps are split, internal walls are removed, and every edge and vertex link is checked
+for a closed, consistently oriented manifold. Coplanar cells merge exactly without resampling.
+Exports are bounded to 40,000 merged cells, 500,000 triangles and 128 MiB. Non-manifold touching
+stock is rejected explicitly; validation JSON retains the cell intervals. `stock_complete` is
+false after verification budget exhaustion, which blocks export of a misleading partial stock.
+These artifact/completeness changes advance the fingerprint to `cam/3`. A watertight upper-bound
+mesh does not establish finished-part dimensional accuracy.
+
 The current passing verification status certifies the implemented no-gouge/clearance checks.
 The separate `finished_dimensions` status certifies the entire finished plane for facing-only
 programs. It remains **inconclusive for walls and holes**: excess material is reported separately
@@ -96,9 +105,6 @@ certification. This is an open M15 release gate, along with:
 - Broader fixture regression coverage and performance acceptance; supported stock/model geometry
   remains vertical height-field scope. Fixture triangles must form closed consistently wound bodies
   for volume-containment certification; surface contact can still be detected on an open mesh.
-- A stitched watertight stock mesh. Current STL is the union of adaptive upper-bound cell columns,
-  including internal faces. Exactly coplanar neighbors are merged without resampling; exports are
-  bounded to 40,000 columns / 128 MiB and fail explicitly above that. It is a diagnostic approximation.
 - Browser timing acceptance for worst-case single-operation offset jobs. Background wasm jobs
   now yield between operations and bounded verification chunks; UI frames or status polls advance
   them. Native background jobs run off the UI thread. Synchronous command calls remain available.
