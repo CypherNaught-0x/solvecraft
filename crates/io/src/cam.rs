@@ -33,6 +33,8 @@ pub fn artifact(input: &JobInput, path: &Toolpath, report: Option<&Report>, form
             }
             html.push_str("</table><h2>Tools</h2><pre>");
             html.push_str(&escape(&serde_json::to_string_pretty(&input.tools).map_err(|e| IoError::Invalid(e.to_string()))?));
+            html.push_str("</pre><h2>Operation settings and selected geometry</h2><pre>");
+            html.push_str(&escape(&serde_json::to_string_pretty(&input.operations).map_err(|e| IoError::Invalid(e.to_string()))?));
             html.push_str("</pre>");
             Ok(html)
         }

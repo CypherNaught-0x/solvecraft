@@ -35,13 +35,14 @@
 //!   conventions. Absent markers retain legacy attachment and interpolation behavior.
 //! - 12: persistent manufacturing definitions. Older designs receive empty manufacturing;
 //!   generated paths and verification caches remain session-only.
+//! - 13: persistent drilling face/profile references. Older operations retain explicit XY centers.
 
 use serde_json::Value;
 
 use crate::{DocError, Document, Result};
 
 /// The format this build writes.
-pub const FORMAT: u32 = 12;
+pub const FORMAT: u32 = 13;
 
 pub fn format_string(n: u32) -> String {
     format!("solvecraft/{n}")
@@ -54,8 +55,8 @@ pub fn version_of(s: &str) -> Option<u32> {
 
 /// JSON-level upgrades: entry `i` turns format `i + 1` into `i + 2`.
 type JsonStep = fn(&mut Value) -> Result<()>;
-const JSON_STEPS: [JsonStep; 11] =
-    [|_| Ok(()), v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, |_| Ok(()), |_| Ok(()), |_| Ok(()), |_| Ok(()), |_| Ok(()), |_| Ok(())];
+const JSON_STEPS: [JsonStep; 12] =
+    [|_| Ok(()), v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, |_| Ok(()), |_| Ok(()), |_| Ok(()), |_| Ok(()), |_| Ok(()), |_| Ok(()), |_| Ok(())];
 
 /// Old XZ references retain their exact frame, including nested offset and angled planes.
 /// New origin references use +Y; freezing the old frame avoids changing sketch coordinates,

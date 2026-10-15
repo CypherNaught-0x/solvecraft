@@ -221,6 +221,35 @@ pub struct ProfileRef {
     #[serde(default)]
     pub occurrence: Vec<u64>,
 }
+/// Document-local identities only. The engine resolves these into setup XY centers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HoleSource {
+    Face { target: BodyRef, name: String },
+    Profile { profile: ProfileRef },
+}
+impl HoleSource {
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::Face { target, name: face } => {
+                name(&target.body)?;
+                name(face)?;
+                if target.occurrence.len() > 64 {
+                    return invalid("hole occurrence path too deep");
+                }
+            }
+            Self::Profile { profile } => {
+                if profile.sketch == 0 || profile.curves.is_empty() || profile.curves.len() > 10_000 || profile.occurrence.len() > 64 {
+                    return invalid("invalid circular profile reference");
+                }
+                for curve in &profile.curves {
+                    name(curve)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "strategy", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Strategy {
@@ -250,6 +279,9 @@ pub struct Operation {
     pub geometry: Strategy,
     #[serde(default)]
     pub source: Option<ProfileRef>,
+    /// When nonempty, replaces every preview XY center during snapshot preparation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hole_sources: Vec<HoleSource>,
     pub top: f64,
     pub bottom: f64,
     pub stepdown: f64,
@@ -300,6 +332,20 @@ impl Operation {
             }
             for c in &source.curves {
                 name(c)?;
+            }
+        }
+        if !self.hole_sources.is_empty() {
+            let Strategy::Drill { holes, .. } = &self.geometry else {
+                return invalid("hole references require drilling");
+            };
+            if self.hole_sources.len() > MAX_ITEMS || self.hole_sources.len() != holes.len() {
+                return invalid("each linked hole needs exactly one source reference");
+            }
+            for (index, source) in self.hole_sources.iter().enumerate() {
+                source.validate()?;
+                if self.hole_sources.iter().take(index).any(|old| old == source) {
+                    return invalid("duplicate hole reference");
+                }
             }
         }
         if [self.stepdown, self.stepover, self.feed, self.plunge_feed, self.spindle, self.tolerance].iter().any(|v| !positive(*v))

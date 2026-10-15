@@ -37,6 +37,19 @@ fn four_strategies_generate_simulate_post_and_display_through_ui() {
         h.app.run("cam.operation.put", json!({"operation":input.operations[0]})).unwrap();
         h.app.run("cam.program.put", json!({"program":{"id":1,"name":name,"setup":1,"operations":[1]}})).unwrap();
         h.call("ui.set", json!({"tab":"MILLING","showGrid":false,"showOrigin":false,"showSketches":false}));
+        if name == "drill" {
+            let body = h.app.session.model.state().bodies[0].clone();
+            let face = (0..body.body.face_count()).find(|i| solvecraft_engine::kernel::hole_axis(&body.body, *i, 0.0005).is_ok()).unwrap();
+            h.app.session.selection =
+                vec![solvecraft_engine::Sel::Face { body: body.name, index: face, point: solvecraft_engine::geom::Vec3::new(10.5, 10., 5.5) }];
+            h.frames(3);
+            h.step(&json!({"widget":"Analytic plate"})).unwrap();
+            h.step(&json!({"widget":"drill"})).unwrap();
+            h.frames(20);
+            h.step(&json!({"widget":"Use selected holes"})).unwrap();
+            h.step(&json!({"widget":"Save"})).unwrap();
+            assert_eq!(h.app.session.doc.manufacturing.operations[0].hole_sources.len(), 1);
+        }
         h.step(&json!({"start":"cam.generate"})).unwrap();
         let id = h.app.manufacturing.job.unwrap();
         wait(&mut h, id, "generated");

@@ -57,6 +57,7 @@ pub fn fixture(strategy: &str) -> Result<JobInput> {
         tool: 1,
         geometry,
         source: None,
+        hole_sources: vec![],
         top: 6.0,
         bottom: 5.0,
         stepdown: 1.0,

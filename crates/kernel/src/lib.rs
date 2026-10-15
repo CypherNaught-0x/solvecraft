@@ -76,7 +76,7 @@ pub use splitface::{SplitTool, split_body, split_faces, split_faces_with_map};
 pub use step::step_export;
 pub use step_in::{ImportedBody, StepImport, StepNode, step_import, step_import_shared, step_orientation_errors, step_validate};
 pub use step_out::{ExportBody, ExportProduct, StepHeader, step_export_bodies, step_export_products};
-pub use surface_kind::{FaceSurface, face_surface};
+pub use surface_kind::{FaceSurface, face_surface, hole_axis};
 pub use surfaces::{copy_faces, extend, patch_edges, patch_region, stitch, thicken, trim};
 pub use sweep_path::sweep_path;
 pub use topo::{CylinderFace, cylinder_face_at};

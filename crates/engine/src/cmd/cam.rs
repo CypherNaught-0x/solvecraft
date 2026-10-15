@@ -5,6 +5,9 @@ use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 
 pub static COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new("cam.holes.from_selection", "Use Selected Holes", from_holes)
+        .noundo()
+        .params("setup: ID, selections: [{kind:face,body,index,occurrence?:[IDs]}|{kind:profile,sketch,index,occurrence?:[IDs]}]; returns ordered holes, diameters and durable sources; face body is a world label unless occurrence is explicit"),
     CommandSpec::new("cam.boundary.from_profile", "Use Sketch Profile", from_profile)
         .noundo()
         .params("setup: ID, sketch: feature ID, profile: index, occurrence?: [IDs]; returns boundary and durable source reference"),
@@ -48,6 +51,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         .noundo()
         .params("job: ID, format: toolpath|setup_sheet|stock|validation, path?: string"),
 ];
+fn from_holes(s: &mut Session, p: &Value) -> Result<Value> {
+    let setup = id(p, "setup")?;
+    let setup = s.doc.manufacturing.setups.iter().find(|x| x.id == setup).ok_or_else(|| EngineError::Other("setup not found".into()))?;
+    let (sources, selected) = jobs::holes::select(s, setup, decode(p, "selections")?)?;
+    Ok(
+        json!({"sources":sources,"holes":selected.iter().map(|h|h.center).collect::<Vec<_>>(),"diameters":selected.iter().map(|h|h.diameter).collect::<Vec<_>>()}),
+    )
+}
 fn from_profile(s: &mut Session, p: &Value) -> Result<Value> {
     let setup = id(p, "setup")?;
     let sketch = id(p, "sketch")?;
@@ -164,7 +175,9 @@ fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let state = cam::playback::at(&path, &job.input()?.setup, motion).map_err(jobs::error)?;
         result["playback"] = json!(state);
-        result["source"] = json!(job.input()?.operations.iter().find(|o| Some(o.id) == state.operation).and_then(|o| o.source.as_ref()));
+        let operation = job.input()?.operations.iter().find(|o| Some(o.id) == state.operation);
+        result["source"] = json!(operation.and_then(|o| o.source.as_ref()));
+        result["hole_sources"] = json!(operation.map(|o| &o.hole_sources));
     }
     if let Some(index) = p.get("finding") {
         jobs::current(s, &job)?;
@@ -179,7 +192,7 @@ fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
         let code = cam::nc::post(&path, &input.setup).map_err(jobs::error)?;
         let line = finding.line.and_then(|line| line.checked_sub(1)).and_then(|index| code.lines().nth(index));
         result["diagnostic"] = json!({"index":index,"finding":finding,"world":input.setup.frame.world(finding.at),"operation":operation,
-            "source":operation.and_then(|o|o.source.as_ref()),"gcode_line":line,
+            "source":operation.and_then(|o|o.source.as_ref()),"hole_sources":operation.map(|o|&o.hole_sources),"gcode_line":line,
             "playback":finding.source.map(|source|cam::playback::at(&path,&input.setup,source.block)).transpose().map_err(jobs::error)?});
     }
     if p.get("include_stock").and_then(Value::as_bool) == Some(true) {
@@ -373,6 +386,14 @@ mod tests {
         input.setup.models[0].body = s.model.state().bodies[0].name.clone();
         input.operations[0].geometry = cam::Strategy::Drill { holes: vec![[10., 10.]], peck: Some(0.3), full_diameter: true };
         s.execute("cam.setup.put", &json!({"setup":input.setup})).unwrap();
+        let body = s.model.state().bodies[0].clone();
+        let face = (0..body.body.face_count()).find(|i| crate::kernel::hole_axis(&body.body, *i, 0.0005).is_ok()).unwrap();
+        let selected =
+            s.execute("cam.holes.from_selection", &json!({"setup":1,"selections":[{"kind":"face","body":body.name,"index":face}]})).unwrap();
+        input.operations[0].hole_sources = serde_json::from_value(selected["sources"].clone()).unwrap();
+        assert!((selected["diameters"][0].as_f64().unwrap() - 1.).abs() < 1e-8);
+        let center: Vec<[f64; 2]> = serde_json::from_value(selected["holes"].clone()).unwrap();
+        assert!((center[0][0] - 10.).abs() < 1e-8 && (center[0][1] - 10.).abs() < 1e-8);
         s.execute("cam.tool.put", &json!({"tool":input.tools[0]})).unwrap();
         s.execute("cam.operation.put", &json!({"operation":input.operations[0]})).unwrap();
         s.execute("cam.program.put", &json!({"program":{"id":1,"name":"Drilled plate","setup":1,"operations":[1]}})).unwrap();
@@ -460,3 +481,7 @@ mod tests {
         assert!(s.execute("cam.inspect", &json!({"job":id,"finding":index})).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "cam_holes_tests.rs"]
+mod holes_tests;

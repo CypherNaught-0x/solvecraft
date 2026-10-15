@@ -6,7 +6,8 @@ parity has not been established**. No output is qualified for a physical machine
 ## Architecture and commands
 
 `solvecraft-cam` is pure Rust at L1 and depends on geometry. The document persists manufacturing
-in format 12; earlier designs migrate with an empty manufacturing section. Generated paths and
+in format 13. Designs before format 12 receive an empty manufacturing section; format 12 drilling
+operations keep their explicit coordinates without inferred associations. Generated paths and
 verification results are session caches and are deliberately absent from saved designs.
 The engine resolves bodies, explicit occurrence paths and durable sketch-profile curve identities
 into immutable snapshots in setup coordinates. Missing or ambiguous references require reselection.
@@ -18,6 +19,7 @@ The Manufacture workspace, CLI and MCP share these registered commands:
 |---|---|
 | `cam.setup.put` | `{setup: Setup}`: rectangular stock, right-handed rigid frame, model/fixture references, clearance, retract, G54–G59 |
 | `cam.tool.put` | `{tool: Tool}`: document-local center-cutting flat mill or twist drill, cutting/shank/holder dimensions |
+| `cam.holes.from_selection` | `{setup,selections}`: ordered cylindrical-face/circular-profile picks; returns centers, diameters and persistent sources |
 | `cam.boundary.from_profile` | `{setup, sketch, profile, occurrence?}`: returns sampled boundary and durable source reference |
 | `cam.operation.put` | `{operation: Operation}`: face, contour, pocket or drill; explicit feed, plunge, spindle and depth settings |
 | `cam.program.put` | `{program: {id,name,setup,operations}}`: ordered operations, one setup/work offset |
@@ -276,3 +278,31 @@ preparation, the rendered application, export serialization, concurrent jobs and
 inputs. The remaining atomic work listed above still needs worst-case timing coverage. Unit
 regressions verify exact synchronous/cooperative mesh agreement, early/mid/late cancellation,
 round-robin fairness, completed-job termination and a poll cap if the host clock stalls.
+
+## Associated drilling selections
+
+In a drilling operation, select inward cylindrical faces or circular sketch profiles in drilling
+order, then choose **Use selected holes**. The engine command accepts `selections` containing
+`{kind:"face",body,index,occurrence?}` or `{kind:"profile",sketch,index,occurrence?}`. A face pick
+without `occurrence` uses the displayed world body name; an explicit occurrence path uses the
+body definition name. Profile picks use the sketch feature ID and evaluated profile index.
+The returned `sources` belong in `Operation.hole_sources`, with the returned `holes` as the
+preview coordinates in `geometry.holes`. The command also reports selected diameters.
+
+Face sources store a body/occurrence identity and persistent face name. Profile sources store
+sketch curve identities. Immutable job preparation resolves these again in setup coordinates,
+including uncaptured occurrence moves. Stored preview centers are never used as a fallback.
+Matching cylindrical seam faces on the same body occurrence become one hole, retaining the first
+pick’s source. Duplicate identical references and conflicting coincident axes are rejected.
+
+Missing, split-to-new-name or ambiguous faces/profiles require reselection. Noncircular profiles,
+external cylindrical faces and axes not parallel to setup Z are rejected. A linked hole's diameter
+must match the drill within
+the operation tolerance; choose a matching tool or explicitly unlink before pilot drilling.
+
+Linked coordinates are read-only in the operation dialog. **Unlink holes** retains the displayed
+coordinates as explicit input. Feeds, spindle, top/bottom heights, peck depth and tip/full-diameter
+depth remain user-controlled. The complete operation settings, resolved centers and source
+identities are included in setup sheets and canonical toolpath JSON; inspection exposes the
+operation's hole sources. Selection establishes an axis only: independent machining and clearance
+verification still decides whether the program can be posted.

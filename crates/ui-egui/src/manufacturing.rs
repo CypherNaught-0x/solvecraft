@@ -595,6 +595,7 @@ fn edit_operation(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation)
     });
     if kind != before {
         o.source = None;
+        o.hole_sources.clear();
         let b = cam::Boundary { outer: vec![[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]], islands: vec![] };
         o.geometry = match kind {
             1 => cam::Strategy::Contour { boundary: b, inside: false },
@@ -614,6 +615,18 @@ fn edit_operation(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation)
             }
         }
     }
+    if matches!(o.geometry, cam::Strategy::Drill { .. }) {
+        if ui.button("Use selected holes").on_hover_text("Select cylindrical hole faces or circular sketch profiles in drilling order").clicked() {
+            link_holes(app, o);
+        }
+        if !o.hole_sources.is_empty() {
+            ui.label(format!("{} linked holes; regeneration follows edits", o.hole_sources.len()));
+            if ui.small_button("Unlink holes").clicked() {
+                o.hole_sources.clear();
+            }
+        }
+    }
+    let linked_holes = !o.hole_sources.is_empty();
     match &mut o.geometry {
         cam::Strategy::Contour { boundary: b, inside } => {
             ui.checkbox(inside, "Inside contour");
@@ -621,18 +634,21 @@ fn edit_operation(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation)
         }
         cam::Strategy::Pocket { boundary: b } => boundary(ui, b),
         cam::Strategy::Drill { holes, peck, full_diameter } => {
-            for p in holes.iter_mut() {
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(&mut p[0]));
-                    ui.add(egui::DragValue::new(&mut p[1]));
-                });
-            }
-            if ui.button("Add hole").clicked() {
-                holes.push([0.0, 0.0]);
-            }
-            if holes.len() > 1 && ui.button("Remove last hole").clicked() {
-                holes.pop();
-            }
+            ui.add_enabled_ui(!linked_holes, |ui| {
+                for (index, p) in holes.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Hole {} XY", index + 1));
+                        ui.add(egui::DragValue::new(&mut p[0]));
+                        ui.add(egui::DragValue::new(&mut p[1]));
+                    });
+                }
+                if ui.button("Add hole").clicked() {
+                    holes.push([0.0, 0.0]);
+                }
+                if holes.len() > 1 && ui.button("Remove last hole").clicked() {
+                    holes.pop();
+                }
+            });
             let mut enabled = peck.is_some();
             if ui.checkbox(&mut enabled, "Peck drilling").changed() {
                 *peck = enabled.then_some(1.0);
@@ -671,6 +687,37 @@ fn edit_operation(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation)
     }
     ui.checkbox(&mut o.climb, "Climb milling");
     ui.checkbox(&mut o.coolant, "Coolant");
+}
+fn link_holes(app: &mut SolveApp, o: &mut cam::Operation) {
+    let mut picks = Vec::new();
+    for selected in &app.session.selection {
+        match selected {
+            solvecraft_engine::Sel::Face { body, index, .. } => picks.push(json!({"kind":"face","body":body,"index":index})),
+            solvecraft_engine::Sel::Profile { sketch, index } => picks.push(json!({"kind":"profile","sketch":sketch,"index":index,
+                "occurrence":app.session.active_occurrence_path.clone().unwrap_or_default()})),
+            _ => {
+                app.manufacturing.error = "Select only cylindrical hole faces or circular sketch profiles".into();
+                return;
+            }
+        }
+    }
+    match app.run("cam.holes.from_selection", json!({"setup":o.setup,"selections":picks})) {
+        Ok(value) => {
+            let data = serde_json::from_value::<Vec<[f64; 2]>>(value["holes"].clone())
+                .and_then(|holes| serde_json::from_value::<Vec<cam::HoleSource>>(value["sources"].clone()).map(|sources| (holes, sources)));
+            match data {
+                Ok((centers, sources)) => {
+                    if let cam::Strategy::Drill { holes, .. } = &mut o.geometry {
+                        *holes = centers;
+                        o.hole_sources = sources;
+                    }
+                    app.manufacturing.error.clear();
+                }
+                Err(error) => app.manufacturing.error = error.to_string(),
+            }
+        }
+        Err(error) => app.manufacturing.error = error.to_string(),
+    }
 }
 fn link_profile(app: &mut SolveApp, o: &mut cam::Operation) {
     let selected = app.session.selection.iter().find_map(|s| match s {
@@ -849,6 +896,40 @@ mod tests {
         h.app.run("solid.box", json!({"length":1,"width":1,"height":1})).unwrap();
         assert!(view::stock(&h.app).is_none());
         assert!(h.app.run("cam.inspect", json!({"job":job,"include_stock":true})).is_err());
+    }
+    #[test]
+    fn hole_selection_dialog_links_saves_and_unlinks_ordered_profiles() {
+        let mut h = crate::scenario::Harness::new();
+        h.call("ui.resize", json!({"width":1500,"height":1200}));
+        h.app.run("solid.box", json!({"length":20,"width":20,"height":6})).unwrap();
+        h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+        h.app.run("sketch.circle.center", json!({"center":[5,6],"radius":0.5})).unwrap();
+        h.app.run("sketch.finish", json!({})).unwrap();
+        let state = h.app.session.model.state();
+        let sketch = state.sketches.last().unwrap().feature;
+        let mut input = cam::corpus::fixture("drill").unwrap();
+        input.setup.models[0].body = state.bodies[0].name.clone();
+        h.app.run("cam.setup.put", json!({"setup":input.setup})).unwrap();
+        h.app.run("cam.tool.put", json!({"tool":input.tools[0]})).unwrap();
+        h.step(&json!({"start":"cam.operation.put"})).unwrap();
+        h.app.session.selection = vec![solvecraft_engine::Sel::Profile { sketch, index: 0 }];
+        h.app.manufacturing.editor = Some(Editor::Operation(input.operations.remove(0)));
+        h.app.ui.tab = "MILLING".into();
+        // Changing strategy resizes this centered dialog; wait for its layout animation.
+        h.frames(20);
+        h.step(&json!({"widget":"Use selected holes"})).unwrap();
+        h.frames(2);
+        assert!(h.app.manufacturing.error.is_empty(), "{}", h.app.manufacturing.error);
+        assert!(matches!(&h.app.manufacturing.editor,Some(Editor::Operation(o)) if o.hole_sources.len()==1));
+        h.step(&json!({"widget":"Save"})).unwrap();
+        let operation = h.app.session.doc.manufacturing.operations[0].clone();
+        assert_eq!(operation.hole_sources.len(), 1);
+        assert!(matches!(&operation.geometry,cam::Strategy::Drill {holes,..} if holes==&vec![[5.,6.]]));
+        h.app.manufacturing.editor = Some(Editor::Operation(operation));
+        h.frames(20);
+        h.step(&json!({"widget":"Unlink holes"})).unwrap();
+        h.step(&json!({"widget":"Save"})).unwrap();
+        assert!(h.app.session.doc.manufacturing.operations[0].hole_sources.is_empty());
     }
     #[test]
     fn diagnostic_location_uses_inspection_and_hides_after_edit() {

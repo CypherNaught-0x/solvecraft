@@ -3,7 +3,6 @@
 use crate::{
     EngineError, Result, Session, cam,
     geom::{Plane, Region2, Seg2, Vec2, Vec3},
-    kernel,
 };
 use solvecraft_doc::{Mat, apply_point};
 
@@ -12,16 +11,17 @@ pub(super) struct Snapshot {
     tools: Vec<cam::Tool>,
     operations: Vec<cam::Operation>,
     profiles: Vec<(usize, Profile)>,
+    holes: Vec<(usize, Vec<super::holes::Hole>)>,
     models: Vec<PlacedBody>,
     fixtures: Vec<PlacedBody>,
 }
-struct PlacedBody {
-    body: kernel::Body,
-    placement: Mat,
+pub(super) struct PlacedBody {
+    pub(super) body: solvecraft_doc::ModelBody,
+    pub(super) placement: Mat,
 }
 pub(super) struct Profile {
-    region: Region2,
-    plane: Plane,
+    pub(super) region: Region2,
+    pub(super) plane: Plane,
     tolerance: f64,
 }
 fn error(message: &str) -> EngineError {
@@ -48,13 +48,26 @@ impl Snapshot {
                 profiles.push((i, Profile::capture(s, &setup, source, o.tolerance)?));
             }
         }
+        let mut holes = Vec::new();
+        for (index, operation) in operations.iter().enumerate() {
+            if !operation.hole_sources.is_empty() {
+                holes.push((
+                    index,
+                    operation
+                        .hole_sources
+                        .iter()
+                        .map(|source| super::holes::Hole::capture(s, &setup, source, operation.tolerance))
+                        .collect::<Result<_>>()?,
+                ));
+            }
+        }
         let tools = m.tools.iter().filter(|t| operations.iter().any(|o| o.tool == t.id)).cloned().collect::<Vec<_>>();
         if tools.iter().map(|t| t.number).collect::<std::collections::BTreeSet<_>>().len() != tools.len() {
             return Err(error("CAM tools must have unique tool numbers within a program"));
         }
         let models = setup.models.iter().map(|r| PlacedBody::capture(s, r)).collect::<Result<_>>()?;
         let fixtures = setup.fixtures.iter().map(|r| PlacedBody::capture(s, r)).collect::<Result<_>>()?;
-        Ok(Self { setup, tools, operations, profiles, models, fixtures })
+        Ok(Self { setup, tools, operations, profiles, holes, models, fixtures })
     }
     pub(super) async fn build<F: std::future::Future<Output = ()>>(
         mut self,
@@ -62,7 +75,8 @@ impl Snapshot {
         progress: &impl Fn(usize),
         yield_control: &mut impl FnMut() -> F,
     ) -> Result<cam::JobInput> {
-        let total = self.profiles.len() + self.models.len() + self.fixtures.len() + 1;
+        let total =
+            self.profiles.len() + self.holes.iter().map(|(_, holes)| holes.len()).sum::<usize>() + self.models.len() + self.fixtures.len() + 1;
         let mut done = 0;
         for (index, p) in self.profiles {
             cancelled(check)?;
@@ -75,6 +89,29 @@ impl Snapshot {
             }
             done += 1;
             progress(done * 20 / total);
+        }
+        for (index, holes) in self.holes {
+            let operation = self.operations.get_mut(index).ok_or_else(|| error("CAM hole operation missing"))?;
+            let tool = self.tools.iter().find(|t| t.id == operation.tool).ok_or_else(|| error("CAM drill missing"))?;
+            let mut centers = Vec::new();
+            for hole in holes {
+                cancelled(check)?;
+                yield_control().await;
+                let selected = hole.resolve(self.setup.frame, operation.tolerance)?;
+                if (selected.diameter - tool.diameter).abs() > operation.tolerance {
+                    return Err(error("selected hole diameter differs from the drill; choose a matching tool or unlink the hole"));
+                }
+                if centers.iter().any(|p: &[f64; 2]| (p[0] - selected.center[0]).hypot(p[1] - selected.center[1]) <= operation.tolerance) {
+                    return Err(error("selected hole axes coincide; remove duplicate selections"));
+                }
+                centers.push(selected.center);
+                done += 1;
+                progress(done * 20 / total);
+            }
+            let cam::Strategy::Drill { holes, .. } = &mut operation.geometry else {
+                return Err(error("hole references require drilling"));
+            };
+            *holes = centers;
         }
         let mut target = Vec::new();
         let mut fixtures = Vec::new();
@@ -111,7 +148,7 @@ impl Snapshot {
     }
 }
 impl PlacedBody {
-    fn capture(s: &Session, r: &cam::BodyRef) -> Result<Self> {
+    pub(super) fn capture(s: &Session, r: &cam::BodyRef) -> Result<Self> {
         let state = s.model.state();
         let candidates: Vec<_> = state.bodies.iter().filter(|b| b.name == r.body).collect();
         if candidates.len() != 1 {
@@ -132,7 +169,7 @@ impl PlacedBody {
             p.world
         };
         let placement = s.doc.model_body_offset(b).map(|offset| solvecraft_doc::mat_mul(&placement, offset)).unwrap_or(placement);
-        Ok(Self { body: b.body.clone(), placement })
+        Ok(Self { body: b.clone(), placement })
     }
     async fn append<F: std::future::Future<Output = ()>>(
         self,
@@ -144,7 +181,7 @@ impl PlacedBody {
         cancelled(check)?;
         yield_control().await;
         cancelled(check)?;
-        let mesh = self.body.tessellate(cam::VERIFY_ERROR / 2.)?;
+        let mesh = self.body.body.tessellate(cam::VERIFY_ERROR / 2.)?;
         if out.len() + mesh.triangles.len() > 200_000 {
             return Err(error("CAM mesh exceeds verification budget"));
         }

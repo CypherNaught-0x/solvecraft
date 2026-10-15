@@ -1,5 +1,6 @@
 //! Immutable CAM jobs, independent of the desktop UI and document undo state.
 use crate::{EngineError, Result, Session, cam};
+pub(crate) mod holes;
 mod snapshot;
 use std::collections::BTreeMap;
 use std::sync::{
