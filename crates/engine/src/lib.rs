@@ -8,6 +8,8 @@
 #![forbid(unsafe_code)]
 
 pub mod cmd;
+pub mod manufacturing;
+pub use solvecraft_cam as cam;
 pub mod frames;
 pub mod fuzz;
 pub mod legacy_ids;
@@ -161,6 +163,8 @@ pub struct Session {
     pub log: Vec<String>,
     /// Increments on every document change (views use it to refresh).
     pub revision: u64,
+    /// Derived CAM jobs; not persisted or included in undo snapshots.
+    pub cam_jobs: manufacturing::Jobs,
     /// Project a face's edges into a sketch created on it (Fusion's default; `sketch.auto_project`).
     pub auto_project: bool,
     /// The component new sketches and features go into (0 = the root).
@@ -256,6 +260,7 @@ impl Session {
             path: None,
             log: Vec::new(),
             revision: 1,
+            cam_jobs: Default::default(),
             auto_project: true,
             active_component: 0,
             active_occurrence_path: None,
@@ -473,6 +478,7 @@ impl Session {
             saved: self.saved.clone(),
             log: Vec::new(),
             revision: self.revision,
+            cam_jobs: Default::default(),
             auto_project: self.auto_project,
             active_component: self.active_component,
             active_occurrence_path: self.active_occurrence_path.clone(),

@@ -14,6 +14,7 @@ repository = "https://github.com/bherbruck/solvecraft"
 
 [workspace.dependencies]
 # internal
+solvecraft-cam = { path = "crates/cam" }
 solvecraft-geom = { path = "crates/geom" }
 solvecraft-sketch = { path = "crates/sketch" }
 solvecraft-kernel = { path = "crates/kernel" }

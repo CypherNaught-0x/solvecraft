@@ -76,6 +76,7 @@ fn put_view(app: &mut SolveApp, v: DocView) {
 fn swap_in(app: &mut SolveApp, slot: DocSlot) -> DocSlot {
     // Whatever was going on in the design leaves with it.
     crate::dialogs::cancel(app);
+    app.manufacturing = Default::default();
     app.tool = None;
     app.params = None;
     app.cam_anim = None;
@@ -141,6 +142,7 @@ pub fn adopt(app: &mut SolveApp, session: Session) {
     if active_is_blank(app) {
         let rev = app.session.revision;
         crate::dialogs::cancel(app);
+        app.manufacturing = Default::default();
         app.tool = None;
         app.menu.props = None;
         crate::sketch_attachment_ui::clear(app);

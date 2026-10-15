@@ -9,6 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+serde_json.workspace = true
+solvecraft-cam.workspace = true
 solvecraft-geom = { workspace = true }
 solvecraft-kernel = { workspace = true }
 solvecraft-doc = { workspace = true }

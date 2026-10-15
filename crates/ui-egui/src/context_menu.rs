@@ -298,8 +298,11 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
         Target::Joint { id } => joint_items(app, *id),
         Target::ToolbarCommand { id } => crate::toolbar_custom::command_items(app, id),
         Target::Workspace => {
-            let mut v = vec![act("ui.workspace", "Design", "box").key("current")];
-            for w in ["Generative Design", "Render", "Animation", "Simulation", "Manufacture", "Drawing"] {
+            let mut v = vec![
+                act("ui.workspace", "Design", "box").with(json!({"workspace":"Design"})),
+                act("ui.workspace", "Manufacture", "box").with(json!({"workspace":"Manufacture"})),
+            ];
+            for w in ["Generative Design", "Render", "Animation", "Simulation", "Drawing"] {
                 v.push(act("ui.workspace", w, "").key("coming later").on(false));
             }
             v
@@ -876,7 +879,9 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
         }
         "ui.canvasVisible" => drop(app.run("canvas.edit", p)),
         "ui.toolbarPin" | "ui.toolbarRemove" | "ui.toolbarReset" | "ui.shortcutPin" => crate::toolbar_custom::run(app, &item.id, &p),
-        "ui.workspace" => {}
+        "ui.workspace" => {
+            app.ui.tab = if p["workspace"] == "Manufacture" { "MILLING" } else { "SOLID" }.into();
+        }
         "ui.findJoint" => {
             if let Some(id) = id_of(&p, "joint") {
                 crate::dialogs_assembly::find_joint(app, id);

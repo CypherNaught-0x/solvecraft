@@ -57,6 +57,7 @@ mod status_tests {
 #[cfg(test)]
 mod extrude_edit_tests;
 mod file_load;
+mod manufacturing;
 pub mod palette;
 pub mod params_dialog;
 pub mod prefs;
@@ -174,6 +175,7 @@ pub struct Services {
 
 pub struct SolveApp {
     pub session: Session,
+    pub manufacturing: manufacturing::State,
     pub ui: UiState,
     pub cam: Camera,
     /// A view change in progress (view cube, Home, Fit); any mouse navigation cancels it.
@@ -251,6 +253,7 @@ impl SolveApp {
     pub fn new(session: Session, services: Services) -> Self {
         SolveApp {
             session,
+            manufacturing: Default::default(),
             ui: UiState::default(),
             cam: Camera::default(),
             cam_anim: None,
@@ -453,6 +456,12 @@ impl SolveApp {
     /// Start a command the way a toolbar click does: interactive tools and dialogs for commands
     /// that have them, otherwise run it with defaults.
     pub fn start(&mut self, id: &str) {
+        manufacturing::cancel_editor(self);
+        if id.starts_with("cam.") {
+            self.home.open = false;
+            manufacturing::start(self, id);
+            return;
+        }
         // A component moved without Capture Position: ask first (Capture, Revert or Cancel).
         if browser::needs_capture(self, id) {
             self.tree.capture_prompt = Some(id.to_string());
@@ -774,6 +783,11 @@ impl SolveApp {
 
     /// Per-frame logic before layout.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        for job in self.session.cam_jobs.jobs.values() {
+            solvecraft_engine::manufacturing::advance(job);
+        }
+
         file_load::tick(self, ctx);
         self.esc_handled = false;
         prefs::apply(self, ctx);
@@ -854,7 +868,9 @@ impl SolveApp {
             timeline::timeline(self, ui);
         }
         palette::palette_bar(self, ui);
-        if self.ui.show_browser {
+        if self.ui.tab == "MILLING" {
+            manufacturing::panel(self, ui);
+        } else if self.ui.show_browser {
             browser::browser(self, ui);
         }
         preview::update(self, ui.ctx());
@@ -862,6 +878,7 @@ impl SolveApp {
             viewport::show(self, ui);
         });
         dialogs::show(self, ui.ctx());
+        manufacturing::editor(self, ui.ctx());
         sketch_palette::show(self, ui.ctx());
         params_dialog::show(self, ui.ctx());
         recovery_ui::show(self, ui.ctx());

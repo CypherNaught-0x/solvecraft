@@ -1559,6 +1559,9 @@ pub struct StandardPart {
 /// The document.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    /// Manufacturing definitions; generated toolpaths are session caches.
+    #[serde(default, skip_serializing_if = "solvecraft_cam::Manufacturing::is_empty")]
+    pub manufacturing: solvecraft_cam::Manufacturing,
     #[serde(default = "default_format")]
     pub format: String,
     pub name: String,
@@ -1667,6 +1670,7 @@ impl Default for Document {
 impl Document {
     pub fn new(name: &str) -> Self {
         Document {
+            manufacturing: Default::default(),
             format: default_format(),
             name: name.into(),
             units: default_units(),

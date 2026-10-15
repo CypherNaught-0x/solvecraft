@@ -590,6 +590,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cavalier_contours"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85e06038a969c5e4d93565f12b044814d3b1a48d50c4ef868d588e79956fea51"
+dependencies = [
+ "ahash",
+ "num-traits",
+ "smallvec",
+ "static_aabb2d_index",
+]
+
+[[package]]
 name = "cc"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3129,6 +3141,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "solvecraft-cam"
+version = "0.1.6"
+dependencies = [
+ "cavalier_contours",
+ "serde",
+ "serde_json",
+ "sha2",
+ "solvecraft-geom",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "solvecraft-cli"
 version = "0.1.6"
 dependencies = [
@@ -3145,6 +3169,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "solvecraft-cam",
  "solvecraft-geom",
  "solvecraft-kernel",
  "solvecraft-sketch",
@@ -3159,6 +3184,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "solvecraft-cam",
  "solvecraft-doc",
  "solvecraft-geom",
  "solvecraft-io",
@@ -3181,6 +3207,8 @@ name = "solvecraft-io"
 version = "0.1.6"
 dependencies = [
  "quick-xml 0.38.4",
+ "serde_json",
+ "solvecraft-cam",
  "solvecraft-doc",
  "solvecraft-geom",
  "solvecraft-kernel",
@@ -3280,6 +3308,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9571ea910ebd84c86af4b3ed27f9dbdc6ad06f17c5f96146b2b671e2976744f"
 dependencies = [
  "bitflags 2.13.2",
+]
+
+[[package]]
+name = "static_aabb2d_index"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a753368e4dd146a347d0ea692f0f8a37df18df7eee5659d36dd75eb287c6454"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
@@ -4555,6 +4592,8 @@ name = "xtask"
 version = "0.1.6"
 dependencies = [
  "serde_json",
+ "sha2",
+ "solvecraft-cam",
 ]
 
 [[package]]

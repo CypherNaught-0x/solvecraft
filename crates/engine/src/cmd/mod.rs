@@ -3,6 +3,7 @@
 //! Design workspace layout. Ids used before the rename still resolve (`legacy_ids`).
 
 mod browser;
+mod cam;
 mod clipboard;
 mod component;
 mod component_clone;
@@ -155,6 +156,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(component::COMMANDS.iter());
     v.extend(joints::COMMANDS.iter());
     v.extend(motion::COMMANDS.iter());
+    v.extend(cam::COMMANDS.iter());
     v.extend(config::COMMANDS.iter());
     v.extend(parts::COMMANDS.iter());
     v.extend(browser::COMMANDS.iter());

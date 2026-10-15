@@ -1,0 +1,687 @@
+//! Manufacture workspace. All edits and jobs use the public CAM commands.
+use crate::SolveApp;
+use egui::{Color32, Stroke};
+use serde_json::json;
+use solvecraft_engine::{cam, geom::Vec3, manufacturing::JobState};
+
+#[derive(Default)]
+pub struct State {
+    editor: Option<Editor>,
+    pub program: u64,
+    pub job: Option<u64>,
+    pub playback: usize,
+    pub playing: bool,
+    error: String,
+}
+enum Editor {
+    Setup(cam::Setup),
+    Tool(cam::Tool),
+    Operation(cam::Operation),
+    Program(cam::Program),
+}
+fn next(ids: impl Iterator<Item = u64>) -> u64 {
+    ids.max().unwrap_or(0).saturating_add(1)
+}
+pub fn cancel_editor(app: &mut SolveApp) {
+    app.manufacturing.editor = None;
+}
+pub fn start(app: &mut SolveApp, id: &str) {
+    crate::dialogs::cancel(app);
+    app.tool = None;
+    app.ui.tab = "MILLING".into();
+    let m = &app.session.doc.manufacturing;
+    match id {
+        "cam.setup.put" => {
+            let st = app.session.model.state();
+            let Some(b) = st.bodies.first() else {
+                app.set_status("Create a solid before a milling setup", true);
+                return;
+            };
+            let bounds = b.mesh().bounds();
+            app.manufacturing.editor = Some(Editor::Setup(cam::Setup {
+                id: next(m.setups.iter().map(|s| s.id)),
+                name: "Milling setup".into(),
+                stock: cam::Stock { min: bounds.min, max: bounds.max + Vec3::new(0.0, 0.0, 1.0) },
+                frame: cam::Frame::default(),
+                models: vec![cam::BodyRef { body: b.name.clone(), occurrence: vec![] }],
+                fixtures: vec![],
+                clearance: bounds.max.z + 15.0,
+                retract: bounds.max.z + 5.0,
+                work_offset: 54,
+            }));
+        }
+        "cam.tool.put" => {
+            if let Ok(mut f) = cam::corpus::fixture("face")
+                && let Some(mut t) = f.tools.pop()
+            {
+                t.id = next(m.tools.iter().map(|t| t.id));
+                t.number = t.id as u32;
+                app.manufacturing.editor = Some(Editor::Tool(t));
+            }
+        }
+        "cam.operation.put" => {
+            let (Some(s), Some(t)) = (m.setups.first(), m.tools.first()) else {
+                app.set_status("Create a setup and a tool first", true);
+                return;
+            };
+            if let Ok(mut f) = cam::corpus::fixture("face")
+                && let Some(mut o) = f.operations.pop()
+            {
+                o.id = next(m.operations.iter().map(|o| o.id));
+                o.setup = s.id;
+                o.tool = t.id;
+                o.name = "Facing".into();
+                o.top = s.stock.max.z;
+                o.bottom = o.top - 1.0;
+                o.stepover = t.diameter / 3.0;
+                app.manufacturing.editor = Some(Editor::Operation(o));
+            }
+        }
+        "cam.program.put" => {
+            let Some(s) = m.setups.first() else {
+                app.set_status("Create a setup first", true);
+                return;
+            };
+            app.manufacturing.editor = Some(Editor::Program(cam::Program {
+                id: next(m.programs.iter().map(|p| p.id)),
+                name: "NC program".into(),
+                setup: s.id,
+                operations: m.operations.iter().filter(|o| o.setup == s.id).map(|o| o.id).collect(),
+            }));
+        }
+        "cam.generate" => {
+            let p = if app.manufacturing.program == 0 { m.programs.first().map(|p| p.id).unwrap_or(0) } else { app.manufacturing.program };
+            if let Ok(v) = app.run(id, json!({"program":p,"background":true})) {
+                app.manufacturing.job = v["job"].as_u64();
+                app.manufacturing.playback = 0;
+            }
+        }
+        "cam.simulate" => {
+            if let Some(job) = app.manufacturing.job {
+                let _ = app.run(id, json!({"job":job,"background":true}));
+            }
+        }
+        "cam.post" => export(app, "gcode"),
+        _ => {}
+    }
+}
+fn export(app: &mut SolveApp, format: &str) {
+    let Some(job) = app.manufacturing.job else {
+        app.set_status("Generate a program first", true);
+        return;
+    };
+    let ext = match format {
+        "gcode" => "nc",
+        "stock" => "stl",
+        "setup_sheet" => "html",
+        _ => "json",
+    };
+    if let Some(path) = app.services.pick_save.as_ref().and_then(|f| f(&format!("milling.{ext}"), &[ext])) {
+        let cmd = if format == "gcode" { "cam.post" } else { "cam.export" };
+        let _ = app.run(cmd, json!({"job":job,"format":format,"path":path}));
+    }
+}
+pub fn panel(app: &mut SolveApp, ui: &mut egui::Ui) {
+    let model = app.session.doc.manufacturing.clone();
+    let mut action = None;
+    egui::Panel::left("manufacturing_browser").default_size(290.0).show(ui, |ui| {
+        ui.heading("Manufacture");
+        ui.label("Three-axis milling · reference post");
+        ui.horizontal(|ui| {
+            if ui.button("Setup").clicked() {
+                action = Some("cam.setup.put");
+            }
+            if ui.button("Tool").clicked() {
+                action = Some("cam.tool.put");
+            }
+            if ui.button("Operation").clicked() {
+                action = Some("cam.operation.put");
+            }
+        });
+        egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+            for setup in &model.setups {
+                ui.collapsing(&setup.name, |ui| {
+                    if ui.small_button("Edit setup").clicked() {
+                        app.manufacturing.editor = Some(Editor::Setup(setup.clone()));
+                    }
+                    for o in model.operations.iter().filter(|o| o.setup == setup.id) {
+                        if ui.selectable_label(false, &o.name).clicked() {
+                            app.manufacturing.editor = Some(Editor::Operation(o.clone()));
+                        }
+                    }
+                });
+            }
+            ui.collapsing("Tools", |ui| {
+                for tool in &model.tools {
+                    if ui.button(format!("T{} · {}", tool.number, tool.name)).clicked() {
+                        app.manufacturing.editor = Some(Editor::Tool(tool.clone()));
+                    }
+                }
+            });
+            ui.collapsing("NC programs", |ui| {
+                for p in &model.programs {
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut app.manufacturing.program, p.id, &p.name);
+                        if ui.small_button("Edit").clicked() {
+                            app.manufacturing.editor = Some(Editor::Program(p.clone()));
+                        }
+                    });
+                }
+                if ui.button("New program").clicked() {
+                    action = Some("cam.program.put");
+                }
+            });
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("Generate").clicked() {
+                action = Some("cam.generate");
+            }
+            if ui.button("Simulate").clicked() {
+                action = Some("cam.simulate");
+            }
+        });
+        if let Some(id) = app.manufacturing.job {
+            if let Ok(job) = solvecraft_engine::manufacturing::job(&app.session, id) {
+                if solvecraft_engine::manufacturing::current(&app.session, &job).is_err() {
+                    ui.colored_label(Color32::YELLOW, "Inputs changed — regenerate");
+                }
+                match job.state() {
+                    Ok(JobState::Verifying(_)) => {
+                        ui.spinner();
+                        ui.label("Checking tool clearances and remaining stock…");
+                        ui.ctx().request_repaint();
+                    }
+                    Ok(JobState::Running) => {
+                        ui.spinner();
+                        ui.label(format!("Generating {}%", job.progress.load(std::sync::atomic::Ordering::Relaxed)));
+                        ui.ctx().request_repaint();
+                    }
+                    Ok(JobState::Failed(e)) => {
+                        ui.colored_label(Color32::LIGHT_RED, e);
+                    }
+                    Ok(JobState::Cancelled) => {
+                        ui.label("Cancelled");
+                    }
+                    Ok(JobState::Generated(path)) => {
+                        ui.label(format!("{} motion and machine events", path.blocks.len()));
+                    }
+                    Ok(JobState::Verified(_, r)) => {
+                        ui.label(format!("Path checks: {:?}", r.status));
+                        ui.label(format!("Finished dimensions: {:?}", r.finished_dimensions));
+                        ui.label(format!("Cutting: {:.1} mm · {:.2} min", r.cutting_distance, r.cutting_minutes));
+                        egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+                            for f in r.findings.iter().take(15) {
+                                ui.label(format!(
+                                    "{}{}: {}",
+                                    f.kind.replace('_', " "),
+                                    f.line.map(|l| format!(" (line {l})")).unwrap_or_default(),
+                                    f.detail
+                                ));
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        ui.label(e.to_string());
+                    }
+                }
+                if ui.button("Cancel job").clicked() {
+                    let _ = app.run("cam.job.cancel", json!({"job":id}));
+                }
+                let count = match job.state() {
+                    Ok(JobState::Generated(p) | JobState::Verified(p, _)) => p.blocks.len(),
+                    _ => 0,
+                };
+                if count > 0 {
+                    ui.checkbox(&mut app.manufacturing.playing, "Play toolpath");
+                    ui.add(egui::Slider::new(&mut app.manufacturing.playback, 0..=count).text("Motion"));
+                    if app.manufacturing.playing {
+                        app.manufacturing.playback = (app.manufacturing.playback + 4).min(count);
+                        if app.manufacturing.playback == count {
+                            app.manufacturing.playing = false;
+                        }
+                        ui.ctx().request_repaint();
+                    }
+                }
+            } else {
+                ui.label("Regenerate after reopening or switching documents");
+            }
+        }
+        ui.separator();
+        for (label, f) in [
+            ("Post G-code", "gcode"),
+            ("Setup sheet", "setup_sheet"),
+            ("Toolpath JSON", "toolpath"),
+            ("Validation report", "validation"),
+            ("Remaining stock", "stock"),
+        ] {
+            if ui.button(label).clicked() {
+                export(app, f);
+            }
+        }
+    });
+    if let Some(id) = action {
+        start(app, id);
+    }
+}
+fn number(ui: &mut egui::Ui, label: &str, v: &mut f64) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add(egui::DragValue::new(v).speed(0.1).max_decimals(4));
+    });
+}
+fn point(ui: &mut egui::Ui, label: &str, p: &mut Vec3) {
+    ui.label(label);
+    ui.horizontal(|ui| {
+        for (axis, v) in [("X", &mut p.x), ("Y", &mut p.y), ("Z", &mut p.z)] {
+            ui.label(axis);
+            ui.add(egui::DragValue::new(v).speed(0.1));
+        }
+    });
+}
+fn boundary(ui: &mut egui::Ui, b: &mut cam::Boundary) {
+    ui.label("Boundary in setup XY (mm)");
+    for (i, ring) in std::iter::once(&mut b.outer).chain(&mut b.islands).enumerate() {
+        ui.collapsing(if i == 0 { "Outer contour".into() } else { format!("Island {i}") }, |ui| {
+            for p in ring.iter_mut() {
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut p[0]));
+                    ui.add(egui::DragValue::new(&mut p[1]));
+                });
+            }
+            if ui.small_button("Add vertex").clicked() {
+                ring.push([0.0, 0.0]);
+            }
+            if ring.len() > 3 && ui.small_button("Remove last vertex").clicked() {
+                ring.pop();
+            }
+        });
+    }
+    if ui.small_button("Add island").clicked() {
+        b.islands.push(vec![[5.0, 5.0], [7.0, 5.0], [7.0, 7.0], [5.0, 7.0]]);
+    }
+}
+pub fn editor(app: &mut SolveApp, ctx: &egui::Context) {
+    let Some(mut editor) = app.manufacturing.editor.take() else { return };
+    let mut save = false;
+    let mut open = true;
+    crate::frame::window(ctx, "Manufacturing parameters", crate::frame::Width::Normal).open(&mut open).resizable(true).default_width(420.0).show(
+        ctx,
+        |ui| {
+            egui::ScrollArea::vertical().max_height(540.0).show(ui, |ui| match &mut editor {
+                Editor::Setup(s) => edit_setup(app, ui, s),
+                Editor::Tool(t) => edit_tool(ui, t),
+                Editor::Operation(o) => edit_operation(app, ui, o),
+                Editor::Program(p) => edit_program(app, ui, p),
+            });
+            if !app.manufacturing.error.is_empty() {
+                ui.colored_label(Color32::LIGHT_RED, &app.manufacturing.error);
+            }
+            save = ui.button("Save").clicked();
+        },
+    );
+    if save {
+        let (id, p) = match &editor {
+            Editor::Setup(s) => ("cam.setup.put", json!({"setup":s})),
+            Editor::Tool(t) => ("cam.tool.put", json!({"tool":t})),
+            Editor::Operation(o) => ("cam.operation.put", json!({"operation":o})),
+            Editor::Program(p) => ("cam.program.put", json!({"program":p})),
+        };
+        match app.run(id, p) {
+            Ok(_) => {
+                open = false;
+                app.manufacturing.error.clear();
+            }
+            Err(e) => app.manufacturing.error = e.to_string(),
+        }
+    }
+    if open {
+        app.manufacturing.editor = Some(editor);
+    }
+}
+fn selected_bodies(app: &SolveApp) -> Vec<cam::BodyRef> {
+    let mut refs = Vec::new();
+    for sel in &app.session.selection {
+        match sel {
+            solvecraft_engine::Sel::Body { name } => refs.push(cam::BodyRef { body: name.clone(), occurrence: vec![] }),
+            solvecraft_engine::Sel::Occurrence { path } => {
+                if let Ok(p) = app.session.occurrence_placement(path) {
+                    for b in p.bodies {
+                        refs.push(cam::BodyRef { body: b.source, occurrence: path.clone() });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    refs
+}
+fn edit_setup(app: &mut SolveApp, ui: &mut egui::Ui, s: &mut cam::Setup) {
+    ui.label("Setup name");
+    ui.text_edit_singleline(&mut s.name);
+    point(ui, "Stock minimum (mm)", &mut s.stock.min);
+    point(ui, "Stock maximum (mm)", &mut s.stock.max);
+    point(ui, "Work origin (world mm)", &mut s.frame.origin);
+    ui.collapsing("Setup orientation", |ui| {
+        point(ui, "X axis", &mut s.frame.x);
+        point(ui, "Y axis", &mut s.frame.y);
+        point(ui, "Z axis", &mut s.frame.z);
+    });
+    number(ui, "Clearance Z", &mut s.clearance);
+    number(ui, "Retract Z", &mut s.retract);
+    ui.horizontal(|ui| {
+        ui.label("Work offset G");
+        ui.add(egui::DragValue::new(&mut s.work_offset).range(54..=59));
+    });
+    ui.label("Model bodies");
+    for r in &mut s.models {
+        ui.text_edit_singleline(&mut r.body);
+    }
+    if ui.button("Use selected bodies / occurrences").clicked() {
+        let refs = selected_bodies(app);
+        if !refs.is_empty() {
+            s.models = refs;
+        }
+    }
+    if ui.button("Add selected bodies as fixtures").clicked() {
+        s.fixtures.extend(selected_bodies(app));
+    }
+    for f in &s.fixtures {
+        ui.label(format!("Fixture: {}", f.body));
+    }
+    if ui.small_button("Clear fixtures").clicked() {
+        s.fixtures.clear();
+    }
+}
+fn edit_tool(ui: &mut egui::Ui, t: &mut cam::Tool) {
+    ui.text_edit_singleline(&mut t.name);
+    ui.horizontal(|ui| {
+        ui.label("Tool number");
+        ui.add(egui::DragValue::new(&mut t.number).range(1..=9999));
+    });
+    egui::ComboBox::from_label("Tool type").selected_text(format!("{:?}", t.kind)).show_ui(ui, |ui| {
+        ui.selectable_value(&mut t.kind, cam::ToolKind::FlatEndMill, "Flat end mill (center cutting)");
+        ui.selectable_value(&mut t.kind, cam::ToolKind::TwistDrill, "Twist drill");
+    });
+    for (label, v) in [
+        ("Diameter", &mut t.diameter),
+        ("Cutting length", &mut t.cutting_length),
+        ("Shank diameter", &mut t.shank_diameter),
+        ("Overall length", &mut t.overall_length),
+        ("Holder diameter", &mut t.holder_diameter),
+        ("Holder length", &mut t.holder_length),
+    ] {
+        number(ui, label, v);
+    }
+    if t.kind == cam::ToolKind::TwistDrill {
+        let mut angle = t.tip_angle.to_degrees();
+        number(ui, "Point angle (degrees)", &mut angle);
+        t.tip_angle = angle.to_radians();
+    }
+}
+fn edit_operation(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation) {
+    ui.text_edit_singleline(&mut o.name);
+    egui::ComboBox::from_label("Setup").selected_text(o.setup.to_string()).show_ui(ui, |ui| {
+        for s in &app.session.doc.manufacturing.setups {
+            ui.selectable_value(&mut o.setup, s.id, &s.name);
+        }
+    });
+    egui::ComboBox::from_label("Tool").selected_text(o.tool.to_string()).show_ui(ui, |ui| {
+        for t in &app.session.doc.manufacturing.tools {
+            ui.selectable_value(&mut o.tool, t.id, &t.name);
+        }
+    });
+    let mut kind = match o.geometry {
+        cam::Strategy::Face => 0,
+        cam::Strategy::Contour { .. } => 1,
+        cam::Strategy::Pocket { .. } => 2,
+        cam::Strategy::Drill { .. } => 3,
+    };
+    let before = kind;
+    egui::ComboBox::from_label("Strategy").selected_text(["Facing", "Contour", "Pocket", "Drilling"][kind]).show_ui(ui, |ui| {
+        for (i, label) in ["Facing", "Contour", "Pocket", "Drilling"].into_iter().enumerate() {
+            ui.selectable_value(&mut kind, i, label);
+        }
+    });
+    if kind != before {
+        o.source = None;
+        let b = cam::Boundary { outer: vec![[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]], islands: vec![] };
+        o.geometry = match kind {
+            1 => cam::Strategy::Contour { boundary: b, inside: false },
+            2 => cam::Strategy::Pocket { boundary: b },
+            3 => cam::Strategy::Drill { holes: vec![[0.0, 0.0]], peck: None, full_diameter: false },
+            _ => cam::Strategy::Face,
+        };
+    }
+    if matches!(o.geometry, cam::Strategy::Contour { .. } | cam::Strategy::Pocket { .. }) {
+        if ui.button("Use selected sketch profile").clicked() {
+            link_profile(app, o);
+        }
+        if o.source.is_some() {
+            ui.label("Boundary linked to sketch; regeneration follows edits");
+            if ui.small_button("Unlink boundary").clicked() {
+                o.source = None;
+            }
+        }
+    }
+    match &mut o.geometry {
+        cam::Strategy::Contour { boundary: b, inside } => {
+            ui.checkbox(inside, "Inside contour");
+            boundary(ui, b);
+        }
+        cam::Strategy::Pocket { boundary: b } => boundary(ui, b),
+        cam::Strategy::Drill { holes, peck, full_diameter } => {
+            for p in holes.iter_mut() {
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut p[0]));
+                    ui.add(egui::DragValue::new(&mut p[1]));
+                });
+            }
+            if ui.button("Add hole").clicked() {
+                holes.push([0.0, 0.0]);
+            }
+            if holes.len() > 1 && ui.button("Remove last hole").clicked() {
+                holes.pop();
+            }
+            let mut enabled = peck.is_some();
+            if ui.checkbox(&mut enabled, "Peck drilling").changed() {
+                *peck = enabled.then_some(1.0);
+            }
+            if let Some(p) = peck {
+                number(ui, "Peck depth", p);
+            }
+            ui.checkbox(full_diameter, "Depth is full-diameter depth");
+        }
+        _ => {}
+    }
+    for (label, v) in [
+        ("Top Z", &mut o.top),
+        ("Bottom Z", &mut o.bottom),
+        ("Stepdown", &mut o.stepdown),
+        ("Stepover", &mut o.stepover),
+        ("Feed mm/min", &mut o.feed),
+        ("Plunge mm/min", &mut o.plunge_feed),
+        ("Spindle rpm", &mut o.spindle),
+        ("Stock allowance", &mut o.allowance),
+        ("Tolerance", &mut o.tolerance),
+    ] {
+        number(ui, label, v);
+    }
+    if matches!(o.geometry, cam::Strategy::Contour { .. } | cam::Strategy::Pocket { .. }) {
+        number(ui, "Tangential lead distance", &mut o.lead_distance);
+        let mut ramp = o.ramp_angle.is_some();
+        if ui.checkbox(&mut ramp, "Ramp entry").changed() {
+            o.ramp_angle = ramp.then_some(3_f64.to_radians());
+        }
+        if let Some(a) = &mut o.ramp_angle {
+            let mut degrees = a.to_degrees();
+            number(ui, "Ramp angle (degrees)", &mut degrees);
+            *a = degrees.to_radians();
+        }
+    }
+    ui.checkbox(&mut o.climb, "Climb milling");
+    ui.checkbox(&mut o.coolant, "Coolant");
+}
+fn link_profile(app: &mut SolveApp, o: &mut cam::Operation) {
+    let selected = app.session.selection.iter().find_map(|s| match s {
+        solvecraft_engine::Sel::Profile { sketch, index } => Some((*sketch, *index)),
+        _ => None,
+    });
+    let Some((sketch, index)) = selected else {
+        app.manufacturing.error = "Select a closed sketch profile first".into();
+        return;
+    };
+    let result = app.run(
+        "cam.boundary.from_profile",
+        json!({"setup":o.setup,"sketch":sketch,
+        "profile":index,"occurrence":app.session.active_occurrence_path.clone().unwrap_or_default()}),
+    );
+    match result {
+        Ok(v) => {
+            if let (Ok(b), Ok(source)) = (serde_json::from_value(v["boundary"].clone()), serde_json::from_value(v["source"].clone())) {
+                match &mut o.geometry {
+                    cam::Strategy::Contour { boundary, .. } | cam::Strategy::Pocket { boundary } => *boundary = b,
+                    _ => {}
+                }
+                o.source = Some(source);
+            }
+        }
+        Err(e) => app.manufacturing.error = e.to_string(),
+    }
+}
+fn edit_program(app: &mut SolveApp, ui: &mut egui::Ui, p: &mut cam::Program) {
+    ui.text_edit_singleline(&mut p.name);
+    egui::ComboBox::from_label("Setup").selected_text(p.setup.to_string()).show_ui(ui, |ui| {
+        for s in &app.session.doc.manufacturing.setups {
+            ui.selectable_value(&mut p.setup, s.id, &s.name);
+        }
+    });
+    ui.label("Ordered operations");
+    let mut swap = None;
+    let mut remove = None;
+    for (i, id) in p.operations.iter().enumerate() {
+        ui.push_id(i, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    app.session.doc.manufacturing.operations.iter().find(|o| o.id == *id).map(|o| o.name.as_str()).unwrap_or("Missing operation"),
+                );
+                if i > 0 && ui.small_button("↑").clicked() {
+                    swap = Some(i);
+                }
+                if ui.small_button("Remove").clicked() {
+                    remove = Some(i);
+                }
+            });
+        });
+    }
+    if let Some(i) = swap {
+        p.operations.swap(i - 1, i);
+    }
+    if let Some(i) = remove {
+        p.operations.remove(i);
+    }
+    if ui.button("Use all operations in this setup").clicked() {
+        p.operations = app.session.doc.manufacturing.operations.iter().filter(|o| o.setup == p.setup).map(|o| o.id).collect();
+    }
+}
+pub fn overlay(app: &SolveApp, painter: &egui::Painter, proj: &crate::viewport::Proj) {
+    if app.ui.tab != "MILLING" {
+        return;
+    }
+    let line = |a: Vec3, b: Vec3, color: Color32| {
+        if let (Some(a), Some(b)) = (proj.to_screen(a), proj.to_screen(b)) {
+            painter.line_segment([a, b], Stroke::new(1.2, color));
+        }
+    };
+    for s in &app.session.doc.manufacturing.setups {
+        let a = s.stock.min;
+        let b = s.stock.max;
+        let corners = [
+            Vec3::new(a.x, a.y, a.z),
+            Vec3::new(b.x, a.y, a.z),
+            Vec3::new(b.x, b.y, a.z),
+            Vec3::new(a.x, b.y, a.z),
+            Vec3::new(a.x, a.y, b.z),
+            Vec3::new(b.x, a.y, b.z),
+            Vec3::new(b.x, b.y, b.z),
+            Vec3::new(a.x, b.y, b.z),
+        ];
+        for (i, j) in [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)] {
+            line(s.frame.world(corners[i]), s.frame.world(corners[j]), Color32::from_rgb(220, 170, 70));
+        }
+    }
+    let Some(id) = app.manufacturing.job else {
+        return;
+    };
+    let Ok(job) = solvecraft_engine::manufacturing::job(&app.session, id) else {
+        return;
+    };
+    if solvecraft_engine::manufacturing::current(&app.session, &job).is_err() {
+        return;
+    }
+    let path = match job.state() {
+        Ok(JobState::Generated(p) | JobState::Verified(p, _)) => p,
+        _ => return,
+    };
+    let mut pos = Vec3::new(0.0, 0.0, job.input.setup.clearance);
+    let end = if app.manufacturing.playback == 0 { path.blocks.len() } else { app.manufacturing.playback };
+    for block in path.blocks.iter().take(end) {
+        match &block.motion {
+            cam::Motion::Rapid { to } | cam::Motion::Linear { to, .. } => {
+                line(
+                    job.input.setup.frame.world(pos),
+                    job.input.setup.frame.world(*to),
+                    if matches!(block.motion, cam::Motion::Rapid { .. }) { Color32::from_rgb(230, 170, 65) } else { Color32::from_rgb(50, 180, 240) },
+                );
+                pos = *to;
+            }
+            cam::Motion::Arc { to, center, clockwise, .. } => {
+                let a = (pos.y - center.y).atan2(pos.x - center.x);
+                let b = (to.y - center.y).atan2(to.x - center.x);
+                let mut angle = (b - a).rem_euclid(std::f64::consts::TAU);
+                if *clockwise {
+                    angle -= std::f64::consts::TAU;
+                }
+                let radius = pos.dist(*center);
+                let mut prev = pos;
+                for i in 1..=24 {
+                    let theta = a + angle * i as f64 / 24.0;
+                    let p = Vec3::new(center.x + radius * theta.cos(), center.y + radius * theta.sin(), to.z);
+                    line(job.input.setup.frame.world(prev), job.input.setup.frame.world(p), Color32::from_rgb(50, 180, 240));
+                    prev = p;
+                }
+                pos = *to;
+            }
+            _ => {}
+        }
+    }
+    if let Some(p) = proj.to_screen(job.input.setup.frame.world(pos)) {
+        painter.circle_filled(p, 5.0, Color32::LIGHT_GREEN);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    #[test]
+    fn manufacturing_dialogs_create_persistent_definitions() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("solid.box", json!({"length":20,"width":20,"height":5})).unwrap();
+        for command in ["cam.setup.put", "cam.tool.put", "cam.operation.put", "cam.program.put"] {
+            h.step(&json!({"start":command})).unwrap();
+            h.frames(2);
+            h.step(&json!({"widget":"Save"})).unwrap();
+            h.frames(2);
+            assert!(h.app.manufacturing.editor.is_none(), "{}: {}", command, h.app.manufacturing.error);
+        }
+        let m = &h.app.session.doc.manufacturing;
+        assert_eq!((m.setups.len(), m.tools.len(), m.operations.len(), m.programs.len()), (1, 1, 1, 1));
+        let job = h.app.run("cam.generate", json!({"program":1})).unwrap()["job"].clone();
+        let report = h.app.run("cam.simulate", json!({"job":job})).unwrap();
+        assert_eq!(report["verification"]["status"], "pass", "{report}");
+        assert!(h.app.run("cam.post", json!({"job":job})).is_ok());
+        h.app.manufacturing.job = job.as_u64();
+        h.frames(3);
+    }
+}

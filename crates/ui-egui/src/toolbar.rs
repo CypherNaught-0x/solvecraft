@@ -14,6 +14,7 @@ pub fn panels(tab: &str) -> &'static [&'static str] {
         return p;
     }
     match tab {
+        "MILLING" => &["SETUP", "TOOLPATHS", "VERIFY", "EXPORT"],
         "SOLID" => &["CREATE", "MODIFY", "ASSEMBLE", "CONSTRUCT", "INSPECT", "INSERT", "SELECT"],
         "SKETCH" => &["CREATE", "MODIFY", "CONSTRAINTS", "INSPECT", "INSERT", "SELECT", "FINISH SKETCH"],
         "SURFACE" => &["CREATE", "MODIFY", "ASSEMBLE", "CONSTRUCT", "INSPECT", "INSERT", "SELECT"],
@@ -282,8 +283,8 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
         painter.text(
             pos2(ws.center().x - 5.0, ws.top() + 52.0),
             Align2::CENTER_CENTER,
-            crate::toolbar_custom::WORKSPACE,
-            FontId::proportional(12.0),
+            if app.ui.tab == "MILLING" { "Manufacture" } else { crate::toolbar_custom::WORKSPACE },
+            FontId::proportional(if app.ui.tab == "MILLING" { 10.0 } else { 12.0 }),
             t.text,
         );
         caret(&painter, pos2(ws.center().x + 27.0, ws.top() + 52.0), t.text);
@@ -298,7 +299,11 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
         if sketching {
             tabs.push("SKETCH");
         }
-        tabs.extend(TABS.iter());
+        if app.ui.tab == "MILLING" {
+            tabs.push("MILLING");
+        } else {
+            tabs.extend(TABS.iter());
+        }
         for tab in tabs {
             let w = 12.0 + tab.len() as f32 * 7.4;
             let tr = Rect::from_min_size(pos2(x, tabs_y), vec2(w, 22.0));

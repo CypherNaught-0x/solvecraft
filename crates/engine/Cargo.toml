@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+solvecraft-cam.workspace = true
 solvecraft-geom = { workspace = true }
 solvecraft-sketch = { workspace = true }
 solvecraft-kernel = { workspace = true }

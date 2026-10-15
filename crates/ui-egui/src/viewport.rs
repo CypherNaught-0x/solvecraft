@@ -1612,6 +1612,8 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         cpu_render(app, ui.ctx(), &painter, rect, &proj);
     }
 
+    crate::manufacturing::overlay(app, &painter, &proj);
+
     // ---- interaction ----
     let add = mods.shift || mods.command || mods.ctrl;
     if let Some(p) = hover.filter(|_| inside) {
