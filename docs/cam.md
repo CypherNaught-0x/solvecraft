@@ -44,6 +44,16 @@ depth. Contours/pockets can use tangential leads and feed-controlled ramps. Allo
 to leave; use a separate zero-allowance operation for finishing. Flat mills are explicitly assumed
 to be center cutting. Entry/lead collisions are checked during simulation, before posting.
 
+The reference spindle rotates clockwise (M3) with right-handed cutters. Climb milling keeps
+the finished material to the right of travel: counterclockwise inside walls, clockwise around
+external bosses and pocket islands. Facing advances rows in +Y and cuts toward -X for climb;
+conventional reverses each cutting direction. Full-width entry can engage both sides of the
+cutter. Independent tests interpret posted NC and check travel direction and signed loop area
+for both settings and both input windings. The convention follows the
+[Haas mill programming workbook](https://www.haascnc.com/content/dam/haascnc/videos/bonus-content/ep81-essential-9-lines/programming-workbooks/mill---programming-workbook.pdf),
+printed pages 51 and 61. Generator version `cam/14` invalidates paths made with the earlier
+reversed direction settings; regenerate and simulate before posting.
+
 Offsets use exactly `cavalier_contours 0.9.0` (MIT OR Apache-2.0) behind bounded input checks.
 Crossing/touching loops, nested islands, oversized tools, non-finite values and exceeded budgets
 are errors. The offset adapter uses 1e-8 mm position/join and 1e-7 mm distance tolerances;

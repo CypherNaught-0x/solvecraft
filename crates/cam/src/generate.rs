@@ -180,7 +180,9 @@ async fn operation(input: &JobInput, o: &Operation, progress: Progress) -> Resul
             for z in levels {
                 for j in 0..=n {
                     let y = a.y + (b.y - a.y) * j as f64 / n.max(1) as f64;
-                    let (x0, x1) = if o.climb { (a.x - radius, b.x + radius) } else { (b.x + radius, a.x - radius) };
+                    // M3/right-handed cutter: climb keeps uncut material on the
+                    // right. Rows advance toward +Y, so climb travels toward -X.
+                    let (x0, x1) = if o.climb { (b.x + radius, a.x - radius) } else { (a.x - radius, b.x + radius) };
                     w.enter(s, Vec3::new(x0, y, z), o).await?;
                     w.feed(Vec3::new(x1, y, z), o.feed).await?;
                 }
@@ -199,7 +201,8 @@ async fn operation(input: &JobInput, o: &Operation, progress: Progress) -> Resul
             }
             for z in levels {
                 for lp in &loops.ccw_plines {
-                    trace(&mut w, s, o, &lp.polyline, z, o.climb == *inside).await?;
+                    // Offsets are CCW. Climb is CCW inside a wall and CW outside a boss.
+                    trace(&mut w, s, o, &lp.polyline, z, o.climb != *inside).await?;
                 }
             }
         }
@@ -240,7 +243,9 @@ async fn operation(input: &JobInput, o: &Operation, progress: Progress) -> Resul
             // Innermost passes first; independent clearance retracts avoid island crossings.
             for z in levels {
                 for lp in loops.iter().rev() {
-                    trace(&mut w, s, o, lp, z, o.climb).await?;
+                    // CCW outer loops and CW islands already put protected
+                    // material on the right; reverse both for conventional cuts.
+                    trace(&mut w, s, o, lp, z, !o.climb).await?;
                 }
             }
         }

@@ -328,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn climb_pocket_follows_clockwise_outer_wall() {
+    fn climb_pocket_follows_counterclockwise_outer_wall() {
         let i = fixture("pocket").unwrap();
         let path = generate::generate(i).unwrap();
         let points: Vec<_> = path
@@ -339,10 +339,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // Last loop follows the pocket outer wall clockwise.
+        // With M3, the pocket wall lies to the right of a counterclockwise cut.
         let last = &points[points.len() - 128..];
         let area: f64 = last.iter().zip(last.iter().cycle().skip(1)).take(128).map(|(a, b)| a.x * b.y - a.y * b.x).sum();
-        assert!(area < 0.0);
+        assert!(area > 0.0);
     }
     #[test]
     fn cooperative_verification_yields_and_cancels() {
