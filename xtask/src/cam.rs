@@ -40,7 +40,10 @@ pub fn validate(root: &Path) -> Result<(), String> {
             let report = verify::simulate(&input, &parsed, Default::default()).map_err(|e| e.to_string())?;
             let expected = if name == "contour" { 6.0 } else { 5.0 };
             let actual = verify::probe_height(&input, &parsed, [10.0, 10.0]).map_err(|e| e.to_string())?;
-            let pass = report.status == verify::Status::Pass && (actual - expected).abs() <= cam::TOLERANCE;
+            let dimensions_required = matches!(name, "face" | "drill");
+            let pass = report.status == verify::Status::Pass
+                && (actual - expected).abs() <= cam::TOLERANCE
+                && (!dimensions_required || report.finished_dimensions == verify::Status::Pass);
             let dir = out.join(name);
             directory(&dir)?;
             write(&dir.join("input.json"), pretty(&json!(input))?)?;
@@ -53,7 +56,7 @@ pub fn validate(root: &Path) -> Result<(), String> {
             write(&dir.join("stock.stl"), verify::stock_stl(&report, input.setup.stock.min.z).map_err(|e| e.to_string())?)?;
             write(&dir.join("paths.svg"), overlay(&input, &parsed, None)?)?;
             Ok(
-                json!({"case":name,"pass":pass,"status":report.status,"finished_dimensions":report.finished_dimensions,"probe":{"expected":expected,"actual":actual},"cells":report.cells.len(),"work":report.work,"findings":report.findings.iter().take(5).collect::<Vec<_>>() }),
+                json!({"case":name,"pass":pass,"status":report.status,"dimensional_certification_required":dimensions_required,"finished_dimensions":report.finished_dimensions,"probe":{"expected":expected,"actual":actual},"cells":report.cells.len(),"work":report.work,"findings":report.findings.iter().take(5).collect::<Vec<_>>() }),
             )
         })();
         cases.push(result.unwrap_or_else(|e| json!({"case":name,"pass":false,"error":e})));

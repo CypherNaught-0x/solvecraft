@@ -321,11 +321,14 @@ impl Operation {
         match &self.geometry {
             Strategy::Drill { holes, peck, .. } => {
                 if t.kind != ToolKind::TwistDrill
+                    || self.allowance != 0.0
                     || holes.is_empty()
                     || holes.len() > MAX_ITEMS
                     || peck.is_some_and(|v| !positive(v) || (self.top - self.bottom) / v > 10_000.0)
                 {
-                    return invalid("drilling needs a drill, bounded holes and positive peck");
+                    return invalid(
+                        "drilling needs a drill, bounded holes, positive peck and zero stock allowance; set the required depth explicitly",
+                    );
                 }
                 for p in holes {
                     point(Vec3::new(p[0], p[1], 0.0))?;

@@ -93,15 +93,25 @@ These artifact/completeness changes advance the fingerprint to `cam/3`. A watert
 mesh does not establish finished-part dimensional accuracy.
 
 The current passing verification status certifies the implemented no-gouge/clearance checks.
-The separate `finished_dimensions` status certifies the entire finished plane for facing-only
-programs. It remains **inconclusive for walls and holes**: excess material is reported separately
-because intermediate roughing may intentionally leave it. Definite finished-plane errors block posting.
-Experimental reference posting for other strategies checks paths; it does not certify dimensions.
+The separate `finished_dimensions` status certifies facing planes and analytic drill cylinders/cones,
+including blind/through and full-diameter depths. Independently calculated height envelopes refine
+requested features even when the NC omits a hole. Radial bands reserve half the dimensional tolerance
+for diameter error, after reserving the post/interpolation budget; depth is checked separately.
+Multiple facing/drilling cuts compose by taking the minimum allowed remaining height. Drilling
+requires zero stock allowance: use the explicit depth, since drill paths do not apply milling allowance.
+Wall certification remains **inconclusive**, so contour/pocket posting is currently blocked.
+Posting requires both clearance and finished dimensions to pass and a complete stock result.
+These changes advance the algorithm fingerprint to `cam/4`.
+Protected CAD boundaries are a separate open gate: cells spanning a vertical hole wall can still
+leave the no-gouge check inconclusive, even when the analytic hole dimensions agree. An original
+triangulated drilled-plate experiment confirms this limitation; it is not counted as a passing
+hole workflow. Such results remain blocked from posting.
 The Fusion oracle additionally requires passing finished-dimension checks for both programs. Analytic acceptance currently adds
 independent point-height expectations; those probes do not replace whole-region dimensional
 certification. This is an open M15 release gate, along with:
 
-- Certified surface-distance checks at vertical boundaries and detailed finished hole/wall dimensions.
+- Certified surface-distance checks at protected CAD boundaries, contour/pocket wall dimensions,
+  and broader dimensional regression coverage.
 - Broader fixture regression coverage and performance acceptance; supported stock/model geometry
   remains vertical height-field scope. Fixture triangles must form closed consistently wound bodies
   for volume-containment certification; surface contact can still be detected on an open mesh.

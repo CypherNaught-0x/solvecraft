@@ -208,7 +208,7 @@ fn post(s: &mut Session, p: &Value) -> Result<Value> {
     let jobs::JobState::Verified(path, report) = job.state()? else {
         return Err(EngineError::Other("simulate before posting".into()));
     };
-    if report.status != cam::verify::Status::Pass || report.finished_dimensions == cam::verify::Status::Fail {
+    if report.status != cam::verify::Status::Pass || report.finished_dimensions != cam::verify::Status::Pass || !report.stock_complete {
         return Err(EngineError::Other("posting blocked by failed or inconclusive verification".into()));
     }
     cam::nc::round_trip(&path, &job.input.setup, &job.input.tools).map_err(jobs::error)?;
@@ -300,5 +300,19 @@ mod tests {
         value.as_object_mut().unwrap().remove("manufacturing");
         let migrated = crate::io::read_design(value.to_string().as_bytes()).unwrap();
         assert!(migrated.manufacturing.is_empty());
+    }
+    #[test]
+    fn inconclusive_dimensions_cannot_be_posted() {
+        let mut s = configured();
+        let r = s.execute("cam.generate", &json!({"program":1})).unwrap();
+        let id = r["job"].as_u64().unwrap();
+        s.execute("cam.simulate", &json!({"job":id})).unwrap();
+        let job = jobs::job(&s, id).unwrap();
+        if let jobs::JobState::Verified(path, report) = job.state().unwrap() {
+            let mut report = (*report).clone();
+            report.finished_dimensions = cam::verify::Status::Inconclusive;
+            job.set(jobs::JobState::Verified(path, std::sync::Arc::new(report)));
+        }
+        assert!(s.execute("cam.post", &json!({"job":id})).is_err());
     }
 }

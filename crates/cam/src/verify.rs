@@ -114,11 +114,13 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
     let segments = nc::segments(nc, &input.setup)?;
     let tol = input.operations.iter().map(|o| o.tolerance).fold(TOLERANCE, f64::min);
     let stock = input.setup.stock;
+    let finished = crate::dimensions::Finished::new(input, tol)?;
+    let dimension_resolution = finished.as_ref().map_or(limits.uncertainty, |f| limits.uncertainty.min(f.refinement));
     let mut r = Report {
         version: VERSION.into(),
         fingerprint: input.fingerprint.clone(),
         status: Status::Pass,
-        finished_dimensions: Status::Inconclusive,
+        finished_dimensions: if finished.is_some() { Status::Pass } else { Status::Inconclusive },
         post_version: "reference-three-axis/1".into(),
         tolerance: tol,
         uncertainty: limits.uncertainty,
@@ -133,6 +135,12 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
         remaining_volume_high: 0.0,
         work: 0,
     };
+    if finished.is_none() {
+        r.findings.push(Finding {
+            kind: "finished_region_unsupported".into(), line: None, at: stock.min,
+            detail: "Finished-region certification currently supports facing and drilling; wall certification or a larger tolerance budget is required before posting".into(),
+        });
+    }
     for s in &segments {
         let d = s.from.dist(s.to);
         if s.rapid {
@@ -232,9 +240,14 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
             target_height(center, (max[0] - min[0]).max(max[1] - min[1]) / 2.0, &input.geometry.target, stock.min.z, &mut r.work, limits.work);
         let gouge = target_low - high > tol;
         let rest = low - target_high > tol;
-        // Target boundary cells refine spatially; interior planar cells can certify early.
-        let unresolved =
-            (high - low > tol / 2.0 || (uncertain_target && low < target_high - tol) || collision.is_some()) && half > limits.uncertainty;
+        let expected =
+            if let Some(f) = &finished { f.envelope((center, half), &mut r.work, limits.work, &cancelled, &mut yield_control).await? } else { None };
+        let dimension = expected.map(|e| e.classify(low, high));
+        // Refine both the machined result and the requested finished features:
+        // an omitted hole must not hide inside one large untouched stock cell.
+        let unresolved = ((high - low > tol / 2.0 || (uncertain_target && low < target_high - tol) || collision.is_some())
+            && half > limits.uncertainty)
+            || (dimension == Some(Status::Inconclusive) && half > dimension_resolution);
         if unresolved && depth < 24 && r.work <= limits.work {
             pending.extend([
                 (min, center, depth + 1),
@@ -245,6 +258,21 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
             continue;
         }
         let at = Vec3::new(center[0], center[1], low);
+        if let Some(dimension) = dimension {
+            if dimension == Status::Fail {
+                r.finished_dimensions = Status::Fail;
+                if r.findings.len() < 200 {
+                    r.findings.push(Finding {
+                        kind: "finished_region_error".into(),
+                        line: removal_line,
+                        at,
+                        detail: expected.map_or_else(String::new, |e| e.description()),
+                    });
+                }
+            } else if dimension == Status::Inconclusive && r.finished_dimensions == Status::Pass {
+                r.finished_dimensions = Status::Inconclusive;
+            }
+        }
         if let Some((kind, line)) = collision {
             if !kind.ends_with("unresolved") {
                 r.status = Status::Fail;
@@ -295,28 +323,8 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
             r.status = Status::Inconclusive;
         }
     }
-    // Facing has an independently specified finished plane over the entire stock.
-    // Wall and hole dimensional checks remain explicitly unimplemented, rather
-    // than inheriting a pass from the absence of detected gouges.
-    if input.operations.iter().all(|o| matches!(o.geometry, Strategy::Face)) && r.status == Status::Pass {
-        let plane = input.operations.iter().map(|o| o.bottom + o.allowance).fold(stock.max.z, f64::min);
-        r.finished_dimensions = Status::Pass;
-        for c in &r.cells {
-            let definite = (c.low - plane).max(plane - c.high).max(0.0);
-            let possible = (c.low - plane).abs().max((c.high - plane).abs());
-            if definite > tol {
-                r.finished_dimensions = Status::Fail;
-                r.findings.push(Finding {
-                    kind: "finished_plane_error".into(),
-                    line: None,
-                    at: Vec3::new(c.min[0], c.min[1], c.low),
-                    detail: format!("Finished plane differs by at least {definite:.6} mm"),
-                });
-                break;
-            } else if possible > tol {
-                r.finished_dimensions = Status::Inconclusive;
-            }
-        }
+    if (!r.stock_complete || r.status != Status::Pass) && r.finished_dimensions == Status::Pass {
+        r.finished_dimensions = Status::Inconclusive;
     }
     Ok(r)
 }
