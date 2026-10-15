@@ -32,38 +32,94 @@ pub fn validate(root: &Path) -> Result<(), String> {
     let out = root.join("target/cam-validation");
     directory(&out)?;
     let mut cases = Vec::new();
-    for name in ["face", "contour", "pocket", "drill"] {
+    for &name in cam::corpus::CASES {
         let result = (|| -> Result<Value, String> {
             let input = cam::corpus::fixture(name).map_err(|e| e.to_string())?;
             let path = cam::generate::generate(input.clone()).map_err(|e| e.to_string())?;
-            let parsed = nc::round_trip(&path, &input.setup, &input.tools).map_err(|e| e.to_string())?;
-            let report = verify::simulate(&input, &parsed, Default::default()).map_err(|e| e.to_string())?;
-            let expected = if name == "contour" { 6.0 } else { 5.0 };
-            let actual = verify::probe_height(&input, &parsed, [10.0, 10.0]).map_err(|e| e.to_string())?;
-            let dimensions_required = true;
-            let pass = report.status == verify::Status::Pass
-                && (actual - expected).abs() <= cam::TOLERANCE
-                && (!dimensions_required || report.finished_dimensions == verify::Status::Pass);
-            let dir = out.join(name);
-            directory(&dir)?;
-            write(&dir.join("input.json"), pretty(&json!(input))?)?;
-            write(&dir.join("toolpath.json"), pretty(&json!(path))?)?;
-            let code = nc::post(&path, &input.setup).map_err(|e| e.to_string())?;
-            write(&dir.join("program.nc"), &code)?;
-            write(&dir.join("solve.html"), program_html(&code, &report))?;
-            write(&dir.join("stock-difference.svg"), stock_overlay(&input, &report))?;
-            write(&dir.join("validation.json"), pretty(&json!(report))?)?;
-            write(&dir.join("stock.stl"), verify::stock_stl(&report, input.setup.stock.min.z).map_err(|e| e.to_string())?)?;
-            write(&dir.join("paths.svg"), overlay(&input, &parsed, None)?)?;
-            Ok(
-                json!({"case":name,"pass":pass,"status":report.status,"dimensional_certification_required":dimensions_required,"finished_dimensions":report.finished_dimensions,"probe":{"expected":expected,"actual":actual},"cells":report.cells.len(),"work":report.work,"findings":report.findings.iter().take(5).collect::<Vec<_>>() }),
-            )
+            let mut stages = Vec::new();
+            for completed in 1..=input.operations.len() {
+                let operation = input.operations.get(completed - 1).ok_or("missing operation")?;
+                let end = path.blocks.iter().rposition(|b| b.operation == operation.id).ok_or("missing operation motions")? + 1;
+                // Validate prefixes of the actual complete program, not independently
+                // generated replacements. Final protected geometry remains intact.
+                let mut stage_input = input.clone();
+                stage_input.operations.truncate(completed);
+                stage_input.fingerprint.clear();
+                stage_input.fingerprint = cam::fingerprint(&stage_input).map_err(|e| e.to_string())?;
+                let stage_path = cam::Toolpath { fingerprint: stage_input.fingerprint.clone(), blocks: path.blocks[..end].to_vec() };
+                let mut dir = out.join(name);
+                if completed != input.operations.len() {
+                    dir = dir.join(format!("after-{completed}"));
+                }
+                let mut stage = validate_stage(&dir, name, completed, &stage_input, &stage_path)?;
+                stage["operation"] = json!(operation.id);
+                stage["artifacts"] = json!(if completed == input.operations.len() { ".".to_string() } else { format!("after-{completed}") });
+                stages.push(stage);
+            }
+            let mut summary = stages.last().cloned().ok_or("empty fixture")?;
+            summary["case"] = json!(name);
+            summary["pass"] = json!(stages.iter().all(|s| s["pass"] == true));
+            summary["stages"] = json!(stages);
+            Ok(summary)
         })();
         cases.push(result.unwrap_or_else(|e| json!({"case":name,"pass":false,"error":e})));
     }
     report(&out, &cases, "Analytic CAM validation")?;
     println!("CAM validation: {}/{} passed → {}", cases.iter().filter(|v| v["pass"] == true).count(), cases.len(), out.display());
     if cases.iter().all(|v| v["pass"] == true) { Ok(()) } else { Err("CAM analytic validation failed; see report.json".into()) }
+}
+fn validate_stage(dir: &Path, name: &str, completed: usize, input: &JobInput, path: &cam::Toolpath) -> Result<Value, String> {
+    let parsed = nc::round_trip(path, &input.setup, &input.tools).map_err(|e| e.to_string())?;
+    let report = verify::simulate(input, &parsed, Default::default()).map_err(|e| e.to_string())?;
+    let mut probes = Vec::new();
+    for (xy, expected) in cam::corpus::probes(name, completed).map_err(|e| e.to_string())? {
+        let actual = verify::probe_height(input, &parsed, xy).map_err(|e| e.to_string())?;
+        probes.push(json!({"xy":xy,"expected":expected,"actual":actual,"pass":(actual-expected).abs()<=cam::TOLERANCE}));
+    }
+    directory(dir)?;
+    write(&dir.join("input.json"), pretty(&json!(input))?)?;
+    write(&dir.join("toolpath.json"), pretty(&json!(path))?)?;
+    let code = nc::post(path, &input.setup).map_err(|e| e.to_string())?;
+    write(&dir.join("program.nc"), &code)?;
+    write(&dir.join("solve.html"), program_html(&code, &report))?;
+    write(&dir.join("stock-difference.svg"), stock_overlay(input, &report))?;
+    write(&dir.join("validation.json"), pretty(&json!(report))?)?;
+    let stock = verify::stock_stl(&report, input.setup.stock.min.z).map_err(|e| e.to_string())?;
+    write(&dir.join("stock.stl"), &stock)?;
+    let mesh = cam::compare::read_stl(stock.as_bytes()).map_err(|e| e.to_string())?;
+    let exported = cam::compare::stock_mesh(&report, &mesh, input.setup.stock.min.z, cam::TOLERANCE).map_err(|e| e.to_string())?;
+    let mut export_values = json!(exported);
+    export_values["maximum_added_height_budget"] = json!(cam::STOCK_EXPORT_ERROR);
+    write(&dir.join("stock-export-validation.json"), pretty(&export_values)?)?;
+    write(&dir.join("paths.svg"), overlay(input, &parsed, None)?)?;
+    let values = json!({"setup":input.setup,"tools":input.tools,"operations":input.operations});
+    write(&dir.join("setup-sheet-values.json"), pretty(&values)?)?;
+    write(
+        &dir.join("setup-sheet.html"),
+        format!(
+            "<!doctype html><meta charset=utf-8><title>Analytic CAM setup</title><h1>Analytic CAM setup</h1><p>Lengths: mm; feeds: mm/min; angles: radians. Generator: {}. Input: {}</p><pre>{}</pre>",
+            cam::VERSION,
+            esc(&input.fingerprint),
+            esc(&pretty(&values)?)
+        ),
+    )?;
+    let pass = report.status == verify::Status::Pass
+        && report.finished_dimensions == verify::Status::Pass
+        && report.stock_complete
+        && exported.status == verify::Status::Pass
+        && probes.iter().all(|p| p["pass"] == true);
+    Ok(json!({"pass":pass,"status":report.status,"finished_dimensions":report.finished_dimensions,"probes":probes,
+        "stock_export":export_values,"cells":report.cells.len(),"work":report.work,"metrics":metrics(input,&parsed,&report)?,
+        "findings":report.findings.iter().take(5).collect::<Vec<_>>()}))
+}
+fn metrics(input: &JobInput, parsed: &nc::Parsed, report: &verify::Report) -> Result<Value, String> {
+    let segments = nc::segments(parsed, &input.setup).map_err(|e| e.to_string())?;
+    let tools: Vec<_> =
+        parsed.records.iter().filter_map(|r| if let cam::Motion::Tool { number, .. } = r.motion { Some(number) } else { None }).collect();
+    let retracts = segments.iter().filter(|s| s.rapid && s.to.z > s.from.z + 1e-9).count();
+    Ok(json!({"tool_order":tools,"retract_count":retracts,"cutting_distance":report.cutting_distance,
+        "rapid_distance":report.rapid_distance,"cutting_minutes":report.cutting_minutes,
+        "remaining_volume":[report.remaining_volume_low,report.remaining_volume_high]}))
 }
 pub fn oracle(root: &Path, args: &[&str]) -> Result<(), String> {
     let dir = args.windows(2).find(|w| w[0] == "--dir").map(|w| PathBuf::from(w[1])).ok_or("cam-oracle requires --dir LOCAL_ORACLE_DIRECTORY")?;
@@ -162,8 +218,10 @@ fn compare_case(dir: &Path, out: &Path) -> Result<Value, String> {
         && stock.status == verify::Status::Pass
         && mesh_check.status == verify::Status::Pass
         && setup_values_match;
+    let solve_metrics = metrics(&input, &own, &ours)?;
+    let reference_metrics = metrics(&input, &reference, &theirs)?;
     Ok(
-        json!({"pass":pass,"status":if pass{"pass"}else{"inconclusive"},"solve":ours.status,"reference":theirs.status,"finished_dimensions":[ours.finished_dimensions,theirs.finished_dimensions],"stock":stock,"reference_stl":mesh_check,"setup_values_match":setup_values_match,"distance_delta":ours.cutting_distance-theirs.cutting_distance,"minutes_delta":ours.cutting_minutes-theirs.cutting_minutes,"volume_intervals":[[ours.remaining_volume_low,ours.remaining_volume_high],[theirs.remaining_volume_low,theirs.remaining_volume_high]]}),
+        json!({"pass":pass,"status":if pass{"pass"}else{"inconclusive"},"solve":ours.status,"reference":theirs.status,"finished_dimensions":[ours.finished_dimensions,theirs.finished_dimensions],"stock":stock,"reference_stl":mesh_check,"setup_values_match":setup_values_match,"distance_delta":ours.cutting_distance-theirs.cutting_distance,"minutes_delta":ours.cutting_minutes-theirs.cutting_minutes,"volume_intervals":[[ours.remaining_volume_low,ours.remaining_volume_high],[theirs.remaining_volume_low,theirs.remaining_volume_high]],"metrics":{"solve":solve_metrics,"reference":reference_metrics}}),
     )
 }
 fn overlay(input: &JobInput, a: &nc::Parsed, b: Option<&nc::Parsed>) -> Result<String, String> {
@@ -216,6 +274,14 @@ fn report(out: &Path, cases: &[Value], title: &str) -> Result<(), String> {
             esc(name)
         ));
         html.push_str(&format!("<p><a href=\"{name}/solve.html\">SolveCraft line-linked diagnostics</a></p><img src=\"{name}/stock-difference.svg\" alt=\"Remaining material relative to protected geometry\">"));
+        if let Some(stages) = c["stages"].as_array() {
+            html.push_str("<h3>After each operation</h3><ul>");
+            for stage in stages {
+                let directory = esc(stage["artifacts"].as_str().unwrap_or("."));
+                html.push_str(&format!("<li>Operation {}: {} — <a href=\"{name}/{directory}/solve.html\">NC and diagnostics</a>, <a href=\"{name}/{directory}/setup-sheet.html\">setup sheet</a>, <a href=\"{name}/{directory}/stock.stl\">stock STL</a>, <a href=\"{name}/{directory}/stock-export-validation.json\">stock export comparison</a></li>",stage["operation"],if stage["pass"] == true { "pass" } else { "failed or inconclusive" }));
+            }
+            html.push_str("</ul>");
+        }
     }
     write(&out.join("report.html"), html)
 }

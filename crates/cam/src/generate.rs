@@ -211,7 +211,11 @@ async fn operation(input: &JobInput, o: &Operation, progress: Progress) -> Resul
             for pass in 0..10_000 {
                 progress.set(0.1 + 0.15 * pass as f64 / (pass as f64 + 8.));
                 YieldOnce::default().await;
-                let offset = original.parallel_offset(distance, &offset_options());
+                // A 1e-6 mm clearance reserve keeps exact offset
+                // tangencies away from the shape stitcher's degenerate slices.
+                // It is 1/1000 of the post budget; independent verification still
+                // certifies the unmodified requested region and allowance.
+                let offset = original.parallel_offset(distance + 1e-6, &offset_options());
                 if offset.ccw_plines.is_empty() {
                     break;
                 }
@@ -300,7 +304,7 @@ async fn trace(w: &mut Writer, s: &Setup, o: &Operation, lp: &Polyline<f64>, z: 
             for (a, b) in lp.iter_segments() {
                 let length = seg_length(a, b);
                 let bottom = (height - length * angle.tan()).max(z);
-                if a.bulge.abs() < 1e-12 {
+                if a.bulge.abs() < 1e-12 || length <= POST_ERROR / 4. {
                     w.feed(Vec3::new(b.x, b.y, bottom), o.plunge_feed).await?;
                 } else {
                     let (radius, c) = seg_arc_radius_and_center(a, b);
@@ -324,7 +328,10 @@ async fn trace(w: &mut Writer, s: &Setup, o: &Operation, lp: &Polyline<f64>, z: 
     }
     for (a, b) in lp.iter_segments() {
         let to = Vec3::new(b.x, b.y, z);
-        if a.bulge.abs() < 1e-12 {
+        // Offset topology may contain a vanishing arc at a tangency. Preserve
+        // its short motion as a line: rounded coincident G2/G3 endpoints would
+        // otherwise command a full circle. Its entire arc length bounds error.
+        if a.bulge.abs() < 1e-12 || seg_length(a, b) <= POST_ERROR / 4. {
             w.feed(to, o.feed).await?;
         } else {
             let (_, c) = seg_arc_radius_and_center(a, b);

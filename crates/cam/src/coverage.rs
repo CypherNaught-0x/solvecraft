@@ -176,11 +176,15 @@ impl<'a> MeshField<'a> {
             }
             let t = &self.triangles[id];
             let p = t.map(|p| [p.x, p.y]);
-            if (0..2).any(|k| p.iter().all(|v| v[k] < min[k]) || p.iter().all(|v| v[k] > max[k])) {
+            // These cells form a tiling whose closed columns are united later.
+            // A triangle touching only a cell edge belongs to the adjacent cell;
+            // including its height here creates false interior discontinuities.
+            // Positive-area overlap is decided with exact orientation predicates.
+            if (0..2).any(|k| p.iter().all(|v| v[k] <= min[k]) || p.iter().all(|v| v[k] >= max[k])) {
                 continue;
             }
             let edges = [(p[0], p[1]), (p[1], p[2]), (p[2], p[0])];
-            if edges.iter().any(|(a, b)| rectangle.iter().all(|c| orient(*a, *b, *c) < 0.)) {
+            if edges.iter().any(|(a, b)| rectangle.iter().all(|c| orient(*a, *b, *c) <= 0.)) {
                 continue;
             }
             inside |= edges.iter().all(|(a, b)| orient(*a, *b, center) >= 0.);

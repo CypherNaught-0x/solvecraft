@@ -1,6 +1,7 @@
-//! Exact boundary extraction from non-overlapping rectangular height cells.
+//! Conservative boundary extraction from non-overlapping rectangular height cells.
 //! Shared planar edges and vertical steps are split before triangulation. No
-//! coordinate snapping, interpolation or generation algorithm is involved.
+//! XY snapping, interpolation or generation algorithm is involved. Tiny adaptive
+//! saddle contacts may be filled upward within a declared export error budget.
 use crate::{
     Error, Result, invalid,
     verify::{Cell, Report},
@@ -83,8 +84,11 @@ fn ready<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
     }
 }
 
-const MAX_CELLS: usize = 40_000;
+const MAX_CELLS: usize = 60_000;
 const MAX_TRIANGLES: usize = 500_000;
+// One percent of the post budget, reserved only for conservative saddle closure.
+// This is an artifact approximation; it never changes the verification report.
+const MAX_SADDLE_FILL: f64 = crate::STOCK_EXPORT_ERROR;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Coord(f64);
@@ -211,7 +215,7 @@ async fn cells<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(report:
         }
     }
     if cells.len() > MAX_CELLS {
-        return invalid("stock mesh exceeds 40000 merged cells; use validation JSON for this resolution");
+        return invalid(format!("stock mesh has {} merged cells, exceeding 60000; use validation JSON for this resolution", cells.len()));
     }
     Ok(cells)
 }
@@ -255,6 +259,62 @@ async fn spans<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(cells: 
     Ok(spans)
 }
 
+async fn close_tiny_saddles<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(
+    cells: &mut [Cell],
+    spans: &[Span],
+    bottom: f64,
+    work: &mut Work<C, Y>,
+) -> Result<()> {
+    // NW, NE, SE, SW occupancy at every boundary endpoint, including T-junctions.
+    let mut vertices = BTreeMap::<XY, [Option<usize>; 4]>::new();
+    for s in spans {
+        for (side, id) in s.cells.iter().enumerate() {
+            work.tick().await?;
+            let Some(id) = id else { continue };
+            let (a, b) = match (s.axis, side) {
+                (0, 0) => (0, 3),
+                (0, 1) => (1, 2),
+                (1, 0) => (2, 3),
+                _ => (1, 0),
+            };
+            vertices.entry(s.xy(s.a)).or_insert([None; 4])[a] = Some(*id);
+            vertices.entry(s.xy(s.b)).or_insert([None; 4])[b] = Some(*id);
+        }
+    }
+    let mut ceilings = Vec::with_capacity(cells.len());
+    for c in cells.iter() {
+        work.tick().await?;
+        ceilings.push(c.high + MAX_SADDLE_FILL);
+    }
+    // Monotone bounded closure. Stop rather than silently exceeding either the
+    // error or work bound; the final manifold validator rejects unresolved cases.
+    for _ in 0..8 {
+        let mut changed = false;
+        for ids in vertices.values() {
+            work.tick().await?;
+            let heights = ids.map(|id| id.map_or(bottom, |i| cells[i].high));
+            for (upper, lower) in [([0, 2], [1, 3]), ([1, 3], [0, 2])] {
+                let threshold = heights[upper[0]].min(heights[upper[1]]);
+                let pick = if heights[lower[0]] >= heights[lower[1]] { lower[0] } else { lower[1] };
+                if threshold > heights[pick]
+                    && let Some(id) = ids[pick]
+                    && threshold <= ceilings[id]
+                {
+                    cells[id].high = threshold;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for _ in vertices {
+        work.tick().await?;
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_triangles(triangles: &[[Vec3; 3]]) -> Result<()> {
     ready(validate(triangles, &mut Work { cancelled: || false, yield_control: || std::future::ready(()), remaining: 0 }))
 }
@@ -285,7 +345,7 @@ async fn validate<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(tria
             edge.0 += 1;
             edge.1 += sign;
             if edge.0 > 2 {
-                return invalid("stock boundary is non-manifold; use validation JSON");
+                return invalid(format!("stock boundary is non-manifold at {key:?}; use validation JSON"));
             }
             links.entry(a).or_default().push((b, c));
         }
@@ -388,8 +448,9 @@ impl Mesh {
 }
 
 async fn boundary<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(report: &Report, bottom: f64, work: &mut Work<C, Y>) -> Result<Mesh> {
-    let cells = cells(report, bottom, work).await?;
+    let mut cells = cells(report, bottom, work).await?;
     let spans = spans(&cells, work).await?;
+    close_tiny_saddles(&mut cells, &spans, bottom, work).await?;
     let mut levels = BTreeMap::<XY, BTreeSet<Coord>>::new();
     for s in &spans {
         work.tick().await?;
@@ -560,6 +621,21 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn tiny_adaptive_saddle_closure_is_conservative_and_bounded() {
+        let cells =
+            vec![cell([0., 0.], [1., 1.], 2.), cell([1., 0.], [2., 1.], 2. - 4e-6), cell([0., 1.], [1., 2.], 1.), cell([1., 1.], [2., 2.], 2.)];
+        let mut original = report(cells);
+        original.stock = Some(crate::Stock { min: Vec3::new(0., 0., 0.), max: Vec3::new(2., 2., 2.) });
+        let mesh = triangles(&original, 0.).unwrap();
+        let volume: f64 = mesh.iter().map(|t| t[0].dot(t[1].cross(t[2])) / 6.).sum();
+        assert!((volume - 7.).abs() < 1e-12);
+        assert_eq!(original.cells[1].high, 2. - 4e-6);
+        assert_eq!(crate::compare::stock_mesh(&original, &mesh, 0., crate::TOLERANCE).unwrap().status, Status::Pass);
+        let mut too_large = original;
+        too_large.cells[1].high = 2. - 2. * MAX_SADDLE_FILL;
+        assert!(triangles(&too_large, 0.).is_err());
     }
     #[test]
     fn hostile_and_overlapping_cells_are_rejected() {

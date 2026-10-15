@@ -26,10 +26,13 @@ pub(crate) fn invalid<T>(message: impl Into<String>) -> Result<T> {
     Err(Error(message.into()))
 }
 
-pub const VERSION: &str = "cam/11";
+pub const VERSION: &str = "cam/12";
 pub const TOLERANCE: f64 = 0.01;
 pub const POST_ERROR: f64 = 0.001;
 pub const VERIFY_ERROR: f64 = 0.0025;
+/// Maximum upward height change for closing tiny saddle contacts in stock exports.
+/// Verification intervals are unchanged; exported meshes require independent comparison.
+pub const STOCK_EXPORT_ERROR: f64 = POST_ERROR / 100.;
 pub const MAX_MOVES: usize = 200_000;
 pub const MAX_ITEMS: usize = 1000;
 

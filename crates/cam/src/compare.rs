@@ -362,6 +362,19 @@ mod tests {
         assert_eq!(stock_mesh_budget(&step, &m, 0., TOLERANCE, 1, 100).unwrap().status, Status::Inconclusive);
     }
     #[test]
+    fn shared_mesh_edges_do_not_refine_flat_cells_or_hide_thin_overlaps() {
+        let step = report(vec![cell(0., 1., 1., 1.), cell(1., 2., 2., 2.)]);
+        let m = mesh(&step);
+        assert_eq!(stock_mesh_budget(&step, &m, 0., TOLERANCE, 3, 100_000).unwrap().status, Status::Pass);
+        let field = crate::coverage::MeshField::new(&m, step.stock.unwrap()).unwrap();
+        let flat = field.bounds([0., 0.], [1., 2.], &mut 0, 1000).unwrap();
+        assert!((flat[0] - 1.).abs() < 1e-10 && (flat[1] - 1.).abs() < 1e-10);
+        // Positive-area overlap has no area epsilon: even this tiny strip must
+        // retain both heights, rather than treating it as a shared edge.
+        let sliver = field.bounds([0., 0.], [1. + 1e-10, 2.], &mut 0, 1000).unwrap();
+        assert!(sliver[0] <= 1. && sliver[1] >= 2.);
+    }
+    #[test]
     fn overlapping_closed_components_cannot_counterfeit_full_coverage() {
         let expected = report(vec![cell(0., 2., 1., 1.)]);
         let mut m = mesh(&report(vec![cell(0., 1., 1., 1.)]));

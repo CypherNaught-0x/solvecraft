@@ -25,6 +25,16 @@ rounded offset joins, arc segments of at most a half-circle, and nonintersecting
 multi-loop regions. Our bounded adapter and invalid-region tests remain necessary. The adapter now uses explicit
 1e-8 mm position/join and 1e-7 mm offset-distance tolerances, with a round-island regression
 that exposed a slice-merging failure under upstream defaults.
+The six-case corpus also exposed degenerate tangencies in multi-loop offsets. Pocket offsets
+reserve an additional 0.000001 mm of clearance, within the existing post error budget, while
+the independent verifier checks the unchanged requested geometry and allowance. Debug builds
+exercise the concave/two-island recipes as part of `cam-validate`. This is a bounded numerical
+mitigation, not a general proof of the upstream stitcher: the
+[0.9.0 release notes](https://github.com/jbuckmccready/cavalier_contours/releases)
+say the shape offset algorithm has not received the polyline stitching update, and
+[issue 66](https://github.com/jbuckmccready/cavalier_contours/issues/66) records threshold/tangency
+limitations. Keep the pin, native error guard and impossible-region checks; do not adopt a new
+geometry dependency or disable debug assertions to hide these failures.
 
 ## Portability and integration
 

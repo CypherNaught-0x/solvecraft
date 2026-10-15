@@ -77,7 +77,7 @@ checks catch stationary contact and tools already inside fixtures. Body groups p
 cavities and prevent opposite winding in separate fixtures from cancelling. Open/nonmanifold
 meshes, clearance within the interpolation/refinement margin, and failed numerical queries remain
 **inconclusive**. It does not call offset or toolpath-generation algorithms and observes cancellation
-during topology preparation and collision queries. The current algorithm fingerprint is `cam/9`.
+during topology preparation and collision queries. The current algorithm fingerprint is `cam/12`.
 No target fitting, translation, unit guessing or discarded unknown NC commands is allowed.
 
 Default dimensional tolerance is 0.01 mm; interpolation/post error is 0.001 mm; requested spatial
@@ -85,11 +85,15 @@ refinement is 0.0025 mm. Reports distinguish requested refinement from the actua
 height interval. Limits are 250,000 cells and 30 million work units by default. Exhaustion or an
 unresolved collision blocks posting. Remaining-stock volume is an interval, not an exact number.
 
-Stock STL now contains a conforming exterior of the upper height envelope. Shared edges and
+Stock STL contains a conforming conservative exterior of the upper height envelope. Shared edges and
 vertical steps are split, internal walls are removed, and every edge and vertex link is checked
 for a closed, consistently oriented manifold. Coplanar cells merge exactly without resampling.
-Exports are bounded to 40,000 merged cells, 500,000 triangles and 128 MiB. Non-manifold touching
-stock is rejected explicitly; validation JSON retains the cell intervals. `stock_complete` is
+Vertical drill cones use exact rectangular-cell radial extrema. Adaptive cells can still create
+tiny saddle contacts: export may fill these upward by at most 0.00001 mm per cell, with no XY
+snapping or removed material. This declared artifact budget does not alter simulation intervals;
+analytic artifact checks independently compare the resulting STL against those intervals.
+Exports are bounded to 60,000 merged cells, 500,000 triangles and 128 MiB. Larger or unresolved
+non-manifold contacts are rejected explicitly; validation JSON retains the cell intervals. `stock_complete` is
 false after verification budget exhaustion, which blocks export of a misleading partial stock.
 A watertight upper-bound mesh does not establish finished-part dimensional accuracy.
 
@@ -180,10 +184,23 @@ These gates must be closed before calling M15 complete or claiming Fusion machin
 ## Reproducible comparisons
 
 Run `cargo xtask cam-validate`. Original analytic recipes generate input snapshots, canonical paths,
-NC, stock, validation JSON and an HTML report under ignored `target/cam-validation/`. Analytic checks
+NC, stock, setup sheets, validation JSON and an HTML report under ignored `target/cam-validation/`.
+Six recipes cover the four initial strategies, a rounded concave pocket with two islands, and
+a four-operation facing → roughing → finishing → peck-drilling program with multiple tools and
+a shifted G55 setup. The latter verifies prefixes of the actual complete program after every
+operation, including roughing allowance, coolant transitions and conventional finishing. All nine
+stages require protected-surface, dimensional, point-probe and independent exported-STL checks.
+The new target surfaces have independently calculated volume expectations; deleting islands,
+omitting finishing, choosing the wrong tool or changing the work offset must fail. Reports link
+each stage's NC diagnostics, setup sheet and stock, and include tool order, retract count, cutting
+and rapid distance, feed-time estimate and a remaining-volume interval. Analytic checks
 run in ordinary CI and `cargo xtask ci`. Core tests include modal state, inch/mm equivalence, wrong
 arc direction, deliberate gouges/unsafe rapids, shank interference, fixture overlap, geometry errors,
 islands, ramps and cancellation. Engine tests cover save/reopen, undo and stale-result rejection.
+Post validation also compares arc sweeps: a tiny arc rounding to coincident endpoints must not
+become a full circle. Generated arcs shorter than 0.00025 mm become lines, bounded by their total
+arc length. Shared reference-mesh edges do not cause false interior height discontinuities;
+positive-area overlaps retain both heights even for extremely thin regions.
 
 Run `cargo xtask cam-oracle --dir plan/fusion/cam/oracle` for local Fusion packages. The harness
 requires separate `face`, `contour`, `pocket`, `drill` directories. Missing evidence is a failure

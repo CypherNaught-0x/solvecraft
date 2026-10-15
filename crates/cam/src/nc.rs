@@ -383,13 +383,36 @@ pub fn round_trip(path: &Toolpath, setup: &Setup, tools: &[Tool]) -> Result<Pars
     if parsed.work_offset != setup.work_offset || parsed.records.len() != path.blocks.len() + 1 {
         return invalid("post changed block count or work offset");
     }
+    let mut original_position = Vec3::new(0., 0., setup.clearance);
+    let mut posted_position = original_position;
     for (i, (a, b)) in path.blocks.iter().zip(parsed.records.iter().skip(1)).enumerate() {
         if !equivalent(&a.motion, &b.motion) {
             return invalid(format!("post mismatch at NC line {}", b.line));
         }
+        if let (Motion::Arc { to, center, clockwise, .. }, Motion::Arc { to: posted_to, center: posted_center, .. }) = (&a.motion, &b.motion) {
+            let before = sweep(original_position, *to, *center, *clockwise);
+            let after = sweep(posted_position, *posted_to, *posted_center, *clockwise);
+            if (before - after).abs() * original_position.dist(*center) > POST_ERROR {
+                return invalid(format!("post changed arc sweep at NC line {}", b.line));
+            }
+        }
+        if let Motion::Rapid { to } | Motion::Linear { to, .. } | Motion::Arc { to, .. } = a.motion {
+            original_position = to;
+        }
+        if let Motion::Rapid { to } | Motion::Linear { to, .. } | Motion::Arc { to, .. } = b.motion {
+            posted_position = to;
+        }
         parsed.sources.push(SourceLocation { line: b.line, block: i + 1, operation: a.operation });
     }
     Ok(parsed)
+}
+fn sweep(from: Vec3, to: Vec3, center: Vec3, clockwise: bool) -> f64 {
+    if from.x == to.x && from.y == to.y {
+        return if clockwise { -std::f64::consts::TAU } else { std::f64::consts::TAU };
+    }
+    let a = (from.y - center.y).atan2(from.x - center.x);
+    let b = (to.y - center.y).atan2(to.x - center.x);
+    if clockwise { -(a - b).rem_euclid(std::f64::consts::TAU) } else { (b - a).rem_euclid(std::f64::consts::TAU) }
 }
 fn equivalent(a: &Motion, b: &Motion) -> bool {
     match (a, b) {
@@ -445,17 +468,7 @@ pub fn segments(parsed: &Parsed, setup: &Setup) -> Result<Vec<Segment>> {
                     }
                     if let Motion::Arc { center, clockwise, .. } = r.motion {
                         let a: f64 = (from.y - center.y).atan2(from.x - center.x);
-                        let b = (to.y - center.y).atan2(to.x - center.x);
-                        let mut sweep = (b - a).rem_euclid(std::f64::consts::TAU);
-                        if sweep < 1e-12 {
-                            sweep = std::f64::consts::TAU;
-                        }
-                        if clockwise {
-                            sweep -= std::f64::consts::TAU;
-                            if sweep.abs() < 1e-12 {
-                                sweep = -std::f64::consts::TAU;
-                            }
-                        }
+                        let sweep = sweep(from, *to, center, clockwise);
                         let radius = from.dist(center);
                         let step = (2.0 * (1.0 - POST_ERROR / radius).clamp(-1.0, 1.0).acos()).max(1e-6);
                         let count = (sweep.abs() / step).ceil() as usize;
@@ -490,6 +503,28 @@ pub fn segments(parsed: &Parsed, setup: &Setup) -> Result<Vec<Segment>> {
 #[allow(clippy::unwrap_used)]
 mod provenance_tests {
     use super::*;
+    #[test]
+    fn tiny_arcs_cannot_round_into_unintended_full_circles() {
+        let input = corpus::fixture("face").unwrap();
+        for clockwise in [false, true] {
+            let to = Vec3::new(1., if clockwise { -1e-8 } else { 1e-8 }, 15.);
+            let path = Toolpath {
+                fingerprint: input.fingerprint.clone(),
+                blocks: vec![
+                    Block { operation: 1, motion: Motion::Tool { tool: 1, number: 1 } },
+                    Block { operation: 1, motion: Motion::Spindle { rpm: 1000. } },
+                    Block { operation: 1, motion: Motion::Rapid { to: Vec3::new(1., 0., 15.) } },
+                    Block { operation: 1, motion: Motion::Arc { to, center: Vec3::new(0., 0., 15.), clockwise, feed: 100. } },
+                    Block { operation: 1, motion: Motion::Spindle { rpm: 0. } },
+                ],
+            };
+            assert!(round_trip(&path, &input.setup, &input.tools).unwrap_err().0.contains("arc sweep"));
+        }
+        let raw = "G21 G90 G17 G94 G54\nG0 X1 Y0 Z15\nT1 M6\nS1000 M3\nG3 X1 Y0.0000000000001 I-1 J0 F100\nM5\nM30";
+        let parsed = parse(raw, &input.tools).unwrap();
+        let distance: f64 = segments(&parsed, &input.setup).unwrap().iter().map(|s| s.from.dist(s.to)).sum();
+        assert!(distance < 1e-10, "a noncoincident tiny arc is not a full circle: {distance}");
+    }
     #[test]
     fn diagnostic_sources_follow_checked_records_and_ignore_untrusted_annotations() {
         let input = corpus::fixture("face").unwrap();

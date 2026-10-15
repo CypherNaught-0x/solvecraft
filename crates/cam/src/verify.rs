@@ -275,9 +275,17 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
             };
             let radius = tool.diameter / 2.0;
             let (distance, zlo, zhi) = sweep(center, half, seg, radius);
-            let cone_low = if tool.kind == ToolKind::TwistDrill { (distance - half).max(0.0) / (tool.tip_angle / 2.0).tan() } else { 0.0 };
-            let cone_high = if tool.kind == ToolKind::TwistDrill { (distance + half) / (tool.tip_angle / 2.0).tan() } else { 0.0 };
-            let overlaps = distance <= radius + half + POST_ERROR;
+            // A vertical drill has exact radial extrema on a rectangular cell.
+            // Circumscribed disks are unnecessarily loose here and can create
+            // artificial saddles where coarse and fine cone cells meet.
+            let (near, far) = if tool.kind == ToolKind::TwistDrill && seg.from.x == seg.to.x && seg.from.y == seg.to.y {
+                radial_bounds(min, max, [seg.from.x, seg.from.y])
+            } else {
+                ((distance - half).max(0.0), distance + half)
+            };
+            let cone_low = if tool.kind == ToolKind::TwistDrill { near / (tool.tip_angle / 2.0).tan() } else { 0.0 };
+            let cone_high = if tool.kind == ToolKind::TwistDrill { far / (tool.tip_angle / 2.0).tan() } else { 0.0 };
+            let overlaps = near <= radius + POST_ERROR;
             // A vertical withdrawal starts at the endpoint of the preceding feed
             // with the same tool; this exact geometric fact needs no raster estimate.
             let withdrawal = segment_index.checked_sub(1).and_then(|i| segments.get(i)).is_some_and(|previous| {
@@ -289,14 +297,14 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
                     && seg.to.z >= seg.from.z
             });
             if seg.rapid && overlaps && !withdrawal {
-                if zhi + cone_high < low - tol && distance + half <= radius {
+                if zhi + cone_high < low - tol && far <= radius {
                     collision = Some(("rapid_through_stock", seg.line));
                 } else if zlo + cone_low < high - tol {
                     collision = Some(("rapid_clearance_unresolved", seg.line));
                 }
             } else if !seg.rapid && overlaps {
                 low = low.min(zlo + cone_low).max(stock.min.z);
-                if distance + half <= radius {
+                if far <= radius {
                     let next = high.min(zhi + cone_high).max(stock.min.z);
                     if next < high {
                         removal_line = Some(seg.line);
@@ -461,6 +469,16 @@ fn sweep(p: [f64; 2], half: f64, s: &Segment, radius: f64) -> (f64, f64, f64) {
     };
     (d, minimum(radius + half), minimum((radius - half).max(0.0)))
 }
+fn radial_bounds(min: [f64; 2], max: [f64; 2], center: [f64; 2]) -> (f64, f64) {
+    let axis = |i: usize| {
+        let near = (min[i] - center[i]).max(center[i] - max[i]).max(0.0);
+        let far = (min[i] - center[i]).abs().max((max[i] - center[i]).abs());
+        (near, far)
+    };
+    let (x, y) = (axis(0), axis(1));
+    (x.0.hypot(y.0), x.1.hypot(y.1))
+}
+
 pub(crate) fn target_height(p: [f64; 2], half: f64, tris: &[[Vec3; 3]], bottom: f64, work: &mut usize, budget: usize) -> (f64, f64, bool) {
     let mut lo = f64::INFINITY;
     let mut hi = bottom;
@@ -514,7 +532,8 @@ pub(crate) fn target_height(p: [f64; 2], half: f64, tris: &[[Vec3; 3]], bottom: 
     let complete = area >= 4.0 * half * half * (1.0 - 1e-8);
     (if complete { lo } else { bottom }, hi, !complete)
 }
-/// Export the conforming boundary of the conservative upper stock envelope.
+/// Export a conforming conservative stock boundary. Tiny saddle closure may add
+/// at most `STOCK_EXPORT_ERROR` to a cell height; it never removes stock.
 pub fn stock_stl(report: &Report, bottom: f64) -> Result<String> {
     crate::stock_mesh::stl(report, bottom)
 }
@@ -552,4 +571,14 @@ pub fn probe_height(input: &JobInput, nc: &Parsed, p: [f64; 2]) -> Result<f64> {
         }
     }
     Ok(z.max(input.setup.stock.min.z))
+}
+
+#[cfg(test)]
+mod radial_tests {
+    #[test]
+    fn rectangle_radial_extrema_include_corners_and_interior_axis() {
+        assert_eq!(super::radial_bounds([3., 4.], [6., 8.], [0., 0.]), (5., 10.));
+        assert_eq!(super::radial_bounds([-3., -4.], [3., 4.], [0., 0.]), (0., 5.));
+        assert_eq!(super::radial_bounds([7., -2.], [10., 6.], [10., 2.]), (0., 5.));
+    }
 }
