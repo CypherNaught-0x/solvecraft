@@ -525,6 +525,17 @@ pub fn stock_triangles(report: &Report, bottom: f64) -> Result<Vec<[Vec3; 3]>> {
     crate::stock_mesh::triangles(report, bottom)
 }
 
+/// Cancellation-aware boundary extraction, yielding during sorting, stitching,
+/// triangulation and manifold checks. No partial mesh is returned.
+pub async fn stock_triangles_cooperative<F: std::future::Future<Output = ()>>(
+    report: &Report,
+    bottom: f64,
+    cancelled: impl Fn() -> bool,
+    yield_control: impl FnMut() -> F,
+) -> Result<Vec<[Vec3; 3]>> {
+    crate::stock_mesh::triangles_cooperative(report, bottom, cancelled, yield_control).await
+}
+
 /// Independently evaluate a point on the upper stock surface. Used for analytic
 /// acceptance probes, never as a substitute for whole-region verification.
 pub fn probe_height(input: &JobInput, nc: &Parsed, p: [f64; 2]) -> Result<f64> {

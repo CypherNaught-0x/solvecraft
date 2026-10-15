@@ -158,8 +158,10 @@ The Fusion oracle requires the same dimensional checks for both programs. Remain
   for volume-containment certification; surface contact can still be detected on an open mesh.
 - Browser timing acceptance for worst-case single-operation offset jobs. Background jobs yield
   during preparation, boundary validation, between offset queries and every 256 emitted motions,
-  as well as during verification. UI frames or status polls advance browser jobs. One library offset
-  query, one body tessellation and input hashing remain atomic; their worst-case browser latency
+  as well as during verification and conforming stock extraction. The browser shares a four-ms
+  scheduling target across jobs in round-robin order; status queries advance one checkpoint.
+  This target is checked between polls, so it is not a hard deadline. One library offset
+  query, one body tessellation, input hashing and NC round-trip parsing remain atomic; their worst-case browser latency
   is still an acceptance gate. Native background jobs perform profile sampling, tessellation,
   transforms and hashing on the worker from an immutable captured snapshot. Synchronous command
   calls remain available. Status distinguishes `preparing` from `running`; the fingerprint is null
@@ -228,8 +230,10 @@ Playback advances typed motion/event blocks at an adjustable rate, independent o
 Zero means the initial clearance pose. The panel shows operation, tool, spindle and tool-tip
 coordinates; paths distinguish rapid and cutting motion, including full-circle arcs. `cam.inspect`
 exposes the same machine state, and `ui.inspect.manufacturing` exposes the current display choices.
-Stock extraction runs on the native worker; its topology phase remains atomic on WebAssembly and
-is included in the outstanding browser latency acceptance gate. Native UI tests cover stock-frame
+Stock extraction runs on the native worker and cooperatively on WebAssembly. Cell sorting,
+boundary stitching, triangulation, manifold validation and large topology-map cleanup yield and
+check cancellation. Cancellation returns no partial mesh; synchronous STL export uses the same
+implementation. Native UI tests cover stock-frame
 placement, visibility, stale results and playback boundaries. The four-strategy headless UI
 walkthrough exercises background generation/simulation, posting, stock selection and playback zero,
 with CPU-rendered stock views. Interactive desktop-window coverage remains an acceptance task.
@@ -256,3 +260,19 @@ Findings have explicit information, unresolved or error severity. The bounded li
 representative witness per kind/NC line/severity, prioritizes definite errors when full, and
 shows errors first. This list is diagnostic sampling, not an exhaustive inventory of affected
 points; verification status and stock intervals are computed independently of finding retention.
+
+## Browser responsiveness measurements
+
+A local release-mode WebAssembly probe on Chrome 155 (macOS, 2026-10-15) measured the original
+four analytic fixtures, using the actual generator, verifier and stock extractor. Before cooperative
+stock extraction, its longest single call was 433.1 ms for contour, 275.8 ms for pocket and
+383.1 ms for drill. After the change, the longest stock-extraction poll across those fixtures was
+2.5 ms. Triangle counts and passing clearance/dimension results were unchanged.
+
+A second probe reused the UI scheduler with a four-ms target and one batch per animation frame.
+The largest observed batch was 4.9 ms; no batch exceeded 16 ms. These are local observations,
+not performance guarantees or complete browser acceptance: the probe excludes CAD snapshot
+preparation, the rendered application, export serialization, concurrent jobs and hostile-size
+inputs. The remaining atomic work listed above still needs worst-case timing coverage. Unit
+regressions verify exact synchronous/cooperative mesh agreement, early/mid/late cancellation,
+round-robin fairness, completed-job termination and a poll cap if the host clock stalls.

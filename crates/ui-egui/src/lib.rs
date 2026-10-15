@@ -784,9 +784,7 @@ impl SolveApp {
     /// Per-frame logic before layout.
     pub fn logic(&mut self, ctx: &egui::Context) {
         #[cfg(target_arch = "wasm32")]
-        for job in self.session.cam_jobs.jobs.values() {
-            solvecraft_engine::manufacturing::advance(job);
-        }
+        manufacturing::advance(self, ctx);
 
         file_load::tick(self, ctx);
         self.esc_handled = false;

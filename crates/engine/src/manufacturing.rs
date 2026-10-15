@@ -198,7 +198,8 @@ fn task(job: &Job, verify: bool) -> Result<impl std::future::Future<Output = Res
     })
 }
 async fn stock_display(report: &cam::verify::Report, frame: cam::Frame, bottom: f64, cancelled: &AtomicBool) -> Result<crate::geom::Mesh> {
-    let triangles = cam::verify::stock_triangles(report, bottom).map_err(error)?;
+    let triangles =
+        cam::verify::stock_triangles_cooperative(report, bottom, || cancelled.load(Ordering::Relaxed), YieldOnce::default).await.map_err(error)?;
     let mut mesh = crate::geom::Mesh::default();
     for (i, triangle) in triangles.into_iter().enumerate() {
         if i.is_multiple_of(256) {
@@ -251,21 +252,22 @@ pub fn current(s: &Session, job: &Job) -> Result<()> {
     }
 }
 
-/// Resume each browser job once per UI frame or status query. No browser APIs in the engine.
+/// Resume one browser job checkpoint. Returns true while more work is pending.
+/// The host controls its frame budget; status queries can still advance one step.
 #[cfg(target_arch = "wasm32")]
-pub fn advance(job: &Job) {
-    let Ok(mut pending) = job.pending.lock() else { return };
+pub fn advance(job: &Job) -> bool {
+    let Ok(mut pending) = job.pending.lock() else { return false };
     if job.cancelled.load(Ordering::Relaxed) {
         *pending = None;
         job.set(JobState::Cancelled);
-        return;
+        return false;
     }
-    let Some(future) = pending.as_mut() else { return };
+    let Some(future) = pending.as_mut() else { return false };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         future.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
     }));
     let state = match result {
-        Ok(std::task::Poll::Pending) => return,
+        Ok(std::task::Poll::Pending) => return true,
         Ok(std::task::Poll::Ready(Ok(state))) => state,
         Ok(std::task::Poll::Ready(Err(error))) => JobState::Failed(error.to_string()),
         Err(_) => JobState::Failed("CAM worker failed; no result published".into()),
@@ -273,6 +275,7 @@ pub fn advance(job: &Job) {
     *pending = None;
     job.progress.store(100, Ordering::Relaxed);
     job.set(state);
+    false
 }
 #[derive(Default)]
 struct YieldOnce(bool);

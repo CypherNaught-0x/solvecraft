@@ -6,7 +6,82 @@ use crate::{
     verify::{Cell, Report},
 };
 use solvecraft_geom::Vec3;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+};
+
+/// Count elementary topology work, including sorting and manifold validation.
+/// A yield callback which is immediately ready retains the synchronous API.
+struct Work<C, Y> {
+    cancelled: C,
+    yield_control: Y,
+    remaining: usize,
+}
+impl<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>> Work<C, Y> {
+    async fn tick(&mut self) -> Result<()> {
+        if self.remaining == 0 {
+            if (self.cancelled)() {
+                return invalid("stock extraction cancelled");
+            }
+            (self.yield_control)().await;
+            if (self.cancelled)() {
+                return invalid("stock extraction cancelled");
+            }
+            self.remaining = 256;
+        }
+        self.remaining -= 1;
+        Ok(())
+    }
+    // Sort small runs, then merge with checkpoints. A single standard-library
+    // sort of up to two million cell events otherwise monopolizes a browser poll.
+    async fn sort<T: Clone>(&mut self, values: &mut Vec<T>, compare: impl Fn(&T, &T) -> std::cmp::Ordering) -> Result<()> {
+        for run in values.chunks_mut(256) {
+            if run.len() == 256 {
+                self.remaining = 0;
+            }
+            self.tick().await?;
+            run.sort_unstable_by(&compare);
+        }
+        if values.len() <= 256 {
+            return Ok(());
+        }
+        let mut scratch = Vec::with_capacity(values.len());
+        let mut width = 256;
+        while width < values.len() {
+            for begin in (0..values.len()).step_by(width * 2) {
+                let middle = (begin + width).min(values.len());
+                let end = (middle + width).min(values.len());
+                let (mut a, mut b) = (begin, middle);
+                while a < middle || b < end {
+                    self.tick().await?;
+                    let take_a = b == end || (a < middle && compare(&values[a], &values[b]).is_le());
+                    let index = if take_a {
+                        let i = a;
+                        a += 1;
+                        i
+                    } else {
+                        let i = b;
+                        b += 1;
+                        i
+                    };
+                    scratch.push(values[index].clone());
+                }
+            }
+            std::mem::swap(values, &mut scratch);
+            scratch.clear();
+            width *= 2;
+        }
+        Ok(())
+    }
+}
+fn ready<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    let mut future = std::pin::pin!(future);
+    match future.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
+        std::task::Poll::Ready(result) => result,
+        std::task::Poll::Pending => invalid("synchronous stock extraction unexpectedly yielded"),
+    }
+}
 
 const MAX_CELLS: usize = 40_000;
 const MAX_TRIANGLES: usize = 500_000;
@@ -54,7 +129,8 @@ impl Span {
     }
 }
 
-fn cells(report: &Report, bottom: f64) -> Result<Vec<Cell>> {
+async fn cells<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(report: &Report, bottom: f64, work: &mut Work<C, Y>) -> Result<Vec<Cell>> {
+    work.tick().await?;
     if !bottom.is_finite() || report.cells.is_empty() || report.cells.len() > 1_000_000 {
         return invalid("invalid stock export bounds");
     }
@@ -62,6 +138,7 @@ fn cells(report: &Report, bottom: f64) -> Result<Vec<Cell>> {
         return invalid("stock verification is incomplete; cannot export remaining stock");
     }
     for c in &report.cells {
+        work.tick().await?;
         for p in [Vec3::new(c.min[0], c.min[1], bottom), Vec3::new(c.max[0], c.max[1], c.high)] {
             crate::model::point(p)?;
         }
@@ -72,12 +149,14 @@ fn cells(report: &Report, bottom: f64) -> Result<Vec<Cell>> {
     // Reject overlap in O(n log n). End events precede starts at the same X.
     let mut events = Vec::with_capacity(report.cells.len() * 2);
     for (i, c) in report.cells.iter().enumerate() {
+        work.tick().await?;
         events.push((Coord(c.min[0]), true, i));
         events.push((Coord(c.max[0]), false, i));
     }
-    events.sort_unstable();
+    work.sort(&mut events, Ord::cmp).await?;
     let mut active = BTreeMap::<Coord, f64>::new();
     for (_, start, i) in events {
+        work.tick().await?;
         let c = &report.cells[i];
         let y = Coord(c.min[1]);
         if start {
@@ -92,20 +171,28 @@ fn cells(report: &Report, bottom: f64) -> Result<Vec<Cell>> {
         }
     }
     // Exact coplanar rectangle merging reduces output without changing height.
-    let mut cells: Vec<_> = report.cells.iter().filter(|c| c.high > bottom).cloned().collect();
+    let mut cells = Vec::new();
+    for c in &report.cells {
+        work.tick().await?;
+        if c.high > bottom {
+            cells.push(c.clone());
+        }
+    }
     for _ in 0..24 {
         let before = cells.len();
         for axis in 0..2 {
             let other = 1 - axis;
-            cells.sort_unstable_by(|a, b| {
+            work.sort(&mut cells, |a, b| {
                 a.min[other]
                     .total_cmp(&b.min[other])
                     .then(a.max[other].total_cmp(&b.max[other]))
                     .then(a.high.total_cmp(&b.high))
                     .then(a.min[axis].total_cmp(&b.min[axis]))
-            });
+            })
+            .await?;
             let mut merged: Vec<Cell> = Vec::new();
             for c in cells {
+                work.tick().await?;
                 if let Some(last) = merged.last_mut()
                     && last.min[other] == c.min[other]
                     && last.max[other] == c.max[other]
@@ -129,9 +216,10 @@ fn cells(report: &Report, bottom: f64) -> Result<Vec<Cell>> {
     Ok(cells)
 }
 
-fn spans(cells: &[Cell]) -> Result<Vec<Span>> {
+async fn spans<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(cells: &[Cell], work: &mut Work<C, Y>) -> Result<Vec<Span>> {
     let mut lines: BTreeMap<(usize, Coord), Vec<Event>> = BTreeMap::new();
     for (i, c) in cells.iter().enumerate() {
+        work.tick().await?;
         for axis in 0..2 {
             for (fixed, side) in [(c.min[axis], 1), (c.max[axis], 0)] {
                 let events = lines.entry((axis, Coord(fixed))).or_default();
@@ -142,10 +230,11 @@ fn spans(cells: &[Cell]) -> Result<Vec<Span>> {
     }
     let mut spans = Vec::new();
     for ((axis, fixed), mut events) in lines {
-        events.sort_unstable_by_key(|e| (e.at, e.start));
+        work.sort(&mut events, |a, b| (a.at, a.start).cmp(&(b.at, b.start))).await?;
         let mut active = [None; 2];
         let mut previous: Option<Coord> = None;
         for event in events {
+            work.tick().await?;
             if let Some(a) = previous
                 && a < event.at
                 && active != [None; 2]
@@ -167,10 +256,14 @@ fn spans(cells: &[Cell]) -> Result<Vec<Span>> {
 }
 
 pub(crate) fn validate_triangles(triangles: &[[Vec3; 3]]) -> Result<()> {
+    ready(validate(triangles, &mut Work { cancelled: || false, yield_control: || std::future::ready(()), remaining: 0 }))
+}
+async fn validate<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(triangles: &[[Vec3; 3]], work: &mut Work<C, Y>) -> Result<()> {
     if triangles.len() > MAX_TRIANGLES {
         return invalid("stock triangle budget exceeded");
     }
     for t in triangles {
+        work.tick().await?;
         for p in t {
             crate::model::point(*p)?;
         }
@@ -184,6 +277,7 @@ pub(crate) fn validate_triangles(triangles: &[[Vec3; 3]]) -> Result<()> {
     let mut edges = BTreeMap::<(Point, Point), (usize, i32)>::new();
     let mut links = BTreeMap::<Point, Vec<(Point, Point)>>::new();
     for t in triangles {
+        work.tick().await?;
         let p = t.map(point);
         for (a, b, c) in [(p[0], p[1], p[2]), (p[1], p[2], p[0]), (p[2], p[0], p[1])] {
             let (key, sign) = if a < b { ((a, b), 1) } else { ((b, a), -1) };
@@ -196,12 +290,18 @@ pub(crate) fn validate_triangles(triangles: &[[Vec3; 3]]) -> Result<()> {
             links.entry(a).or_default().push((b, c));
         }
     }
-    if edges.values().any(|e| *e != (2, 0)) {
-        return invalid("stock boundary has an unstitched or misoriented edge");
+    for (_, edge) in edges {
+        work.tick().await?;
+        if edge != (2, 0) {
+            return invalid("stock boundary has an unstitched or misoriented edge");
+        }
     }
-    for link in links.values() {
+    // Consume the maps incrementally too: dropping a large tree all at once
+    // can be as visible as constructing it on the browser's event loop.
+    for (_, link) in links {
         let mut next = BTreeMap::new();
-        for (a, b) in link {
+        for (a, b) in &link {
+            work.tick().await?;
             if next.insert(*a, *b).is_some() {
                 return invalid("non-manifold stock vertex");
             }
@@ -211,6 +311,7 @@ pub(crate) fn validate_triangles(triangles: &[[Vec3; 3]]) -> Result<()> {
         };
         let mut at = start;
         for _ in 0..link.len() {
+            work.tick().await?;
             let Some(b) = next.remove(&at) else {
                 return invalid("disconnected stock vertex surface; use validation JSON");
             };
@@ -237,7 +338,12 @@ impl Mesh {
         self.triangles.push([a, b, c]);
         Ok(())
     }
-    fn convex(&mut self, boundary: &[Vec3], reverse: bool) -> Result<()> {
+    async fn convex<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(
+        &mut self,
+        boundary: &[Vec3],
+        reverse: bool,
+        work: &mut Work<C, Y>,
+    ) -> Result<()> {
         // All faces are rectangles with collinear boundary subdivisions. Clip
         // the smallest nonzero corner first, preserving every boundary vertex.
         // An ordered corner set bounds this to O(n log n), including long edges.
@@ -250,12 +356,14 @@ impl Mesh {
         let area = |a: usize, b: usize, c: usize| Coord((boundary[b] - boundary[a]).cross(boundary[c] - boundary[b]).len2());
         let mut corners = BTreeSet::new();
         for i in 0..n {
+            work.tick().await?;
             let a = area(prev[i], i, next[i]);
             if a.0 > 0.0 {
                 corners.insert((a, i));
             }
         }
         for _ in 0..n - 2 {
+            work.tick().await?;
             let (_, i) = corners.pop_first().ok_or_else(|| Error("degenerate stock polygon".into()))?;
             let a = prev[i];
             let b = next[i];
@@ -277,16 +385,14 @@ impl Mesh {
         }
         Ok(())
     }
-    fn validate(&self) -> Result<()> {
-        validate_triangles(&self.triangles)
-    }
 }
 
-fn boundary(report: &Report, bottom: f64) -> Result<Mesh> {
-    let cells = cells(report, bottom)?;
-    let spans = spans(&cells)?;
+async fn boundary<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(report: &Report, bottom: f64, work: &mut Work<C, Y>) -> Result<Mesh> {
+    let cells = cells(report, bottom, work).await?;
+    let spans = spans(&cells, work).await?;
     let mut levels = BTreeMap::<XY, BTreeSet<Coord>>::new();
     for s in &spans {
+        work.tick().await?;
         for xy in [s.xy(s.a), s.xy(s.b)] {
             let z = levels.entry(xy).or_default();
             z.insert(Coord(bottom));
@@ -298,6 +404,7 @@ fn boundary(report: &Report, bottom: f64) -> Result<Mesh> {
     let mut mesh = Mesh { triangles: Vec::new() };
     let mut tops: Vec<Vec<(usize, Coord, Vec3)>> = vec![Vec::new(); cells.len()];
     for s in &spans {
+        work.tick().await?;
         for (side, id) in s.cells.iter().enumerate() {
             let Some(id) = id else {
                 continue;
@@ -321,37 +428,51 @@ fn boundary(report: &Report, bottom: f64) -> Result<Mesh> {
         let mut polygon = vec![s.vertex(s.a, lo), s.vertex(s.b, lo)];
         let right = levels.get(&s.xy(s.b)).ok_or_else(|| Error("missing stock edge levels".into()))?;
         for z in right.range((std::ops::Bound::Excluded(Coord(lo)), std::ops::Bound::Excluded(Coord(hi)))) {
+            work.tick().await?;
             polygon.push(s.vertex(s.b, z.0));
         }
         polygon.push(s.vertex(s.b, hi));
         polygon.push(s.vertex(s.a, hi));
         let left = levels.get(&s.xy(s.a)).ok_or_else(|| Error("missing stock edge levels".into()))?;
         for z in left.range((std::ops::Bound::Excluded(Coord(lo)), std::ops::Bound::Excluded(Coord(hi)))).rev() {
+            work.tick().await?;
             polygon.push(s.vertex(s.a, z.0));
         }
-        mesh.convex(&polygon, (s.axis == 0) != (heights[0] > heights[1]))?;
+        mesh.convex(&polygon, (s.axis == 0) != (heights[0] > heights[1]), work).await?;
     }
     for mut top in tops {
-        top.sort_unstable_by_key(|p| (p.0, p.1));
+        work.sort(&mut top, |a, b| (a.0, a.1).cmp(&(b.0, b.1))).await?;
         let mut polygon: Vec<_> = top.into_iter().map(|p| p.2).collect();
-        mesh.convex(&polygon, false)?;
+        mesh.convex(&polygon, false, work).await?;
         for p in &mut polygon {
             p.z = bottom;
         }
-        mesh.convex(&polygon, true)?;
+        mesh.convex(&polygon, true, work).await?;
     }
-    mesh.validate()?;
+    for _ in levels {
+        work.tick().await?;
+    }
+    validate(&mesh.triangles, work).await?;
     Ok(mesh)
 }
 
 pub(crate) fn triangles(report: &Report, bottom: f64) -> Result<Vec<[Vec3; 3]>> {
-    Ok(boundary(report, bottom)?.triangles)
+    ready(triangles_cooperative(report, bottom, || false, || std::future::ready(())))
+}
+pub(crate) async fn triangles_cooperative<F: Future<Output = ()>>(
+    report: &Report,
+    bottom: f64,
+    cancelled: impl Fn() -> bool,
+    yield_control: impl FnMut() -> F,
+) -> Result<Vec<[Vec3; 3]>> {
+    let mut work = Work { cancelled, yield_control, remaining: 0 };
+    Ok(boundary(report, bottom, &mut work).await?.triangles)
 }
 
 pub(crate) fn stl(report: &Report, bottom: f64) -> Result<String> {
-    let mesh = boundary(report, bottom)?;
+    let mesh = triangles(report, bottom)?;
     let mut out = String::from("solid cam_remaining_stock\n");
-    for triangle in mesh.triangles {
+    for triangle in mesh {
         out.push_str("facet normal 0 0 0\nouter loop\n");
         for p in triangle {
             out.push_str(&format!("vertex {} {} {}\n", p.x, p.y, p.z));
@@ -451,8 +572,8 @@ mod tests {
     #[test]
     fn zero_stock_and_translated_base_are_preserved() {
         assert!(stl(&report(vec![cell([0., 0.], [1., 1.], 0.)]), 0.).unwrap().lines().count() == 2);
-        let mesh = boundary(&report(vec![cell([-3., 2.], [-2., 3.], 7.)]), 5.).unwrap();
-        let v: f64 = mesh.triangles.iter().map(|t| t[0].dot(t[1].cross(t[2])) / 6.0).sum();
+        let mesh = triangles(&report(vec![cell([-3., 2.], [-2., 3.], 7.)]), 5.).unwrap();
+        let v: f64 = mesh.iter().map(|t| t[0].dot(t[1].cross(t[2])) / 6.0).sum();
         assert!((v - 2.).abs() < 1e-9);
     }
     #[test]
@@ -464,6 +585,45 @@ mod tests {
             let report = crate::verify::simulate(&input, &nc, limits).unwrap();
             assert!(!report.stock_complete);
             assert!(stl(&report, 0.).is_err());
+        }
+    }
+    #[test]
+    fn cooperative_mesh_matches_sync_and_cancels_during_topology_work() {
+        use std::task::{Context, Poll, Waker};
+        let report = report(
+            (0..32)
+                .rev()
+                .flat_map(|x| (0..32).rev().map(move |y| cell([x as f64, y as f64], [(x + 1) as f64, (y + 1) as f64], (x + y + 1) as f64)))
+                .collect(),
+        );
+        let expected = triangles(&report, 0.).unwrap();
+        let yield_once = || {
+            let mut first = true;
+            std::future::poll_fn(move |_| if std::mem::take(&mut first) { Poll::Pending } else { Poll::Ready(()) })
+        };
+        let mut future = std::pin::pin!(triangles_cooperative(&report, 0., || false, yield_once));
+        let mut cx = Context::from_waker(Waker::noop());
+        let mut polls = 0;
+        loop {
+            polls += 1;
+            if let Poll::Ready(result) = future.as_mut().poll(&mut cx) {
+                assert_eq!(result.unwrap(), expected);
+                break;
+            }
+            assert!(polls < 100_000);
+        }
+        assert!(polls > 100);
+        // Cancel in cell sorting, boundary work and late manifold validation.
+        // Each suspended future must fail on its next poll without a partial mesh.
+        for cancel_after in [1, polls / 2, polls - 1] {
+            let cancelled = std::cell::Cell::new(false);
+            let mut future = std::pin::pin!(triangles_cooperative(&report, 0., || cancelled.get(), yield_once));
+            for _ in 0..cancel_after {
+                assert!(future.as_mut().poll(&mut cx).is_pending());
+            }
+            cancelled.set(true);
+            let result = future.as_mut().poll(&mut cx);
+            assert!(matches!(result, Poll::Ready(Err(e)) if e.0.contains("cancelled")));
         }
     }
     #[test]

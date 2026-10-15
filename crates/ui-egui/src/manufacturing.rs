@@ -1,4 +1,6 @@
 //! Manufacture workspace. All edits and jobs use the public CAM commands.
+#[cfg(any(target_arch = "wasm32", test))]
+mod scheduler;
 pub(crate) mod view;
 use crate::{SolveApp, theme::Tokens};
 use egui::{Color32, Stroke};
@@ -15,7 +17,26 @@ pub struct State {
     pub finding: Option<usize>,
     error: String,
     pub view: view::View,
+    #[cfg(target_arch = "wasm32")]
+    poll_cursor: usize,
 }
+/// Share a four-millisecond target across all jobs, preserving round-robin order
+/// between frames. Individual opaque geometry calls can still exceed that target.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn advance(app: &mut SolveApp, ctx: &egui::Context) {
+    let started = web_time::Instant::now();
+    let jobs: Vec<_> = app.session.cam_jobs.jobs.values().collect();
+    let pending = scheduler::tick(
+        &mut app.manufacturing.poll_cursor,
+        jobs.len(),
+        |i| jobs.get(i).is_some_and(|job| solvecraft_engine::manufacturing::advance(job)),
+        || started.elapsed() < std::time::Duration::from_millis(4),
+    );
+    if pending {
+        ctx.request_repaint();
+    }
+}
+
 enum Editor {
     Setup(cam::Setup),
     Tool(cam::Tool),
