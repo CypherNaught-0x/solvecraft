@@ -166,6 +166,63 @@ fn spans(cells: &[Cell]) -> Result<Vec<Span>> {
     Ok(spans)
 }
 
+pub(crate) fn validate_triangles(triangles: &[[Vec3; 3]]) -> Result<()> {
+    if triangles.len() > MAX_TRIANGLES {
+        return invalid("stock triangle budget exceeded");
+    }
+    for t in triangles {
+        for p in t {
+            crate::model::point(*p)?;
+        }
+        if (t[1] - t[0]).cross(t[2] - t[0]).len2() == 0. {
+            return invalid("degenerate stock triangle");
+        }
+    }
+
+    // Edge incidence plus connected vertex links reject cracks, T-junctions,
+    // touching components and non-manifold saddle edges explicitly.
+    let mut edges = BTreeMap::<(Point, Point), (usize, i32)>::new();
+    let mut links = BTreeMap::<Point, Vec<(Point, Point)>>::new();
+    for t in triangles {
+        let p = t.map(point);
+        for (a, b, c) in [(p[0], p[1], p[2]), (p[1], p[2], p[0]), (p[2], p[0], p[1])] {
+            let (key, sign) = if a < b { ((a, b), 1) } else { ((b, a), -1) };
+            let edge = edges.entry(key).or_default();
+            edge.0 += 1;
+            edge.1 += sign;
+            if edge.0 > 2 {
+                return invalid("stock boundary is non-manifold; use validation JSON");
+            }
+            links.entry(a).or_default().push((b, c));
+        }
+    }
+    if edges.values().any(|e| *e != (2, 0)) {
+        return invalid("stock boundary has an unstitched or misoriented edge");
+    }
+    for link in links.values() {
+        let mut next = BTreeMap::new();
+        for (a, b) in link {
+            if next.insert(*a, *b).is_some() {
+                return invalid("non-manifold stock vertex");
+            }
+        }
+        let Some((&start, _)) = next.first_key_value() else {
+            continue;
+        };
+        let mut at = start;
+        for _ in 0..link.len() {
+            let Some(b) = next.remove(&at) else {
+                return invalid("disconnected stock vertex surface; use validation JSON");
+            };
+            at = b;
+        }
+        if at != start || !next.is_empty() {
+            return invalid("open stock vertex surface");
+        }
+    }
+    Ok(())
+}
+
 struct Mesh {
     triangles: Vec<[Vec3; 3]>,
 }
@@ -221,48 +278,7 @@ impl Mesh {
         Ok(())
     }
     fn validate(&self) -> Result<()> {
-        // Edge incidence plus connected vertex links reject cracks, T-junctions,
-        // touching components and non-manifold saddle edges explicitly.
-        let mut edges = BTreeMap::<(Point, Point), (usize, i32)>::new();
-        let mut links = BTreeMap::<Point, Vec<(Point, Point)>>::new();
-        for t in &self.triangles {
-            let p = t.map(point);
-            for (a, b, c) in [(p[0], p[1], p[2]), (p[1], p[2], p[0]), (p[2], p[0], p[1])] {
-                let (key, sign) = if a < b { ((a, b), 1) } else { ((b, a), -1) };
-                let edge = edges.entry(key).or_default();
-                edge.0 += 1;
-                edge.1 += sign;
-                if edge.0 > 2 {
-                    return invalid("stock boundary is non-manifold; use validation JSON");
-                }
-                links.entry(a).or_default().push((b, c));
-            }
-        }
-        if edges.values().any(|e| *e != (2, 0)) {
-            return invalid("stock boundary has an unstitched or misoriented edge");
-        }
-        for link in links.values() {
-            let mut next = BTreeMap::new();
-            for (a, b) in link {
-                if next.insert(*a, *b).is_some() {
-                    return invalid("non-manifold stock vertex");
-                }
-            }
-            let Some((&start, _)) = next.first_key_value() else {
-                continue;
-            };
-            let mut at = start;
-            for _ in 0..link.len() {
-                let Some(b) = next.remove(&at) else {
-                    return invalid("disconnected stock vertex surface; use validation JSON");
-                };
-                at = b;
-            }
-            if at != start || !next.is_empty() {
-                return invalid("open stock vertex surface");
-            }
-        }
-        Ok(())
+        validate_triangles(&self.triangles)
     }
 }
 
@@ -364,6 +380,7 @@ mod tests {
             uncertainty: 0.0025,
             maximum_height_interval: 0.0,
             stock_complete: true,
+            stock: None,
             cells,
             findings: vec![],
             cutting_distance: 0.0,

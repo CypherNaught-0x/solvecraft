@@ -3,7 +3,8 @@
 Research date: 2026-10-15. This assessment supplements [the CAM implementation status](cam.md).
 Versions below are the releases inspected, not a promise that every upstream `latest` page is
 current. The initial assessment changed no dependencies. Subsequent implementation pinned Parry
-0.31.1 and added a collision adapter with native regression tests. Other candidates remain proposals;
+0.31.1 for collision queries and robust 1.2.0 for independent projected-coverage predicates.
+Other candidates remain proposals;
 see the current quality-gate results for target compilation evidence.
 
 ## Recommended order
@@ -13,7 +14,7 @@ see the current quality-gate results for target compilation evidence.
 | [parry3d-f64](https://docs.rs/parry3d-f64/0.31.1/parry3d_f64/query/index.html) | 0.31.1; [Apache-2.0](https://github.com/dimforge/parry) | Implemented behind a private adapter: distance and swept collision queries refine fixture, holder and shank checks. Conservative fallback remains. |
 | [proptest](https://docs.rs/proptest/1.12.0/proptest/) | 1.12.0; [MIT OR Apache-2.0](https://github.com/proptest-rs/proptest) | Add as a development dependency for generated cases and shrinking failures to small reproducible examples. |
 | [stl_io](https://docs.rs/stl_io/0.11.0/stl_io/) | 0.11.0; [MIT](https://github.com/hmeyer/stl_io) | Evaluate for bounded ASCII/binary import and binary stock export. This simplifies file handling; our independent conforming stock boundary extractor supplies the geometry. |
-| [robust](https://docs.rs/robust/1.2.0/robust/) | 1.2.0; [MIT OR Apache-2.0](https://github.com/georust/robust) | Already in Cargo.lock transitively. Use directly where orientation or sidedness decisions are fragile near collinearity. Exact predicate signs do not replace dimensional tolerance and uncertainty accounting. |
+| [robust](https://docs.rs/robust/1.2.0/robust/) | 1.2.0; [MIT OR Apache-2.0](https://github.com/georust/robust) | Implemented as a pinned direct dependency for independent stock-mesh coverage and sidedness checks. Exact predicate signs prevent near-collinear coverage errors; guarded plane intervals still account for dimensional uncertainty. |
 | [static_aabb2d_index](https://docs.rs/crate/static_aabb2d_index/2.1.0) | 2.1.0; MIT OR Apache-2.0 | Already present through Cavalier. Benchmark against the verifier's current XY index before replacing it. Keep unsafe optimizations disabled. |
 | [gcode](https://docs.rs/gcode/0.7.0/gcode/) | 0.7.0; [MIT OR Apache-2.0](https://docs.rs/crate/gcode/0.7.0) | Useful as a second parser in differential tests. It handles syntax and source spans, not modal machine semantics. Keep SolveCraft's independent interpreter and rejection of unsupported behavior. |
 
@@ -78,5 +79,5 @@ budget or performance at hundreds of thousands of cells.
    hand-calculated machine-state expectations and deliberate faults. Never reuse toolpath
    generation algorithms as the semantic oracle.
 
-These crates reduce implementation effort. Finished wall/hole certification, bounded uncertainty,
+These crates reduce implementation effort. Contour/pocket wall certification, broader uncertainty coverage,
 and complete Fusion reference captures still require project-specific work.

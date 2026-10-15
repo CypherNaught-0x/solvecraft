@@ -3291,6 +3291,7 @@ version = "0.1.6"
 dependencies = [
  "cavalier_contours",
  "parry3d-f64",
+ "robust",
  "serde",
  "serde_json",
  "sha2",

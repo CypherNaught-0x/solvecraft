@@ -74,7 +74,7 @@ checks catch stationary contact and tools already inside fixtures. Body groups p
 cavities and prevent opposite winding in separate fixtures from cancelling. Open/nonmanifold
 meshes, clearance within the interpolation/refinement margin, and failed numerical queries remain
 **inconclusive**. It does not call offset or toolpath-generation algorithms and observes cancellation
-during topology preparation and collision queries. The current algorithm fingerprint is `cam/5`.
+during topology preparation and collision queries. The current algorithm fingerprint is `cam/6`.
 No target fitting, translation, unit guessing or discarded unknown NC commands is allowed.
 
 Default dimensional tolerance is 0.01 mm; interpolation/post error is 0.001 mm; requested spatial
@@ -89,6 +89,24 @@ Exports are bounded to 40,000 merged cells, 500,000 triangles and 128 MiB. Non-m
 stock is rejected explicitly; validation JSON retains the cell intervals. `stock_complete` is
 false after verification budget exhaustion, which blocks export of a misleading partial stock.
 A watertight upper-bound mesh does not establish finished-part dimensional accuracy.
+
+Stock comparisons require declared stock bounds and exact, non-overlapping cell coverage. Older
+reports without bounds remain inconclusive. Imported reference meshes must be closed, consistently
+oriented manifolds within those bounds, with downward faces only on the stock bottom. Unsupported
+undercuts, reversed faces, degenerate triangles and out-of-frame vertices are rejected. Projection
+coverage uses boundary incidence and pinned `robust 1.2.0` orientation predicates, not sums of
+triangle areas. Duplicate or overlapping faces cannot counterfeit coverage. Extremely small nonzero
+XY coordinates below 1e-100 are rejected to avoid predicate underflow; coordinates are never snapped.
+
+The comparator independently bounds reference heights from triangles, reusing only the validated
+spatial partition before further adaptive subdivision. It certifies whole-column distances for
+both remaining material and removed space, in both directions, including the stock exterior.
+This resolves narrow uncertainty bands at vertical walls without concealing an omitted deep hole.
+Failures require a definitely present material/void point farther than tolerance from all possible
+corresponding columns; inconclusive intervals are not failures. Distance maxima describe examined
+regions; a certified failure may stop at its first witness. Cell/work exhaustion remains inconclusive.
+Tests include independent analytic round holes, alternate facet layouts, generated drilling-stock
+round trips, shifted walls, missing holes, incomplete coverage and malformed reference meshes.
 
 The current passing verification status certifies the implemented no-gouge/clearance checks.
 The separate `finished_dimensions` status certifies facing planes and analytic drill cylinders/cones,
@@ -152,8 +170,8 @@ to establish parity, never a skipped pass. Each directory requires:
   operation; multi-operation coverage must capture and validate every intermediate state.
 
 The harness verifies provenance/input fingerprints and the actual post hash, interprets both
-programs, simulates them through the same independent verifier, compares overlapping stock-height
-intervals and the exported reference STL, checks setup values and reports distance/time/volume
+programs, simulates them through the same independent verifier, compares local spatial stock
+bounds and the exported reference STL, checks setup values and reports distance/time/volume
 deltas. Spatial indexing bounds local comparisons. HTML path overlays link to numbered NC listings and diagnostics. Stock heatmaps show sampled
 remaining material relative to protected geometry; they are diagnostic views, not acceptance tests. Intermediate roughing must be judged against protected geometry and allowed stock;
 identical roughing paths, retract counts or execution times are not acceptance criteria.

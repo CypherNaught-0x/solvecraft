@@ -45,6 +45,9 @@ pub struct Report {
     /// False when resource limits prevented evaluating all stock cells/motions.
     #[serde(default)]
     pub stock_complete: bool,
+    /// Comparison domain. Legacy reports without this cannot certify coverage.
+    #[serde(default)]
+    pub stock: Option<Stock>,
     pub cells: Vec<Cell>,
     pub findings: Vec<Finding>,
     pub cutting_distance: f64,
@@ -127,6 +130,7 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
         uncertainty: limits.uncertainty,
         maximum_height_interval: 0.0,
         stock_complete: true,
+        stock: Some(stock),
         cells: Vec::new(),
         findings: Vec::new(),
         cutting_distance: 0.0,
