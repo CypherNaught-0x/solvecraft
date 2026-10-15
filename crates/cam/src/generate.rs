@@ -195,14 +195,14 @@ async fn operation(input: &JobInput, o: &Operation, progress: Progress) -> Resul
             let shape = shape(boundary, progress.clone()).await?;
             let d = (t.diameter / 2.0 + o.allowance) * if *inside { 1.0 } else { -1.0 };
             YieldOnce::default().await;
-            let loops = shape.parallel_offset(d, &offset_options());
+            let loops = shape.offset(d);
             if loops.ccw_plines.is_empty() {
                 return invalid("tool cannot fit contour");
             }
             for z in levels {
                 for lp in &loops.ccw_plines {
                     // Offsets are CCW. Climb is CCW inside a wall and CW outside a boss.
-                    trace(&mut w, s, o, &lp.polyline, z, o.climb != *inside).await?;
+                    trace(&mut w, s, o, lp, z, o.climb != *inside).await?;
                 }
             }
         }
@@ -218,16 +218,16 @@ async fn operation(input: &JobInput, o: &Operation, progress: Progress) -> Resul
                 // tangencies away from the shape stitcher's degenerate slices.
                 // It is 1/1000 of the post budget; independent verification still
                 // certifies the unmodified requested region and allowance.
-                let offset = original.parallel_offset(distance + 1e-6, &offset_options());
+                let offset = original.offset(distance + 1e-6);
                 if offset.ccw_plines.is_empty() {
                     break;
                 }
                 for lp in offset.ccw_plines.iter().chain(&offset.cw_plines) {
-                    vertices = vertices.checked_add(lp.polyline.vertex_count()).ok_or_else(|| Error("pocket vertex budget exhausted".into()))?;
+                    vertices = vertices.checked_add(lp.vertex_count()).ok_or_else(|| Error("pocket vertex budget exhausted".into()))?;
                     if vertices > MAX_MOVES {
                         return invalid("pocket vertex budget exhausted");
                     }
-                    loops.push(lp.polyline.clone());
+                    loops.push(lp.clone());
                 }
                 if loops.len() > 10_000 {
                     return invalid("pocket exceeds pass limit");
@@ -350,46 +350,105 @@ async fn trace(w: &mut Writer, s: &Setup, o: &Operation, lp: &Polyline<f64>, z: 
 }
 // Work in setup millimetres with predicate/stitch tolerances comfortably below
 // the post budget. Upstream defaults can merge distinct small offset slices.
-fn offset_options() -> ShapeOffsetOptions<f64> {
-    ShapeOffsetOptions { pos_equal_eps: 1e-8, offset_dist_eps: 1e-7, slice_join_eps: 1e-8 }
+struct OffsetShape {
+    shape: Shape<f64>,
+    scale: f64,
 }
-async fn shape(b: &Boundary, progress: Progress) -> Result<Shape<f64>> {
+struct OffsetLoops {
+    ccw_plines: Vec<Polyline<f64>>,
+    cw_plines: Vec<Polyline<f64>>,
+}
+impl OffsetShape {
+    fn offset(&self, distance: f64) -> OffsetLoops {
+        let scale = self.scale;
+        let options = ShapeOffsetOptions { pos_equal_eps: 1e-8 * scale, offset_dist_eps: 1e-7 * scale, slice_join_eps: 1e-8 * scale };
+        let result = self.shape.parallel_offset(distance * scale, &options);
+        let restore = |p: cavalier_contours::shape_algorithms::IndexedPolyline<f64>| {
+            let mut polyline = p.polyline;
+            polyline.scale_mut(1. / scale);
+            polyline
+        };
+        OffsetLoops {
+            ccw_plines: result.ccw_plines.into_iter().map(restore).collect(),
+            cw_plines: result.cw_plines.into_iter().map(restore).collect(),
+        }
+    }
+}
+async fn shape(b: &Boundary, progress: Progress) -> Result<OffsetShape> {
     b.validate()?;
     // Reject all crossings/touches, not just those the offset library happens to tolerate.
     let rings: Vec<_> = std::iter::once(&b.outer).chain(&b.islands).collect();
-    let mut comparisons = 0usize;
-    for (r, a) in rings.iter().enumerate() {
-        for i in 0..a.len() {
-            let p = a[i];
-            let q = a[(i + 1) % a.len()];
-            if distance(p, q) < 1e-7 {
+    let mut edges = Vec::new();
+    let mut extent = 1_f64;
+    let mut shortest = f64::MAX;
+    for (ring, points) in rings.iter().enumerate() {
+        for vertex in 0..points.len() {
+            if edges.len().is_multiple_of(256) {
+                YieldOnce::default().await;
+            }
+            let a = points[vertex];
+            let b = points[(vertex + 1) % points.len()];
+            let c = points[(vertex + 2) % points.len()];
+            if distance(a, b) < 1e-7 {
                 return invalid("zero-length boundary edge");
             }
-            for (s, c) in rings.iter().enumerate().skip(r) {
-                for j in 0..c.len() {
-                    if r == s && (i == j || (i + 1) % a.len() == j || (j + 1) % a.len() == i) {
-                        continue;
-                    }
-                    comparisons += 1;
-                    if comparisons.is_multiple_of(4096) {
-                        progress.set(0.1 * comparisons as f64 / 2_000_000.);
-                        YieldOnce::default().await;
-                    }
-                    if comparisons > 2_000_000 {
-                        return invalid("boundary validation budget exceeded");
-                    }
-                    if intersects(p, q, c[j], c[(j + 1) % c.len()]) {
-                        return invalid("boundary intersections or touching loops");
-                    }
-                }
+            shortest = shortest.min(distance(a, b));
+            // Adjacent edges share their endpoint, but must not double back.
+            if robust::orient2d(robust::Coord { x: a[0], y: a[1] }, robust::Coord { x: b[0], y: b[1] }, robust::Coord { x: c[0], y: c[1] }) == 0.
+                && (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]) <= 0.
+            {
+                return invalid("backtracking boundary edge");
+            }
+            extent = extent.max(a[0].abs()).max(a[1].abs());
+            edges.push((ring, vertex, a, b));
+        }
+    }
+    YieldOnce::default().await;
+    let index = crate::spatial::Index::new(
+        edges.iter().enumerate().map(|(id, (_, _, a, b))| (id, [a[0].min(b[0]), a[1].min(b[1])], [a[0].max(b[0]), a[1].max(b[1])])).collect(),
+    );
+    // Include every pair admitted by the existing near-touch predicate. The
+    // numerical reserve also covers rounding when expanding coordinate bounds.
+    let padding = 1e-8 + 128. * f64::EPSILON * extent;
+    let mut comparisons = 0usize;
+    let mut candidates = Vec::new();
+    for (id, &(ring, vertex, a, b)) in edges.iter().enumerate() {
+        if id.is_multiple_of(128) {
+            progress.set(0.1 * id as f64 / edges.len() as f64);
+            YieldOnce::default().await;
+        }
+        candidates.clear();
+        index.query([a[0].min(b[0]) - padding, a[1].min(b[1]) - padding], [a[0].max(b[0]) + padding, a[1].max(b[1]) + padding], &mut candidates);
+        for other in candidates.iter().copied().filter(|other| *other > id) {
+            let (other_ring, other_vertex, c, d) = edges[other];
+            let count = rings[ring].len();
+            if ring == other_ring && ((vertex + 1) % count == other_vertex || (other_vertex + 1) % count == vertex) {
+                continue;
+            }
+            comparisons += 1;
+            if comparisons.is_multiple_of(4096) {
+                YieldOnce::default().await;
+            }
+            if comparisons > 2_000_000 {
+                return invalid("boundary validation budget exceeded");
+            }
+            if intersects(a, b, c, d) {
+                return invalid("boundary intersections or touching loops");
             }
         }
     }
     for (i, hole) in b.islands.iter().enumerate() {
+        YieldOnce::default().await;
         if !inside(hole[0], &b.outer) || b.islands.iter().enumerate().any(|(j, h)| i != j && inside(hole[0], h)) {
             return invalid("islands must be disjoint and inside the outer boundary");
         }
     }
+    // Cavalier also applies its position epsilon to line cross products. Small
+    // segments can otherwise be classified as parallel (including a 10k-sided
+    // circle). Normalize the shortest input edge to at least one library unit.
+    // Powers of two preserve finite input coordinates exactly; no vertices are
+    // removed. Scale distance tolerances too, retaining their physical meaning.
+    let scale = 2_f64.powi((-shortest.log2()).ceil().max(0.) as i32);
     let mut plines = Vec::new();
     for (i, ring) in rings.iter().enumerate() {
         YieldOnce::default().await;
@@ -403,9 +462,10 @@ async fn shape(b: &Boundary, progress: Progress) -> Result<Shape<f64>> {
         if (p.area() > 0.0) != (i == 0) {
             p.invert_direction_mut();
         }
+        p.scale_mut(scale);
         plines.push(p);
     }
-    Ok(Shape::from_plines(plines))
+    Ok(OffsetShape { shape: Shape::from_plines(plines), scale })
 }
 fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
@@ -432,6 +492,127 @@ fn inside(p: [f64; 2], ring: &[[f64; 2]]) -> bool {
 #[allow(clippy::unwrap_used)]
 mod incremental_tests {
     use super::*;
+    fn polar(count: usize, lobes: usize) -> Vec<[f64; 2]> {
+        (0..count)
+            .map(|i| {
+                let angle = i as f64 * std::f64::consts::TAU / count as f64;
+                let radius = if lobes == 0 { 8. } else { 8. - 0.6 * (1. + (lobes as f64 * angle).cos()) };
+                [10. + radius * angle.cos(), 10. + radius * angle.sin()]
+            })
+            .collect()
+    }
+    fn validate_shape(boundary: &Boundary) -> Result<OffsetShape> {
+        let progress = Progress { value: Arc::new(AtomicUsize::new(0)), operation: 0, count: 1 };
+        let mut future = std::pin::pin!(shape(boundary, progress));
+        for _ in 0..10_000 {
+            if let Poll::Ready(result) = future.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+                return result;
+            }
+        }
+        invalid("test shape did not complete within checkpoint bound")
+    }
+    #[test]
+    fn dense_simple_boundaries_and_one_hundred_islands_fit_validation_budget() {
+        for lobes in [0, 7] {
+            let mut boundary = Boundary { outer: polar(10_000, lobes), islands: vec![] };
+            for _ in 0..2 {
+                let validated = validate_shape(&boundary).unwrap();
+                assert_eq!(validated.shape.ccw_plines.len(), 1);
+                assert!(validated.shape.cw_plines.is_empty());
+                boundary.outer.reverse();
+            }
+            let mut input = corpus::fixture("contour").unwrap();
+            input.operations[0].geometry = Strategy::Contour { boundary, inside: true };
+            let path = generate(input).unwrap();
+            assert!(path.blocks.iter().any(|b| matches!(b.motion, Motion::Linear { .. } | Motion::Arc { .. })));
+        }
+        let islands = (0..100)
+            .map(|n| {
+                (0..99)
+                    .map(|i| {
+                        let a = i as f64 * std::f64::consts::TAU / 99.;
+                        [5. + (n % 10) as f64 * 10. + a.cos(), 5. + (n / 10) as f64 * 10. + a.sin()]
+                    })
+                    .collect()
+            })
+            .collect();
+        let boundary = Boundary { outer: vec![[0., 0.], [100., 0.], [100., 100.], [0., 100.]], islands };
+        let validated = validate_shape(&boundary).unwrap();
+        assert_eq!((validated.shape.ccw_plines.len(), validated.shape.cw_plines.len()), (1, 100));
+        let offset = validated.offset(1.);
+        assert_eq!((offset.ccw_plines.len(), offset.cw_plines.len()), (1, 100));
+    }
+    #[test]
+    fn normalized_offsets_preserve_dense_polygon_distance_and_coordinates() {
+        // Independent regular-polygon construction: inward offset preserves the
+        // apothem minus the cutter radius. Check every resulting vertex, not area.
+        for center in [[10., 10.], [-10_000., 20_000.]] {
+            for factor in [1., 0.125] {
+                let points = polar(10_000, 0).into_iter().map(|p| [center[0] + factor * (p[0] - 10.), center[1] + factor * (p[1] - 10.)]).collect();
+                let boundary = Boundary { outer: points, islands: vec![] };
+                let offset = validate_shape(&boundary).unwrap().offset(3. * factor);
+                assert_eq!(offset.ccw_plines.len(), 1);
+                assert!(offset.cw_plines.is_empty());
+                let expected = factor * (8. - 3. / (std::f64::consts::PI / 10_000.).cos());
+                for p in offset.ccw_plines[0].iter_vertexes() {
+                    assert!(((p.x - center[0]).hypot(p.y - center[1]) - expected).abs() < 1e-7);
+                }
+            }
+        }
+        // Concave case: sample output vertices against all ORIGINAL input
+        // segments using an independently written point/segment projection.
+        let boundary = Boundary { outer: polar(10_000, 7), islands: vec![] };
+        let offset = validate_shape(&boundary).unwrap().offset(3.);
+        assert_eq!(offset.ccw_plines.len(), 1);
+        for p in offset.ccw_plines[0].iter_vertexes().step_by(64) {
+            let nearest = boundary
+                .outer
+                .iter()
+                .zip(boundary.outer.iter().cycle().skip(1))
+                .map(|(a, b)| {
+                    let dx = b[0] - a[0];
+                    let dy = b[1] - a[1];
+                    let t = (((p.x - a[0]) * dx + (p.y - a[1]) * dy) / (dx * dx + dy * dy)).clamp(0., 1.);
+                    (p.x - a[0] - t * dx).hypot(p.y - a[1] - t * dy)
+                })
+                .fold(f64::INFINITY, f64::min);
+            assert!((nearest - 3.).abs() < 1e-7, "offset distance {nearest}");
+        }
+    }
+    #[test]
+    fn indexed_validation_rejects_crossings_touches_and_backtracking() {
+        let square = |min: [f64; 2], max: [f64; 2]| vec![min, [max[0], min[1]], max, [min[0], max[1]]];
+        for boundary in [
+            Boundary { outer: vec![[0., 0.], [3., 3.], [0., 3.], [3., 0.]], islands: vec![] },
+            Boundary { outer: vec![[0., 0.], [3., 0.], [1., 0.], [3., 3.], [0., 3.]], islands: vec![] },
+            Boundary { outer: vec![[0., 0.], [3., 0.], [3., 0.], [0., 3.]], islands: vec![] },
+            Boundary { outer: square([0., 0.], [10., 10.]), islands: vec![square([0., 1.], [2., 3.])] },
+            Boundary { outer: square([0., 0.], [10., 10.]), islands: vec![square([5e-9, 1.], [2., 3.])] },
+            Boundary { outer: square([0., 0.], [10., 10.]), islands: vec![square([2., 2.], [4., 4.]), square([4., 2.], [6., 4.])] },
+            Boundary { outer: square([0., 0.], [10., 10.]), islands: vec![square([2., 2.], [8., 8.]), square([3., 3.], [4., 4.])] },
+            Boundary { outer: square([0., 0.], [10., 10.]), islands: vec![square([12., 2.], [14., 4.])] },
+        ] {
+            assert!(validate_shape(&boundary).is_err(), "{boundary:?}");
+        }
+        // A non-adjacent touch hidden among thousands of otherwise valid edges.
+        let mut boundary = Boundary { outer: polar(10_000, 0), islands: vec![] };
+        boundary.outer[5000] = boundary.outer[0];
+        assert!(validate_shape(&boundary).is_err());
+    }
+    #[test]
+    fn cancellation_during_dense_boundary_construction_and_queries_publishes_nothing() {
+        for checkpoint in [1, 20, 80, 120] {
+            let mut input = corpus::fixture("contour").unwrap();
+            input.operations[0].geometry = Strategy::Contour { boundary: Boundary { outer: polar(10_000, 7), islands: vec![] }, inside: true };
+            let mut generator = Generator::new(input).unwrap();
+            for _ in 0..checkpoint {
+                assert!(!generator.step().unwrap());
+            }
+            generator.cancel();
+            assert!(generator.step().is_err());
+            assert!(generator.finish().is_err());
+        }
+    }
     #[test]
     fn large_single_operations_yield_and_remain_deterministic() {
         for name in ["face", "contour", "pocket", "drill"] {

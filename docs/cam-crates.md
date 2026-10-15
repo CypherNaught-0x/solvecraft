@@ -36,6 +36,14 @@ say the shape offset algorithm has not received the polyline stitching update, a
 limitations. Keep the pin, native error guard and impossible-region checks; do not adopt a new
 geometry dependency or disable debug assertions to hide these failures.
 
+A 2026-10-16 original 10,000-vertex circle also exposed a short-segment cross-product
+threshold failure. The adapter now normalizes coordinates by an exact power of two and
+scales physical distance tolerances with them, then restores output to millimetres. It
+retains every input vertex. Native debug regressions cover dense convex/concave offsets,
+shifted/scaled coordinates and independent distance expectations. The release-Wasm dense
+concave probe still measured a 21.2 ms atomic offset batch; retaining the crate does not
+close worst-case browser responsiveness acceptance.
+
 ## Portability and integration
 
 - **Parry:** use double precision and a private adapter from SolveCraft geometry types. The

@@ -57,7 +57,16 @@ reversed direction settings; regenerate and simulate before posting.
 Offsets use exactly `cavalier_contours 0.9.0` (MIT OR Apache-2.0) behind bounded input checks.
 Crossing/touching loops, nested islands, oversized tools, non-finite values and exceeded budgets
 are errors. The offset adapter uses 1e-8 mm position/join and 1e-7 mm distance tolerances;
-these avoid merging small distinct slices in round-island pockets with upstream defaults. Output retains operation IDs, machine events and linear/planar-arc motions.
+these avoid merging small distinct slices in round-island pockets with upstream defaults.
+Boundary validation queries an edge spatial index instead of charging every possible edge pair
+against its work budget. Crossings, near touches and adjacent backtracking still fail; candidate
+work remains capped, with cancellation checkpoints during construction, queries and containment.
+The offset adapter scales coordinates by a power of two so the shortest edge is at least one
+library unit, and scales distance tolerances by the same factor. This avoids the library treating
+short nonparallel segments as parallel through its cross-product epsilon. It removes no vertices
+and restores output to millimetres; the original input remains the independent verifier's target.
+Dense convex/concave, reversed-winding, translated/scaled and 100-island regressions cover the
+adapter. Output retains operation IDs, machine events and linear/planar-arc motions.
 
 ## Reference NC dialect
 
@@ -93,8 +102,8 @@ checks catch stationary contact and tools already inside fixtures. Body groups p
 cavities and prevent opposite winding in separate fixtures from cancelling. Open/nonmanifold
 meshes, clearance within the interpolation/refinement margin, and failed numerical queries remain
 **inconclusive**. It does not call offset or toolpath-generation algorithms and observes cancellation
-during topology preparation and collision queries. The current algorithm fingerprint is `cam/15`;
-the machine-state corrections invalidate older generated/verified caches.
+during topology preparation and collision queries. The current algorithm fingerprint is `cam/16`;
+the boundary validation and offset adapter changes invalidate older generated/verified caches.
 No target fitting, translation, unit guessing or discarded unknown NC commands is allowed.
 
 Default dimensional tolerance is 0.01 mm; interpolation/post error is 0.001 mm; requested spatial
@@ -447,3 +456,19 @@ and machine-state equality, operation/block/line provenance, unchanged unknown-c
 and cancellation at every checkpoint across all three stages. Measurements exclude direct
 synchronous export commands, CAD preparation, offset queries and the rendered application;
 these observations do not establish a universal latency guarantee.
+
+### Dense boundary validation and offsetting
+
+The original 10,000-vertex seven-lobe boundary exceeded the all-pairs validation budget before
+reaching offset generation. Indexed candidate checks now admit that simple boundary without
+relaxing intersection tests or the candidate-work limit. A separate dense-circle regression
+exposed a library assertion on short segments; power-of-two coordinate normalization resolves
+the reproduced case without simplifying geometry. Independent regular-polygon distance checks
+cover every output vertex at two scales and shifted coordinates; concave checks sample output
+vertices against the original input segments. These checks are not whole-stock certification.
+
+A local Chrome 155 release-Wasm generation probe on 2026-10-16 produced 6,674 blocks from the
+10,000-vertex seven-lobe input. Its longest scheduler batch was 21.2 ms (one batch above 16 ms),
+compared with 6.4 ms for the 1,400-vertex case. Validation is cooperative, but the library offset
+query remains atomic. This records an unresolved responsiveness limit; it is not a guarantee of
+frame-rate responsiveness. The probe excludes CAD preparation and stock verification.
