@@ -36,7 +36,7 @@ fn ring(points: &[[f64; 2]]) -> Loop2 {
             .collect(),
     }
 }
-fn flat(out: &mut Vec<[Vec3; 3]>, outer: &[[f64; 2]], holes: &[Vec<[f64; 2]>], z: f64) {
+pub(super) fn flat(out: &mut Vec<[Vec3; 3]>, outer: &[[f64; 2]], holes: &[Vec<[f64; 2]>], z: f64) {
     let region = Region2 { outer: ring(outer), holes: holes.iter().map(|h| ring(h)).collect() };
     for t in region.triangulate(1e-6) {
         if (t[1] - t[0]).cross(t[2] - t[0]).abs() > 1e-14 {
@@ -44,7 +44,7 @@ fn flat(out: &mut Vec<[Vec3; 3]>, outer: &[[f64; 2]], holes: &[Vec<[f64; 2]>], z
         }
     }
 }
-fn wall(out: &mut Vec<[Vec3; 3]>, points: &[[f64; 2]], top: f64, bottom: f64) {
+pub(super) fn wall(out: &mut Vec<[Vec3; 3]>, points: &[[f64; 2]], top: f64, bottom: f64) {
     for (a, b) in points.iter().zip(points.iter().cycle().skip(1)).take(points.len()) {
         let (a, b) = (Vec3::new(a[0], a[1], top), Vec3::new(b[0], b[1], top));
         let (c, d) = (Vec3::new(a.x, a.y, bottom), Vec3::new(b.x, b.y, bottom));

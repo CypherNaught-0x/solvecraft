@@ -77,7 +77,7 @@ checks catch stationary contact and tools already inside fixtures. Body groups p
 cavities and prevent opposite winding in separate fixtures from cancelling. Open/nonmanifold
 meshes, clearance within the interpolation/refinement margin, and failed numerical queries remain
 **inconclusive**. It does not call offset or toolpath-generation algorithms and observes cancellation
-during topology preparation and collision queries. The current algorithm fingerprint is `cam/12`.
+during topology preparation and collision queries. The current algorithm fingerprint is `cam/13`.
 No target fitting, translation, unit guessing or discarded unknown NC commands is allowed.
 
 Default dimensional tolerance is 0.01 mm; interpolation/post error is 0.001 mm; requested spatial
@@ -139,6 +139,10 @@ machine-state checks. Exact item bounds exclude irrelevant candidates; shank/hol
 included whenever those components can reach stock. Region predicates have bounded work and
 cooperative cancellation. The analytic contour/pocket recipes now use an original 128-sided round
 boundary and matching protected walls/floors; they no longer rely on a plane-only square smoke test.
+Constant-height and vertical mill sweeps use rectangular-cell lateral bounds: the segment's
+bounding box tightens minimum distance, and convexity bounds maximum distance at the four corners.
+This avoids artificial overlap from circumscribed disks along straight walls. Sloping moves retain
+the common-disk height bound; neither tolerances nor resource limits are relaxed.
 
 Protected height-field boundaries use local spatial certificates. A conservative upper target
 height at a neighboring XY point bounds distance to the outside of the protected solid for an
@@ -186,10 +190,11 @@ These gates must be closed before calling M15 complete or claiming Fusion machin
 
 Run `cargo xtask cam-validate`. Original analytic recipes generate input snapshots, canonical paths,
 NC, stock, setup sheets, validation JSON and an HTML report under ignored `target/cam-validation/`.
-Six recipes cover the four initial strategies, a rounded concave pocket with two islands, and
+Eight recipes cover the four initial strategies, a rounded concave pocket with two islands,
 a four-operation facing → roughing → finishing → peck-drilling program with multiple tools and
-a shifted G55 setup. The latter verifies prefixes of the actual complete program after every
-operation, including roughing allowance, coolant transitions and conventional finishing. All nine
+a shifted G55 setup, two clamped through holes, and an external square-boss contour. The harness
+verifies prefixes of the actual complete program after every operation, including roughing
+allowance, coolant transitions and conventional finishing. All thirteen
 stages require protected-surface, dimensional, point-probe and independent exported-STL checks.
 The new target surfaces have independently calculated volume expectations; deleting islands,
 omitting finishing, choosing the wrong tool or changing the work offset must fail. Reports link
@@ -202,6 +207,15 @@ Post validation also compares arc sweeps: a tiny arc rounding to coincident endp
 become a full circle. Generated arcs shorter than 0.00025 mm become lines, bounded by their total
 arc length. Shared reference-mesh edges do not cause false interior height discontinuities;
 positive-area overlaps retain both heights even for extremely thin regions.
+
+The through-hole recipe uses both simple and peck drilling with full-diameter depth below the
+stock bottom, a closed raised clamp between the axes, and an independently calculated perforated
+plate target. Tests reject missing breakthrough, insufficient cutting length and a rapid crossing
+the clamp at Z7, identifying its NC line. The external-contour recipe uses a reversed square
+boundary, four depth passes, tangential leads, ramp entry, 0.2 mm roughing allowance and a separate
+conventional finish. Wrong-side cutting and omitted finishing cannot pass. The final external
+contour uses 243,154 cells in the current native run, below the unchanged 250,000-cell default;
+larger jobs can still return inconclusive when their declared budgets are exhausted.
 
 Run `cargo xtask cam-oracle --dir plan/fusion/cam/oracle` for local Fusion packages. The harness
 requires separate `face`, `contour`, `pocket`, `drill` directories. Missing evidence is a failure
@@ -308,6 +322,11 @@ preparation, the rendered application, export serialization, concurrent jobs and
 inputs. The remaining atomic work listed above still needs worst-case timing coverage. Unit
 regressions verify exact synchronous/cooperative mesh agreement, early/mid/late cancellation,
 round-robin fairness, completed-job termination and a poll cap if the host clock stalls.
+
+The clamped through-hole and external-contour recipes also pass the same local release Wasm
+probe. Their largest observed scheduler batches were 5.2 ms and 7.4 ms, with no batch over 16 ms;
+stock extraction peaked at 4.0 ms and 4.1 ms. The external contour produced 243,154 cells and
+111,102 triangles. These measurements have the same limited scope described above.
 
 ## Associated drilling selections
 

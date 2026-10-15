@@ -280,7 +280,11 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
             // artificial saddles where coarse and fine cone cells meet.
             let (near, far) = if tool.kind == ToolKind::TwistDrill && seg.from.x == seg.to.x && seg.from.y == seg.to.y {
                 radial_bounds(min, max, [seg.from.x, seg.from.y])
+            } else if seg.from.z == seg.to.z || (seg.from.x == seg.to.x && seg.from.y == seg.to.y) {
+                lateral_bounds(min, max, seg)
             } else {
+                // Sloping motion still uses a common covering disk: its upper
+                // height bound must cover the entire cell at the same pose.
                 ((distance - half).max(0.0), distance + half)
             };
             let cone_low = if tool.kind == ToolKind::TwistDrill { near / (tool.tip_angle / 2.0).tan() } else { 0.0 };
@@ -479,6 +483,32 @@ fn radial_bounds(min: [f64; 2], max: [f64; 2], center: [f64; 2]) -> (f64, f64) {
     (x.0.hypot(y.0), x.1.hypot(y.1))
 }
 
+/// Conservative rectangle-to-segment distance bounds. The segment AABB gives
+/// an additional lower bound, exact for axis-aligned sweeps. Distance to a
+/// convex segment is convex, so its maximum over a rectangle is attained at a
+/// corner. Circumscribed disks alone invent overlap along long straight walls
+/// and force unnecessary refinement of already resolved stock.
+fn lateral_bounds(min: [f64; 2], max: [f64; 2], s: &Segment) -> (f64, f64) {
+    let a = [s.from.x, s.from.y];
+    let b = [s.to.x, s.to.y];
+    let delta = [b[0] - a[0], b[1] - a[1]];
+    let length2 = delta[0] * delta[0] + delta[1] * delta[1];
+    let gap = |k: usize| (min[k] - a[k].max(b[k])).max(a[k].min(b[k]) - max[k]).max(0.);
+    let distance = |p: [f64; 2]| {
+        let t = if length2 > 0. { (((p[0] - a[0]) * delta[0] + (p[1] - a[1]) * delta[1]) / length2).clamp(0., 1.) } else { 0. };
+        (p[0] - a[0] - t * delta[0]).hypot(p[1] - a[1] - t * delta[1])
+    };
+    let mut far = 0_f64;
+    for p in [min, [min[0], max[1]], max, [max[0], min[1]]] {
+        far = far.max(distance(p));
+    }
+    let center_distance = distance([(min[0] + max[0]) / 2., (min[1] + max[1]) / 2.]);
+    let half = (max[0] - min[0]).hypot(max[1] - min[1]) / 2.;
+    let extent = min.into_iter().chain(max).chain(a).chain(b).map(f64::abs).fold(1_f64, f64::max);
+    let guard = 128. * f64::EPSILON * extent;
+    (((center_distance - half).max(gap(0).hypot(gap(1))) - guard).max(0.), far + guard)
+}
+
 pub(crate) fn target_height(p: [f64; 2], half: f64, tris: &[[Vec3; 3]], bottom: f64, work: &mut usize, budget: usize) -> (f64, f64, bool) {
     let mut lo = f64::INFINITY;
     let mut hi = bottom;
@@ -575,10 +605,30 @@ pub fn probe_height(input: &JobInput, nc: &Parsed, p: [f64; 2]) -> Result<f64> {
 
 #[cfg(test)]
 mod radial_tests {
+    use super::*;
     #[test]
     fn rectangle_radial_extrema_include_corners_and_interior_axis() {
         assert_eq!(super::radial_bounds([3., 4.], [6., 8.], [0., 0.]), (5., 10.));
         assert_eq!(super::radial_bounds([-3., -4.], [3., 4.], [0., 0.]), (0., 5.));
         assert_eq!(super::radial_bounds([7., -2.], [10., 6.], [10., 2.]), (0., 5.));
+    }
+
+    #[test]
+    fn rectangle_sweep_bounds_cover_axis_diagonal_endcaps_and_translations() {
+        for offset in [0., 1_000_000.] {
+            let point = |x, y| Vec3::new(x + offset, y + offset, 0.);
+            for (a, b, min, max, expected) in [
+                ([0., 0.], [10., 0.], [2., 3.], [4., 5.], (3., 5.)),
+                ([0., 0.], [0., 10.], [3., 2.], [5., 4.], (3., 5.)),
+                ([0., 0.], [0., 0.], [3., 4.], [6., 8.], (5., 10.)),
+                ([0., 0.], [1., 0.], [4., 4.], [7., 8.], (5., 10.)),
+                ([0., 0.], [10., 10.], [4., 4.], [6., 6.], (0., 2_f64.sqrt())),
+            ] {
+                let s = Segment { from: point(a[0], a[1]), to: point(b[0], b[1]), rapid: false, feed: 100., tool: 1, line: 1 };
+                let (low, high) = lateral_bounds(min.map(|x| x + offset), max.map(|x| x + offset), &s);
+                assert!(low <= expected.0 && high >= expected.1, "{low} {high} {expected:?}");
+                assert!(expected.0 - low < 1e-6 && high - expected.1 < 1e-6);
+            }
+        }
     }
 }

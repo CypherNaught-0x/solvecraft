@@ -2,8 +2,10 @@
 use crate::*;
 use solvecraft_geom::Vec3;
 mod extended;
+mod exterior;
+mod through;
 
-pub const CASES: &[&str] = &["face", "contour", "pocket", "drill", "concave-islands", "multi-operation"];
+pub const CASES: &[&str] = &["face", "contour", "pocket", "drill", "concave-islands", "multi-operation", "clamped-through-holes", "external-contour"];
 
 /// Independent point expectations, indexed by the completed operation count.
 pub fn probes(name: &str, completed: usize) -> Result<Vec<([f64; 2], f64)>> {
@@ -11,6 +13,12 @@ pub fn probes(name: &str, completed: usize) -> Result<Vec<([f64; 2], f64)>> {
         "face" | "pocket" | "drill" => Ok(vec![([10., 10.], 5.)]),
         "contour" => Ok(vec![([10., 10.], 6.)]),
         "concave-islands" => Ok(vec![([6., 6.], 6.), ([6., 13.], 6.), ([14., 14.], 6.), ([15., 6.], 4.), ([6., 9.], 4.)]),
+        "clamped-through-holes" if (1..=2).contains(&completed) => {
+            Ok(vec![([6., 10.], 0.), ([14., 10.], if completed == 2 { 0. } else { 6. }), ([10., 10.], 6.), ([6.6, 10.], 6.)])
+        }
+        "external-contour" if (1..=2).contains(&completed) => {
+            Ok(vec![([10., 10.], 6.), ([5.1, 10.], 6.), ([4.5, 10.], if completed == 1 { 4.2 } else { 4. }), ([1., 1.], 6.)])
+        }
         "multi-operation" if (1..=4).contains(&completed) => {
             let floor = [5.5, 4.2, 4., 4.].get(completed - 1).copied().ok_or_else(|| Error("unknown stage".into()))?;
             Ok(vec![([1., 1.], 5.5), ([6., 6.], 5.5), ([14., 14.], 5.5), ([6., 9.], floor), ([15., 6.], if completed == 4 { 3. } else { floor })])
@@ -20,6 +28,12 @@ pub fn probes(name: &str, completed: usize) -> Result<Vec<([f64; 2], f64)>> {
 }
 
 pub fn fixture(strategy: &str) -> Result<JobInput> {
+    if strategy == "external-contour" {
+        return exterior::fixture();
+    }
+    if strategy == "clamped-through-holes" {
+        return through::fixture();
+    }
     if matches!(strategy, "concave-islands" | "multi-operation") {
         return extended::fixture(strategy);
     }
