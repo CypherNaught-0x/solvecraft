@@ -46,6 +46,7 @@ fn check_basin() {
     let start = Instant::now();
     let mut session = Session::default();
     let result = session.execute("doc.open", &json!({"path": path})).unwrap();
+    eprintln!("doc.open elapsed {:?}", start.elapsed());
     assert_eq!(result["features"], 58);
     assert_eq!(session.path.as_deref(), path.to_str());
     assert!(!session.is_dirty());
@@ -57,7 +58,12 @@ fn check_basin() {
     let world = session.world_state();
     assert_eq!(world.bodies.len(), 14);
     assert!(world.body("Basin").is_some());
-    let meshes: Vec<_> = world.bodies.iter().map(|body| body.mesh()).collect();
+    let meshes: Vec<_> = world.bodies.iter().map(|body| {
+        let t = Instant::now();
+        let m = body.mesh();
+        eprintln!("mesh {} {:?}", body.name, t.elapsed());
+        m
+    }).collect();
     assert!(meshes.iter().all(|mesh| !mesh.triangles.is_empty()));
     let triangles: usize = meshes.iter().map(|mesh| mesh.triangles.len()).sum();
     assert!(triangles > 10_000, "display geometry was lost: {triangles} triangles");
