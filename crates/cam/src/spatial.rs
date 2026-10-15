@@ -2,7 +2,7 @@
 pub(crate) struct Index {
     min: [f64; 2],
     max: [f64; 2],
-    ids: Vec<usize>,
+    items: Vec<(usize, [f64; 2], [f64; 2])>,
     children: Vec<Index>,
 }
 impl Index {
@@ -16,18 +16,18 @@ impl Index {
             }
         }
         if items.len() <= 8 {
-            return Self { min, max, ids: items.iter().map(|i| i.0).collect(), children: vec![] };
+            return Self { min, max, items, children: vec![] };
         }
         let axis = usize::from(max[1] - min[1] > max[0] - min[0]);
         items.sort_unstable_by(|a, b| (a.1[axis] + a.2[axis]).total_cmp(&(b.1[axis] + b.2[axis])));
         let rest = items.split_off(items.len() / 2);
-        Self { min, max, ids: vec![], children: vec![Self::new(items), Self::new(rest)] }
+        Self { min, max, items: vec![], children: vec![Self::new(items), Self::new(rest)] }
     }
     pub(crate) fn query(&self, min: [f64; 2], max: [f64; 2], out: &mut Vec<usize>) {
         if (0..2).any(|k| self.min[k] > max[k] || self.max[k] < min[k]) {
             return;
         }
-        out.extend(&self.ids);
+        out.extend(self.items.iter().filter(|(_, a, b)| (0..2).all(|k| a[k] <= max[k] && b[k] >= min[k])).map(|(id, _, _)| id));
         for child in &self.children {
             child.query(min, max, out);
         }
@@ -55,6 +55,9 @@ mod tests {
                     assert!(actual.contains(id));
                 }
             }
+            let expected: Vec<_> = items.iter().filter(|(_, a, b)| (0..2).all(|k| a[k] <= max[k] && b[k] >= min[k])).map(|(id, _, _)| *id).collect();
+            actual.sort_unstable();
+            assert_eq!(actual, expected);
             let unique: std::collections::BTreeSet<_> = actual.iter().collect();
             assert_eq!(unique.len(), actual.len());
         }

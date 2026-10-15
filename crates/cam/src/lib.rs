@@ -10,6 +10,7 @@ mod dimensions;
 pub mod generate;
 mod model;
 pub mod nc;
+mod region;
 mod spatial;
 mod stock_mesh;
 mod surface;
@@ -24,12 +25,18 @@ pub(crate) fn invalid<T>(message: impl Into<String>) -> Result<T> {
     Err(Error(message.into()))
 }
 
-pub const VERSION: &str = "cam/6";
+pub const VERSION: &str = "cam/7";
 pub const TOLERANCE: f64 = 0.01;
 pub const POST_ERROR: f64 = 0.001;
 pub const VERIFY_ERROR: f64 = 0.0025;
 pub const MAX_MOVES: usize = 200_000;
 pub const MAX_ITEMS: usize = 1000;
+
+/// Maximum chord error when resolving an associated CAD profile. The independent
+/// dimensional envelope reserves this in addition to post/interpolation error.
+pub fn profile_tolerance(tolerance: f64) -> f64 {
+    (tolerance / 16.).min(POST_ERROR / 2.)
+}
 
 pub fn fingerprint<T: serde::Serialize>(value: &T) -> Result<String> {
     use sha2::{Digest, Sha256};

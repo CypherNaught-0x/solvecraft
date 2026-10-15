@@ -40,7 +40,7 @@ pub fn validate(root: &Path) -> Result<(), String> {
             let report = verify::simulate(&input, &parsed, Default::default()).map_err(|e| e.to_string())?;
             let expected = if name == "contour" { 6.0 } else { 5.0 };
             let actual = verify::probe_height(&input, &parsed, [10.0, 10.0]).map_err(|e| e.to_string())?;
-            let dimensions_required = matches!(name, "face" | "drill");
+            let dimensions_required = true;
             let pass = report.status == verify::Status::Pass
                 && (actual - expected).abs() <= cam::TOLERANCE
                 && (!dimensions_required || report.finished_dimensions == verify::Status::Pass);

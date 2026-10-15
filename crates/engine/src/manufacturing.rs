@@ -119,7 +119,7 @@ pub fn profile_boundary(s: &Session, setup: &cam::Setup, source: &cam::ProfileRe
     let convert = |ring: &crate::geom::Loop2| -> Result<Vec<[f64; 2]>> {
         let mut points = Vec::new();
         let mut z = None;
-        for p in ring.polyline(tolerance / 4.0) {
+        for p in ring.polyline(cam::profile_tolerance(tolerance)) {
             let v = setup.frame.local(solvecraft_doc::apply_point(&transform, sketch.plane.to_world(p)));
             if z.is_some_and(|z: f64| (z - v.z).abs() > tolerance / 4.0) {
                 return Err(EngineError::Other("CAM profile must be perpendicular to setup Z".into()));

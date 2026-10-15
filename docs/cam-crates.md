@@ -22,7 +22,9 @@ Keep [cavalier_contours 0.9.0](https://docs.rs/crate/cavalier_contours/0.9.0), a
 `solvecraft-cam`. Its [Rust core](https://github.com/jbuckmccready/cavalier_contours) supports
 line/arc offsets and regions with islands under MIT OR Apache-2.0. It also documents limitations:
 rounded offset joins, arc segments of at most a half-circle, and nonintersecting closed loops for
-multi-loop regions. Our bounded adapter and invalid-region tests remain necessary.
+multi-loop regions. Our bounded adapter and invalid-region tests remain necessary. The adapter now uses explicit
+1e-8 mm position/join and 1e-7 mm offset-distance tolerances, with a round-island regression
+that exposed a slice-merging failure under upstream defaults.
 
 ## Portability and integration
 
@@ -79,5 +81,5 @@ budget or performance at hundreds of thousands of cells.
    hand-calculated machine-state expectations and deliberate faults. Never reuse toolpath
    generation algorithms as the semantic oracle.
 
-These crates reduce implementation effort. Contour/pocket wall certification, broader uncertainty coverage,
+These crates reduce implementation effort. Broader dimensional and uncertainty coverage,
 and complete Fusion reference captures still require project-specific work.

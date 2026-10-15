@@ -27,7 +27,15 @@ pub fn fixture(strategy: &str) -> Result<JobInput> {
         retract: 10.0,
         work_offset: 54,
     };
-    let boundary = Boundary { outer: vec![[2.0, 2.0], [18.0, 2.0], [18.0, 18.0], [2.0, 18.0]], islands: vec![] };
+    let boundary = Boundary {
+        outer: (0..128)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / 128.;
+                [10. + 8. * a.cos(), 10. + 8. * a.sin()]
+            })
+            .collect(),
+        islands: vec![],
+    };
     let geometry = match strategy {
         "face" => Strategy::Face,
         "contour" => Strategy::Contour { boundary, inside: true },
@@ -77,8 +85,37 @@ pub fn fixture(strategy: &str) -> Result<JobInput> {
     if strategy == "drill" {
         input.geometry.target = drilled_plate_target();
     }
+    if matches!(strategy, "contour" | "pocket") {
+        input.geometry.target = round_pocket_target();
+    }
     input.fingerprint = crate::fingerprint(&input)?;
     Ok(input)
+}
+
+// Original circular pocket with the same faceted boundary as its input recipe.
+// Chord error at radius 8 with 128 segments is 0.002410 mm; the recipe itself is
+// this polygon, not an unrecorded exact circle.
+fn round_pocket_target() -> Vec<[Vec3; 3]> {
+    let mut triangles = Vec::new();
+    let ring = |i: usize| {
+        let a = (i % 128) as f64 * std::f64::consts::TAU / 128.;
+        let (y, x) = a.sin_cos();
+        let outer = if x.abs() >= y.abs() {
+            [10. + 10. * x.signum(), 10. + 10. * y / x.abs(), 6.]
+        } else {
+            [10. + 10. * x / y.abs(), 10. + 10. * y.signum(), 6.]
+        };
+        ([10. + 8. * x, 10. + 8. * y, 6.], outer)
+    };
+    for i in 0..128 {
+        let (a, c) = ring(i);
+        let (b, d) = ring(i + 1);
+        triangles.extend([[a.into(), c.into(), d.into()], [a.into(), d.into(), b.into()]]);
+        let e = [a[0], a[1], 5.];
+        let f = [b[0], b[1], 5.];
+        triangles.extend([[[10., 10., 5.].into(), e.into(), f.into()], [a.into(), b.into(), f.into()], [a.into(), f.into(), e.into()]]);
+    }
+    triangles
 }
 
 // Original faceted plate with a blind drilled hole, vertical wall and cone.
@@ -267,9 +304,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // Last rectangular loop is the pocket's outside wall. Clockwise has negative area.
-        let last = &points[points.len() - 4..];
-        let area: f64 = last.iter().zip(last.iter().cycle().skip(1)).take(4).map(|(a, b)| a.x * b.y - a.y * b.x).sum();
+        // Last loop follows the pocket outer wall clockwise.
+        let last = &points[points.len() - 128..];
+        let area: f64 = last.iter().zip(last.iter().cycle().skip(1)).take(128).map(|(a, b)| a.x * b.y - a.y * b.x).sum();
         assert!(area < 0.0);
     }
     #[test]

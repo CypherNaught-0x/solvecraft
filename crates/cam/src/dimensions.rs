@@ -49,6 +49,7 @@ impl Envelope {
 enum Feature {
     Plane(f64),
     Hole { center: [f64; 2], radius: f64, tip: f64, slope: f64 },
+    Mill { region: crate::region::Region, outside: bool, width: Option<f64>, allowance: f64, depth: f64 },
 }
 pub(crate) struct Finished {
     features: Vec<Feature>,
@@ -60,16 +61,20 @@ pub(crate) struct Finished {
 }
 impl Finished {
     pub(crate) fn new(input: &JobInput, tolerance: f64) -> Result<Option<Self>> {
-        if input.operations.iter().any(|o| !matches!(o.geometry, Strategy::Face | Strategy::Drill { .. })) {
-            return Ok(None);
-        }
         // Reserve radial error on both sides of a diameter, and convert XY
         // interpolation error into a conservative cone-height error as well.
-        let has_holes = input.operations.iter().any(|o| matches!(o.geometry, Strategy::Drill { .. }));
-        let radial_tolerance = tolerance / 2.0 - POST_ERROR;
-        let slope = input.tools.iter().filter(|t| t.kind == ToolKind::TwistDrill).map(|t| 1.0 / (t.tip_angle / 2.0).tan()).fold(0.0, f64::max);
+        let has_walls = input.operations.iter().any(|o| !matches!(o.geometry, Strategy::Face));
+        let profile_error = input.operations.iter().filter(|o| o.source.is_some()).map(|o| crate::profile_tolerance(o.tolerance)).fold(0.0, f64::max);
+        let radial_tolerance = tolerance / 2.0 - POST_ERROR - profile_error;
+        let slope = input
+            .operations
+            .iter()
+            .filter(|o| matches!(o.geometry, Strategy::Drill { .. }))
+            .filter_map(|o| input.tools.iter().find(|t| t.id == o.tool))
+            .map(|t| 1.0 / (t.tip_angle / 2.0).tan())
+            .fold(0.0, f64::max);
         let tolerance = tolerance - POST_ERROR * (1.0 + slope);
-        if tolerance <= 0.0 || (has_holes && radial_tolerance <= 0.0) {
+        if tolerance <= 0.0 || (has_walls && radial_tolerance <= 0.0) {
             return Ok(None);
         }
         let mut features = Vec::new();
@@ -86,7 +91,26 @@ impl Finished {
                         features.push(Feature::Hole { center: *center, radius: tool.diameter / 2.0, tip, slope: 1.0 / (tool.tip_angle / 2.0).tan() });
                     }
                 }
-                _ => return Ok(None),
+                Strategy::Contour { boundary, inside } => {
+                    if !boundary.islands.is_empty() {
+                        return invalid("select contour islands as separate operations");
+                    }
+                    let tool = input.tools.iter().find(|t| t.id == op.tool).ok_or_else(|| Error("missing dimensional tool".into()))?;
+                    features.push(Feature::Mill {
+                        region: crate::region::Region::new(boundary)?,
+                        outside: !inside,
+                        width: Some(tool.diameter / 2.),
+                        allowance: op.allowance,
+                        depth: op.bottom + op.allowance,
+                    });
+                }
+                Strategy::Pocket { boundary } => features.push(Feature::Mill {
+                    region: crate::region::Region::new(boundary)?,
+                    outside: false,
+                    width: None,
+                    allowance: op.allowance,
+                    depth: op.bottom + op.allowance,
+                }),
             }
         }
         Ok(Some(Self {
@@ -95,7 +119,7 @@ impl Finished {
             top: input.setup.stock.max.z,
             tolerance,
             radial_tolerance,
-            refinement: if has_holes { VERIFY_ERROR.min(tolerance / 8.0).min(radial_tolerance / 4.0) } else { VERIFY_ERROR },
+            refinement: if has_walls { VERIFY_ERROR.min(tolerance / 8.0).min(radial_tolerance / 4.0) } else { VERIFY_ERROR },
         }))
     }
     pub(crate) async fn envelope<F: std::future::Future<Output = ()>>(
@@ -124,6 +148,38 @@ impl Finished {
                 Feature::Plane(z) => {
                     let z = z.clamp(self.bottom, self.top);
                     Envelope::range(z, z, self.tolerance)
+                }
+                Feature::Mill { region, outside, width, allowance, depth } => {
+                    let reach = allowance + width.unwrap_or(0.) + self.radial_tolerance;
+                    let Some(mut d) = region.range((p, half, reach), work, budget, cancelled, yield_control).await? else {
+                        return Ok(None);
+                    };
+                    if *outside {
+                        d = [-d[1], -d[0]];
+                    }
+                    let floor = Envelope::range(depth.clamp(self.bottom, self.top), depth.clamp(self.bottom, self.top), self.tolerance);
+                    // A contour finishes the wall and adjacent floor out to one
+                    // tool radius. Farther stock on the cutting side is optional
+                    // roughing stock; it must never be cut below the stated floor.
+                    let optional = Envelope { upper_min: unchanged.upper_min, upper_max: unchanged.upper_max, ..floor };
+                    let mut possible: Option<Envelope> = None;
+                    let mut add = |v| possible = Some(possible.map_or(v, |old| old.alternatives(v)));
+                    if d[0] <= allowance - self.radial_tolerance {
+                        add(unchanged);
+                    }
+                    if d[1] >= allowance - self.radial_tolerance && d[0] <= allowance + self.radial_tolerance {
+                        add(optional);
+                    }
+                    if d[1] >= allowance + self.radial_tolerance && width.is_none_or(|w| d[0] <= allowance + w) {
+                        add(floor);
+                    }
+                    if width.is_some_and(|w| d[1] >= allowance + w) {
+                        add(optional);
+                    }
+                    let Some(allowed) = possible else {
+                        return Ok(None);
+                    };
+                    allowed
                 }
                 Feature::Hole { center, radius, tip, slope } => {
                     let r = (p[0] - center[0]).hypot(p[1] - center[1]);
@@ -172,6 +228,180 @@ mod tests {
     }
     fn finished() -> Finished {
         Finished::new(&corpus::fixture("drill").unwrap(), TOLERANCE).unwrap().unwrap()
+    }
+    #[test]
+    fn generated_contours_and_pockets_certify_selected_finished_regions() {
+        for name in ["contour", "pocket"] {
+            let input = corpus::fixture(name).unwrap();
+            let path = generate::generate(input.clone()).unwrap();
+            let code = nc::post(&path, &input.setup).unwrap();
+            let report = simulate(&input, &code);
+            assert_eq!(
+                report.status,
+                Status::Pass,
+                "{name} cells {} work {} {:?}",
+                report.cells.len(),
+                report.work,
+                report.findings.iter().take(4).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                report.finished_dimensions,
+                Status::Pass,
+                "{name} cells {} work {} {:?}",
+                report.cells.len(),
+                report.work,
+                report.findings.iter().take(4).collect::<Vec<_>>()
+            );
+        }
+    }
+    #[test]
+    fn missed_milling_wrong_floor_and_inaccessible_corners_fail() {
+        for name in ["contour", "pocket"] {
+            let input = corpus::fixture(name).unwrap();
+            let code = nc::post(&generate::generate(input.clone()).unwrap(), &input.setup).unwrap();
+            let wrong = simulate(&input, &code.replace("Z5.000000", "Z5.100000"));
+            assert_eq!(wrong.finished_dimensions, Status::Fail, "{name}");
+            let missed = simulate(&input, "G21 G90 G17 G94 G54 G40 G49 G80\nG0 X0 Y0 Z15\nM30\n");
+            assert_eq!(missed.finished_dimensions, Status::Fail, "{name}");
+        }
+        let mut input = corpus::fixture("pocket").unwrap();
+        input.operations[0].geometry =
+            Strategy::Pocket { boundary: Boundary { outer: vec![[2., 2.], [18., 2.], [18., 18.], [2., 18.]], islands: vec![] } };
+        // A round cutter cannot finish sharp internal corners. Protected geometry
+        // is independently relaxed here to isolate the dimensional failure.
+        for t in &mut input.geometry.target {
+            for p in t {
+                p.z = 0.;
+            }
+        }
+        let code = nc::post(&generate::generate(input.clone()).unwrap(), &input.setup).unwrap();
+        assert_eq!(simulate(&input, &code).finished_dimensions, Status::Fail);
+    }
+    #[test]
+    fn allowance_winding_multiple_depths_and_external_contours() {
+        let mut input = corpus::fixture("contour").unwrap();
+        input.operations[0].allowance = 0.2;
+        input.operations[0].stepdown = 0.3;
+        if let Strategy::Contour { boundary, .. } = &mut input.operations[0].geometry {
+            boundary.outer.reverse();
+        }
+        let code = nc::post(&generate::generate(input.clone()).unwrap(), &input.setup).unwrap();
+        let r = simulate(&input, &code);
+        assert_eq!(r.finished_dimensions, Status::Pass, "{:?}", r.findings);
+        if let Strategy::Contour { inside, .. } = &mut input.operations[0].geometry {
+            *inside = false;
+        }
+        // The separate protected-CAD tests exercise real walls; this case checks
+        // only the independent outside/inside selection and allowance contract.
+        for t in &mut input.geometry.target {
+            for p in t {
+                p.z = 0.;
+            }
+        }
+        let code = nc::post(&generate::generate(input.clone()).unwrap(), &input.setup).unwrap();
+        let r = simulate(&input, &code);
+        assert_eq!(r.finished_dimensions, Status::Pass, "{:?}", r.findings);
+    }
+    #[test]
+    fn pocket_islands_are_protected_and_finished() {
+        let mut input = corpus::fixture("pocket").unwrap();
+        if let Strategy::Pocket { boundary } = &mut input.operations[0].geometry {
+            boundary.islands.push(
+                (0..48)
+                    .map(|i| {
+                        let a = i as f64 * std::f64::consts::TAU / 48.;
+                        [10. + a.cos(), 10. + a.sin()]
+                    })
+                    .collect(),
+            );
+        }
+        input.tools[0].diameter = 2.;
+        input.operations[0].stepover = 0.75;
+        let code = nc::post(&generate::generate(input.clone()).unwrap(), &input.setup).unwrap();
+        let r = simulate(&input, &code);
+        assert_eq!(
+            r.finished_dimensions,
+            Status::Pass,
+            "cells {} work {} {:?}",
+            r.cells.len(),
+            r.work,
+            r.findings.iter().take(3).collect::<Vec<_>>()
+        );
+        let mut without = input.clone();
+        if let Strategy::Pocket { boundary } = &mut without.operations[0].geometry {
+            boundary.islands.clear();
+        }
+        let code = nc::post(&generate::generate(without.clone()).unwrap(), &without.setup).unwrap();
+        assert_eq!(simulate(&input, &code).finished_dimensions, Status::Fail);
+        if let Strategy::Pocket { boundary } = &mut input.operations[0].geometry {
+            boundary.islands = [8., 12.]
+                .into_iter()
+                .map(|x| {
+                    (0..48)
+                        .map(|i| {
+                            let a = i as f64 * std::f64::consts::TAU / 48.;
+                            [x + 0.8 * a.cos(), 10. + 0.8 * a.sin()]
+                        })
+                        .collect()
+                })
+                .collect();
+        }
+        let code = nc::post(&generate::generate(input.clone()).unwrap(), &input.setup).unwrap();
+        let r = simulate(&input, &code);
+        assert_eq!(
+            r.finished_dimensions,
+            Status::Pass,
+            "cells {} work {} {:?}",
+            r.cells.len(),
+            r.work,
+            r.findings.iter().take(3).collect::<Vec<_>>()
+        );
+    }
+    #[test]
+    fn associated_profile_chord_error_has_a_separate_budget() {
+        let mut input = corpus::fixture("pocket").unwrap();
+        input.operations[0].source = Some(ProfileRef { sketch: 1, curves: vec!["wall".into()], occurrence: vec![] });
+        let f = Finished::new(&input, TOLERANCE).unwrap().unwrap();
+        assert!((f.radial_tolerance - (TOLERANCE / 2. - POST_ERROR - crate::profile_tolerance(TOLERANCE))).abs() < 1e-12);
+        assert_eq!(crate::profile_tolerance(TOLERANCE), 0.0005);
+        // A looser operation can coexist with a tighter program tolerance. Use
+        // the actual sampling budget of each source, not the program minimum.
+        input.operations[0].tolerance = 0.1;
+        let f = Finished::new(&input, 0.005).unwrap().unwrap();
+        assert!((f.radial_tolerance - 0.001).abs() < 1e-12);
+        let mut unused = input.tools[0].clone();
+        unused.id = 2;
+        unused.number = 2;
+        unused.kind = ToolKind::TwistDrill;
+        unused.tip_angle = 0.11;
+        input.tools.push(unused);
+        assert!(Finished::new(&input, 0.005).unwrap().is_some());
+    }
+    #[test]
+    fn wrong_milling_diameter_and_shifted_paths_are_detected() {
+        let mut input = corpus::fixture("contour").unwrap();
+        let code = nc::post(&generate::generate(input.clone()).unwrap(), &input.setup).unwrap();
+        for diameter in [5.8, 6.2] {
+            let mut other = input.tools[0].clone();
+            other.id = 2;
+            other.number = 2;
+            other.diameter = diameter;
+            input.tools.truncate(1);
+            input.tools.push(other);
+            assert_eq!(simulate(&input, &code.replace("T1 M6", "T2 M6")).finished_dimensions, Status::Fail);
+        }
+        let mut shifted = nc::parse(&code, &input.tools).unwrap();
+        for record in &mut shifted.records {
+            match &mut record.motion {
+                Motion::Rapid { to } | Motion::Linear { to, .. } => to.x += 0.03,
+                Motion::Arc { to, center, .. } => {
+                    to.x += 0.03;
+                    center.x += 0.03;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(verify::simulate(&input, &shifted, Default::default()).unwrap().finished_dimensions, Status::Fail);
     }
     #[test]
     fn hand_calculated_cone_and_diameter_band() {

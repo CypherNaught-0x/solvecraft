@@ -122,7 +122,7 @@ fn operation(input: &JobInput, o: &Operation) -> Result<Vec<Block>> {
             }
             let shape = shape(boundary)?;
             let d = (t.diameter / 2.0 + o.allowance) * if *inside { 1.0 } else { -1.0 };
-            let loops = shape.parallel_offset(d, &ShapeOffsetOptions::default());
+            let loops = shape.parallel_offset(d, &offset_options());
             if loops.ccw_plines.is_empty() {
                 return invalid("tool cannot fit contour");
             }
@@ -137,7 +137,7 @@ fn operation(input: &JobInput, o: &Operation) -> Result<Vec<Block>> {
             let mut loops = Vec::new();
             let mut distance = t.diameter / 2.0 + o.allowance;
             for pass in 0..10_000 {
-                let offset = original.parallel_offset(distance, &ShapeOffsetOptions::default());
+                let offset = original.parallel_offset(distance, &offset_options());
                 if offset.ccw_plines.is_empty() {
                     break;
                 }
@@ -256,6 +256,11 @@ fn trace(w: &mut Writer, s: &Setup, o: &Operation, lp: &Polyline<f64>, z: f64, r
         w.feed(Vec3::new(start.x, start.y, z) - tangent * o.lead_distance, o.feed)?;
     }
     Ok(())
+}
+// Work in setup millimetres with predicate/stitch tolerances comfortably below
+// the post budget. Upstream defaults can merge distinct small offset slices.
+fn offset_options() -> ShapeOffsetOptions<f64> {
+    ShapeOffsetOptions { pos_equal_eps: 1e-8, offset_dist_eps: 1e-7, slice_join_eps: 1e-8 }
 }
 fn shape(b: &Boundary) -> Result<Shape<f64>> {
     b.validate()?;

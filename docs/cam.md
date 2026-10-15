@@ -44,7 +44,8 @@ to be center cutting. Entry/lead collisions are checked during simulation, befor
 
 Offsets use exactly `cavalier_contours 0.9.0` (MIT OR Apache-2.0) behind bounded input checks.
 Crossing/touching loops, nested islands, oversized tools, non-finite values and exceeded budgets
-are errors. Output retains operation IDs, machine events and linear/planar-arc motions.
+are errors. The offset adapter uses 1e-8 mm position/join and 1e-7 mm distance tolerances;
+these avoid merging small distinct slices in round-island pockets with upstream defaults. Output retains operation IDs, machine events and linear/planar-arc motions.
 
 ## Reference NC dialect
 
@@ -74,7 +75,7 @@ checks catch stationary contact and tools already inside fixtures. Body groups p
 cavities and prevent opposite winding in separate fixtures from cancelling. Open/nonmanifold
 meshes, clearance within the interpolation/refinement margin, and failed numerical queries remain
 **inconclusive**. It does not call offset or toolpath-generation algorithms and observes cancellation
-during topology preparation and collision queries. The current algorithm fingerprint is `cam/6`.
+during topology preparation and collision queries. The current algorithm fingerprint is `cam/7`.
 No target fitting, translation, unit guessing or discarded unknown NC commands is allowed.
 
 Default dimensional tolerance is 0.01 mm; interpolation/post error is 0.001 mm; requested spatial
@@ -109,14 +110,29 @@ Tests include independent analytic round holes, alternate facet layouts, generat
 round trips, shifted walls, missing holes, incomplete coverage and malformed reference meshes.
 
 The current passing verification status certifies the implemented no-gouge/clearance checks.
-The separate `finished_dimensions` status certifies facing planes and analytic drill cylinders/cones,
-including blind/through and full-diameter depths. Independently calculated height envelopes refine
-requested features even when the NC omits a hole. Radial bands reserve half the dimensional tolerance
-for diameter error, after reserving the post/interpolation budget; depth is checked separately.
-Multiple facing/drilling cuts compose by taking the minimum allowed remaining height. Drilling
-requires zero stock allowance: use the explicit depth, since drill paths do not apply milling allowance.
-Wall certification remains **inconclusive**, so contour/pocket posting is currently blocked.
-Posting requires both clearance and finished dimensions to pass and a complete stock result.
+The separate `finished_dimensions` status certifies facing planes, analytic drill cylinders/cones,
+pocket floors and islands, and the selected side of contour walls. The milling verifier uses
+independent robust winding and point-to-segment distances, with whole-cell signed-distance bounds;
+it never calls the generator's offset functions. A contour must finish its selected wall and floor
+within one tool radius of the allowance boundary. Farther stock on the cutting side may remain as
+roughing stock; it cannot be cut below the specified floor. A pocket must clear its full selected
+interior to the allowance floor while preserving its islands and outer wall.
+
+The radial tolerance band reserves half the dimensional tolerance for paired-wall/diameter error,
+then subtracts the post/interpolation budget. Associated CAD profiles also reserve their chord-error
+budget, at most 0.0005 mm (and at most 1/16 of operation tolerance), during engine sampling and
+independent certification. Requested features drive adaptive refinement even if the NC omits them.
+Multiple operations compose by taking the minimum permitted remaining-height envelopes.
+Drilling requires zero stock allowance: use explicit depth, since drill paths do not apply milling
+allowance. Sharp inaccessible internal corners, omitted islands, wrong tools/depths and shifted
+paths fail dimensional validation and block posting. Exhaustion and unresolved bounds stay
+inconclusive. Posting requires both clearance and finished dimensions to pass and complete stock.
+
+Motion queries use an independent XY index and retain original sequence IDs for withdrawals and
+machine-state checks. Exact item bounds exclude irrelevant candidates; shank/holder radii remain
+included whenever those components can reach stock. Region predicates have bounded work and
+cooperative cancellation. The analytic contour/pocket recipes now use an original 128-sided round
+boundary and matching protected walls/floors; they no longer rely on a plane-only square smoke test.
 
 Protected height-field boundaries use local spatial certificates. A conservative upper target
 height at a neighboring XY point bounds distance to the outside of the protected solid for an
@@ -131,11 +147,12 @@ plane-only protected target. Tests cover boundary clearance, shifted-hole and th
 sloping surfaces, overlapping projected targets and large-coordinate precision. A native CAD
 drilled body also passes create/generate/simulate/post/save/reopen through registered commands.
 This does not establish qualification of arbitrary non-height-field solids or Fusion parity.
-The Fusion oracle additionally requires passing finished-dimension checks for both programs. Analytic acceptance currently adds
-independent point-height expectations; those probes do not replace whole-region dimensional
-certification. This is an open M15 release gate, along with:
+Native CAD pocket and contour workflows also pass through durable sketch-profile references,
+ramp entry, generation, simulation, posting and save/reopen. All four analytic strategies now
+require passing finished-dimension checks; independent point probes supplement those certificates.
+The Fusion oracle requires the same dimensional checks for both programs. Remaining M15 gates:
 
-- Contour/pocket wall dimensions and broader protected-surface/dimensional regression coverage.
+- Broader protected-surface, concave-region and multi-operation dimensional regression coverage.
 - Broader fixture regression coverage and performance acceptance; supported stock/model geometry
   remains vertical height-field scope. Fixture triangles must form closed consistently wound bodies
   for volume-containment certification; surface contact can still be detected on an open mesh.

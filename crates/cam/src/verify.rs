@@ -117,6 +117,32 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
     let segments = nc::segments(nc, &input.setup)?;
     let tol = input.operations.iter().map(|o| o.tolerance).fold(TOLERANCE, f64::min);
     let stock = input.setup.stock;
+    // Only motions whose cutter or non-cutting envelopes can reach stock need
+    // cell queries. Keep original sequence IDs for machine-state/withdrawal checks.
+    let motion_index = crate::spatial::Index::new(
+        segments
+            .iter()
+            .enumerate()
+            .filter_map(|(id, s)| {
+                let tool = input.tools.iter().find(|t| t.id == s.tool)?;
+                let z = s.from.z.min(s.to.z);
+                let mut radius = if z <= stock.max.z + POST_ERROR { tool.diameter / 2. + POST_ERROR } else { 0. };
+                for (r, lift) in [(tool.shank_diameter / 2., tool.cutting_length), (tool.holder_diameter / 2., tool.overall_length)] {
+                    if z + lift <= stock.max.z + POST_ERROR {
+                        radius = radius.max(r + POST_ERROR);
+                    }
+                }
+                if radius == 0. {
+                    return None;
+                }
+                Some((
+                    id,
+                    [s.from.x.min(s.to.x) - radius, s.from.y.min(s.to.y) - radius],
+                    [s.from.x.max(s.to.x) + radius, s.from.y.max(s.to.y) + radius],
+                ))
+            })
+            .collect(),
+    );
     let surface = crate::surface::Surface::new(&input.geometry.target, stock.min.z)?;
     let finished = crate::dimensions::Finished::new(input, tol)?;
     let dimension_resolution = finished.as_ref().map_or(limits.uncertainty, |f| limits.uncertainty.min(f.refinement));
@@ -142,8 +168,10 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
     };
     if finished.is_none() {
         r.findings.push(Finding {
-            kind: "finished_region_unsupported".into(), line: None, at: stock.min,
-            detail: "Finished-region certification currently supports facing and drilling; wall certification or a larger tolerance budget is required before posting".into(),
+            kind: "finished_region_unsupported".into(),
+            line: None,
+            at: stock.min,
+            detail: "Finished-region certification needs a tolerance larger than the post/interpolation error budget".into(),
         });
     }
     for s in &segments {
@@ -183,9 +211,13 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
         let mut high = stock.max.z;
         let mut collision = None;
         let mut removal_line = None;
-        for (segment_index, seg) in segments.iter().enumerate() {
+        let mut candidates = Vec::new();
+        motion_index.query(min, max, &mut candidates);
+        candidates.sort_unstable();
+        for (query_index, segment_index) in candidates.into_iter().enumerate() {
+            let seg = &segments[segment_index];
             r.work += 1;
-            if segment_index % 4096 == 4095 {
+            if query_index % 4096 == 4095 {
                 yield_control().await;
                 if cancelled() {
                     return invalid("simulation cancelled");

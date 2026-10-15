@@ -340,4 +340,42 @@ mod tests {
         let verified = reopened.execute("cam.simulate", &json!({"job":generated["job"]})).unwrap();
         assert_eq!(verified["verification"]["finished_dimensions"], "pass");
     }
+    #[test]
+    fn milled_cad_pocket_and_contour_generate_verify_post_and_reopen() {
+        let mut model = Session::default();
+        model.execute("solid.box", &json!({"length":20,"width":20,"height":6})).unwrap();
+        model.execute("solid.hole", &json!({"position":[10,10,6],"direction":[0,0,-1],"diameter":16,"depth":1,"type":"simple"})).unwrap();
+        model.execute("sketch.create", &json!({"plane":"XY","name":"Pocket boundary"})).unwrap();
+        model.execute("sketch.circle.center", &json!({"center":[10,10],"radius":8,"id":"wall"})).unwrap();
+        model.execute("sketch.finish", &json!({})).unwrap();
+        let sketch = model.model.state().sketches.last().unwrap().feature;
+        for name in ["contour", "pocket"] {
+            let mut s = Session::new((*model.doc).clone());
+            let mut input = cam::corpus::fixture(name).unwrap();
+            input.setup.models[0].body = s.model.state().bodies[0].name.clone();
+            input.operations[0].ramp_angle = Some(5_f64.to_radians());
+            s.execute("cam.setup.put", &json!({"setup":input.setup})).unwrap();
+            let selected = s.execute("cam.boundary.from_profile", &json!({"setup":1,"sketch":sketch,"profile":0})).unwrap();
+            input.operations[0].source = Some(serde_json::from_value(selected["source"].clone()).unwrap());
+            match &mut input.operations[0].geometry {
+                cam::Strategy::Contour { boundary, .. } | cam::Strategy::Pocket { boundary } => {
+                    *boundary = serde_json::from_value(selected["boundary"].clone()).unwrap()
+                }
+                _ => {}
+            }
+            s.execute("cam.tool.put", &json!({"tool":input.tools[0]})).unwrap();
+            s.execute("cam.operation.put", &json!({"operation":input.operations[0]})).unwrap();
+            s.execute("cam.program.put", &json!({"program":{"id":1,"name":name,"setup":1,"operations":[1]}})).unwrap();
+            let generated = s.execute("cam.generate", &json!({"program":1})).unwrap();
+            let id = generated["job"].clone();
+            let verified = s.execute("cam.simulate", &json!({"job":id})).unwrap();
+            assert_eq!(verified["verification"]["status"], "pass", "{name}: {verified}");
+            assert_eq!(verified["verification"]["finished_dimensions"], "pass", "{name}: {verified}");
+            assert!(s.execute("cam.post", &json!({"job":id})).unwrap()["content"].as_str().unwrap().contains("M30"));
+            let mut reopened = Session::new(crate::io::read_design(&crate::io::write_design(&s.doc)).unwrap());
+            let generated = reopened.execute("cam.generate", &json!({"program":1})).unwrap();
+            let verified = reopened.execute("cam.simulate", &json!({"job":generated["job"]})).unwrap();
+            assert_eq!(verified["verification"]["finished_dimensions"], "pass", "{name}: {verified}");
+        }
+    }
 }
