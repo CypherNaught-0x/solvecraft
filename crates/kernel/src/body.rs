@@ -1280,6 +1280,12 @@ impl Body {
         if self.is_mesh() {
             return Err(KernelError::Invalid("a mesh body has no surfaces to tessellate".into()));
         }
+        // Endpoint fills have singular corner charts and directional limiting
+        // normals. The reference path refines their physical normal field; the
+        // generic plan can succeed while still producing a pinched display.
+        if self.solid.face_iter().any(|f| matches!(f.surface(), mt::Surface::BSplineSurface(s) if s.degrees() == (5, 5))) {
+            return Err(KernelError::Failed("endpoint fills require normal-aware reference tessellation".into()));
+        }
         let tol = if tol.is_finite() && tol > 0.0 { tol } else { 0.05 };
         let tol = tol.max(self.size() * 1e-6);
         // The same angle and floor as the reference mesher's angular display mesh.
@@ -1393,6 +1399,9 @@ impl Body {
             Ok(plan) => plan.evaluate(),
             Err(e) => {
                 log::debug!("display mesh: {e}; meshing the reference way");
+                if self.solid.face_iter().any(|f| matches!(f.surface(), mt::Surface::BSplineSurface(s) if s.degrees() == (5, 5))) {
+                    return self.reference_display_mesh_angular(tol, crate::DISPLAY_ANGLE);
+                }
                 self.tessellate(tol)?
             }
         };
