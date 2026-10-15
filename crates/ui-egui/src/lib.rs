@@ -32,6 +32,7 @@ pub mod dialogs_plastic;
 pub mod dialogs_save_mesh;
 pub mod dialogs_sheet;
 pub mod dialogs_surface;
+pub mod dialogs_sweep;
 pub mod dim_view;
 #[cfg(test)]
 mod dimension_create_ui_tests;
@@ -141,6 +142,8 @@ pub mod smart_extrude;
 #[cfg(test)]
 mod smart_extrude_ui_tests;
 pub mod stand_up;
+#[cfg(test)]
+mod sweep_dialog_tests;
 pub mod theme;
 #[cfg(test)]
 mod thin_extrude_tests;
@@ -563,6 +566,11 @@ impl SolveApp {
         if let Ok(v) = &r {
             if matches!(id, "view.ambient_occlusion" | "view.graphics_preset") {
                 self.preferences.ambient_occlusion = v.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+                if id == "view.graphics_preset" {
+                    self.preferences.display_quality = v.get("display_quality").and_then(Value::as_str).unwrap_or("normal").to_string();
+                    self.preferences.supersampling = v.get("supersampling").and_then(Value::as_f64).unwrap_or(1.0) as f32;
+                    self.preferences.supersampling_adaptive = v.get("supersampling_adaptive").and_then(Value::as_bool).unwrap_or(true);
+                }
             }
             if id == "view.navigate" {
                 let to: Camera = serde_json::from_value(v.get("camera").cloned().unwrap_or_default()).map_err(|e| e.to_string())?;

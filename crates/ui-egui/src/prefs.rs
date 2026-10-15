@@ -1975,12 +1975,20 @@ mod ambient_occlusion_tests {
     }
 }
 
-/// Derive the selected preset from its setting, including legacy saved preferences and manual edits.
+/// Manual edits are preserved and shown as Custom rather than claiming to match a preset.
+fn graphics_preset(prefs: &Prefs) -> &'static str {
+    match (prefs.ambient_occlusion, prefs.display_quality.as_str(), prefs.supersampling, prefs.supersampling_adaptive) {
+        (false, "normal", 1.0, _) => "performance",
+        (true, "fine", 2.0, true) => "quality",
+        _ => "custom",
+    }
+}
+
 pub(crate) fn graphics_preset_selector(app: &mut SolveApp, ui: &mut egui::Ui) {
-    let current = if app.preferences.ambient_occlusion { "quality" } else { "performance" };
-    let label = if app.preferences.ambient_occlusion { "ui.graphics_quality" } else { "ui.graphics_performance" };
+    let current = graphics_preset(&app.preferences);
+    let label = format!("ui.graphics_{current}");
     let response = egui::ComboBox::from_id_salt("graphics_preset")
-        .selected_text(app.tr(label))
+        .selected_text(app.tr(&label))
         .show_ui(ui, |ui| {
             for (preset, label) in [("performance", "ui.graphics_performance"), ("quality", "ui.graphics_quality")] {
                 let item = ui.selectable_label(current == preset, app.tr(label));
@@ -2031,6 +2039,7 @@ mod graphics_preset_tests {
         restored.load_prefs(&h.app.prefs());
         assert!(restored.preferences.ambient_occlusion);
         h.call("ui.prefs", json!({"button":"cancel"}));
+        assert_eq!(graphics_preset(&h.app.preferences), "performance");
         assert!(!h.app.preferences.ambient_occlusion);
         h.call("engine.execute", json!({"command":"view.graphics_preset","params":{"preset":"quality"}}));
         assert!(h.app.preferences.ambient_occlusion);
@@ -2038,14 +2047,29 @@ mod graphics_preset_tests {
         assert!(h.app.preferences.ambient_occlusion);
         h.call("engine.execute", json!({"command":"view.graphics_preset","params":{"preset":"performance"}}));
         assert!(!h.app.preferences.ambient_occlusion);
-        for quality in ["coarse", "normal", "fine", "ultra"] {
-            h.call("ui.prefs", json!({"display_quality":quality}));
-            for preset in ["quality", "performance"] {
-                h.call("engine.execute", json!({"command":"view.graphics_preset","params":{"preset":preset}}));
-                assert_eq!(h.app.preferences.display_quality, quality);
-                assert_eq!(h.app.preferences.ambient_occlusion, preset == "quality");
-            }
+        assert_eq!(graphics_preset(&h.app.preferences), "performance");
+        assert_eq!(h.app.preferences.display_quality, "normal");
+        assert_eq!(h.app.preferences.supersampling, 1.0);
+        h.call("engine.execute", json!({"command":"view.graphics_preset","params":{"preset":"quality"}}));
+        assert_eq!(graphics_preset(&h.app.preferences), "quality");
+        assert_eq!(h.app.preferences.display_quality, "fine");
+        assert_eq!(h.app.preferences.supersampling, 2.0);
+        assert!(h.app.preferences.supersampling_adaptive);
+        for edit in [
+            json!({"display_quality":"ultra"}),
+            json!({"supersampling":1.5}),
+            json!({"supersampling_adaptive":false}),
+            json!({"ambient_occlusion":false}),
+        ] {
+            h.call("engine.execute", json!({"command":"view.graphics_preset","params":{"preset":"quality"}}));
+            h.call("ui.prefs", edit);
+            assert_eq!(graphics_preset(&h.app.preferences), "custom");
         }
+        assert_eq!(graphics_preset(&restored.preferences), "quality");
+        h.call("ui.prefs", json!({"open":"Graphics"}));
+        h.call("ui.prefs", json!({"button":"defaults"}));
+        assert_eq!(graphics_preset(&h.app.preferences), "performance");
+        h.call("ui.prefs", json!({"button":"ok"}));
         assert_eq!(h.app.preferences.msaa, msaa);
         assert_eq!(h.app.cam, camera);
         assert_eq!(h.app.session.doc.to_json(), design);

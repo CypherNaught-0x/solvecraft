@@ -8,7 +8,7 @@ use crate::{Result, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[
 CommandSpec::new("view.graphics_preset", "Graphics Preset", graphics_preset)
-    .icon("settings").noundo().doc_only().params("preset: performance|quality → preset, enabled; Quality enables ambient occlusion, Performance disables it"),
+    .icon("settings").noundo().doc_only().params("preset: performance|quality → preset, enabled, display_quality, supersampling, supersampling_adaptive; Quality: AO, Fine, adaptive 2x SSAA; Performance: no AO, Normal, no SSAA"),
 CommandSpec::new("view.ambient_occlusion", "Ambient Occlusion", ambient_occlusion)
     .icon("settings").noundo().doc_only().params("enabled: bool → enabled; apply soft contact shading in the GPU viewport"),
 CommandSpec::new("view.navigate", "Navigate View", navigate)
@@ -280,7 +280,7 @@ mod ambient_occlusion_tests {
     }
 }
 
-/// Presets currently select contact shading; anti-aliasing and view choices remain independent.
+/// One preset for contact shading, tessellation and supersampling. MSAA stays independent.
 fn graphics_preset(_s: &mut Session, p: &Value) -> Result<Value> {
     let preset = p.get("preset").and_then(Value::as_str);
     let enabled = match preset {
@@ -288,7 +288,8 @@ fn graphics_preset(_s: &mut Session, p: &Value) -> Result<Value> {
         Some("performance") => false,
         _ => return Err(bad("view.graphics_preset", "preset must be performance or quality")),
     };
-    Ok(json!({"preset": preset, "enabled": enabled}))
+    Ok(json!({"preset": preset, "enabled": enabled, "display_quality": if enabled { "fine" } else { "normal" },
+        "supersampling": if enabled { 2.0 } else { 1.0 }, "supersampling_adaptive": true}))
 }
 
 #[cfg(test)]
@@ -300,7 +301,11 @@ mod graphics_preset_tests {
         let mut s = Session::default();
         let before = s.doc.to_json();
         for (preset, enabled) in [("quality", true), ("performance", false)] {
-            assert_eq!(s.execute("view.graphics_preset", &json!({"preset":preset})).unwrap(), json!({"preset":preset,"enabled":enabled}));
+            assert_eq!(
+                s.execute("view.graphics_preset", &json!({"preset":preset})).unwrap(),
+                json!({"preset":preset,"enabled":enabled,"display_quality":if enabled { "fine" } else { "normal" },
+                    "supersampling":if enabled { 2.0 } else { 1.0 },"supersampling_adaptive":true})
+            );
         }
         for params in [json!({}), json!({"preset":"fast"}), json!({"preset":true}), json!({"preset":null})] {
             assert!(s.execute("view.graphics_preset", &params).is_err());

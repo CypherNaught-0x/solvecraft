@@ -3,13 +3,21 @@
 Enable **Ambient occlusion** in the viewport's **View settings** menu or in
 **Preferences → Graphics**. It adds soft contact shading at corners, recesses and
 nearby opaque surfaces. It is off by default, applies immediately, and is saved
-between runs. **Graphics Preset → Quality** enables it; **Performance** (the default)
-disables it. Both settings surfaces offer the selector, which stays synchronized with
-the Ambient occlusion checkbox. Presets apply immediately and leave anti-aliasing,
-ground shadow, projection and visual style unchanged. The **Display quality** selector
-(Coarse / Normal / Fine / Ultra, introduced in #1319) remains independent: changing
-an AO preset never changes tessellation quality, and changing tessellation quality
-never changes AO. Graphics preferences support Cancel, Apply and Restore Defaults.
+between runs. The shared **Graphics Preset** selector in both settings surfaces
+combines AO with the display-quality and supersampling controls from #1319 and #1321:
+
+| Preset | Ambient occlusion | Display quality | Supersampling |
+|---|---|---|---|
+| Performance (default) | Off | Normal | Off (1×) |
+| Quality | On | Fine | 2×, only while the view is still |
+| Custom | Your manual combination | Your manual combination | Your manual combination |
+
+Custom is derived from the current settings, not a third preset that overwrites them.
+Individual controls remain editable. Selecting a preset applies all three settings
+immediately; MSAA, ground shadow, projection and visual style stay unchanged.
+Graphics preferences support Cancel, Apply and Restore Defaults. Adaptive supersampling
+keeps #1321's 0.25-second settling delay, texture limit and 384 MiB memory cap;
+the requested 2× may be reduced or skipped when the device cannot accommodate it.
 
 The control channel and connected MCP clients can use the same command as the UI:
 
@@ -50,7 +58,11 @@ rebuilt by assigning the sample Plate opacity 0.99 and then restoring it to 1.0
 tessellation and the actual native viewport after that rebuild. The screenshots
 are attached in the review conversation, rather than committed as generated assets.
 
-## Native rendering performance (2026-10-15)
+## AO-only rendering performance (2026-10-15)
+
+These measurements predate the combined presets. They isolate AO at Normal
+tessellation with supersampling off; they are **not** timings for the combined
+Quality preset, which also requests Fine tessellation and adaptive 2× supersampling.
 
 Same M3 Pro / macOS machine and `ci` build profile as above (not a release-build
 claim). Window: 2400 × 1700 physical pixels; model viewport: 1900 × 1312.
