@@ -23,9 +23,9 @@ jobs:
           version: v0.16.0
       - name: Build opening regression and benchmark
         run: |
-          cargo test --profile ci -p solidcraft-cli --test open_performance --no-run
-          cargo test --profile ci -p solidcraft-kernel --lib -- blend_corner::setback::parametric::tests sloped_corner_display_normals_follow_the_surface
+          cargo --config 'profile.ci.package.solidcraft-kernel.opt-level=2' test --profile ci -p solidcraft-cli --test open_performance --no-run
+          cargo --config 'profile.ci.package.solidcraft-kernel.opt-level=2' test --profile ci -p solidcraft-kernel --lib -- blend_corner::setback::parametric::tests sloped_corner_display_normals_follow_the_surface
       - name: Measure complete opening test with phase timings
         run: |
           nproc
-          timeout 240 cargo test --profile ci -p solidcraft-cli --test open_performance -- --nocapture
+          timeout 240 cargo --config 'profile.ci.package.solidcraft-kernel.opt-level=2' test --profile ci -p solidcraft-cli --test open_performance -- --nocapture
