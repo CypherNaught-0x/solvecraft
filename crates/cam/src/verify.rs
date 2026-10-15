@@ -138,41 +138,7 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
             r.cutting_minutes += d / s.feed;
         }
     }
-    // Fixtures can be outside stock; explicitly check conservative swept bounding boxes.
-    for s in &segments {
-        if cancelled() {
-            return invalid("simulation cancelled");
-        }
-        let Some(t) = input.tools.iter().find(|t| t.id == s.tool) else {
-            if s.tool == 0 {
-                continue;
-            }
-            return invalid("unknown simulation tool");
-        };
-        for tri in &input.geometry.fixtures {
-            r.work += 1;
-            if r.work.is_multiple_of(4096) {
-                yield_control().await;
-                if cancelled() {
-                    return invalid("simulation cancelled");
-                }
-            }
-            if r.work > limits.work {
-                r.status = Status::Inconclusive;
-                break;
-            }
-            if swept_bounds_overlap(s, t, tri) {
-                r.findings.push(Finding {
-                    kind: "fixture_clearance_unresolved".into(),
-                    line: Some(s.line),
-                    at: s.to,
-                    detail: "Swept tool/holder bound intersects fixture; exact clearance is not certified".into(),
-                });
-                r.status = Status::Inconclusive;
-                break;
-            }
-        }
-    }
+    crate::collision::fixtures(input, &segments, limits, &cancelled, &mut yield_control, &mut r).await?;
     let mut pending = vec![([stock.min.x, stock.min.y], [stock.max.x, stock.max.y], 0u8)];
     let mut next_yield = 0;
     while let Some((min, max, depth)) = pending.pop() {
@@ -419,15 +385,6 @@ pub(crate) fn target_height(p: [f64; 2], half: f64, tris: &[[Vec3; 3]], bottom: 
     let complete = area >= 4.0 * half * half * (1.0 - 1e-8);
     (if complete { lo } else { bottom }, hi, !complete)
 }
-fn swept_bounds_overlap(s: &Segment, t: &Tool, tri: &[Vec3; 3]) -> bool {
-    let r = t.diameter.max(t.shank_diameter).max(t.holder_diameter) / 2.0;
-    let min = Vec3::new(s.from.x.min(s.to.x) - r, s.from.y.min(s.to.y) - r, s.from.z.min(s.to.z));
-    let max = Vec3::new(s.from.x.max(s.to.x) + r, s.from.y.max(s.to.y) + r, s.from.z.max(s.to.z) + t.overall_length + t.holder_length);
-    let tmin = Vec3::new(tri[0].x.min(tri[1].x).min(tri[2].x), tri[0].y.min(tri[1].y).min(tri[2].y), tri[0].z.min(tri[1].z).min(tri[2].z));
-    let tmax = Vec3::new(tri[0].x.max(tri[1].x).max(tri[2].x), tri[0].y.max(tri[1].y).max(tri[2].y), tri[0].z.max(tri[1].z).max(tri[2].z));
-    min.x <= tmax.x && max.x >= tmin.x && min.y <= tmax.y && max.y >= tmin.y && min.z <= tmax.z && max.z >= tmin.z
-}
-
 pub fn stock_stl(report: &Report, bottom: f64) -> Result<String> {
     if !bottom.is_finite() || report.cells.is_empty() || report.cells.len() > 1_000_000 {
         return invalid("invalid stock export bounds");

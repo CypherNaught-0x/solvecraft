@@ -70,7 +70,14 @@ pub fn input(s: &Session, program: u64) -> Result<cam::JobInput> {
     if tools.iter().map(|t| t.number).collect::<std::collections::BTreeSet<_>>().len() != tools.len() {
         return Err(EngineError::Other("CAM tools must have unique tool numbers within a program".into()));
     }
-    let geometry = cam::Geometry { target: mesh(s, &setup, &setup.models)?, fixtures: mesh(s, &setup, &setup.fixtures)? };
+    let mut fixtures = Vec::new();
+    let mut fixture_groups = Vec::new();
+    for reference in &setup.fixtures {
+        let triangles = mesh(s, &setup, std::slice::from_ref(reference))?;
+        fixture_groups.push(triangles.len());
+        fixtures.extend(triangles);
+    }
+    let geometry = cam::Geometry { target: mesh(s, &setup, &setup.models)?, fixtures, fixture_groups };
     let mut input = cam::JobInput { setup, operations, tools, geometry, fingerprint: String::new() };
     input.fingerprint = cam::fingerprint(&input).map_err(error)?;
     Ok(input)

@@ -67,9 +67,15 @@ The reader is a deliberately strict subset, not a general RS274 interpreter.
 ## Verification and present limits
 
 The independent verifier uses adaptive XY cells with conservative lower/upper stock heights,
-flat-mill or drill-cone removal, local target-surface checks, swept rapid/shank/holder bounds and
-fixture bounds. It does not call the offset or toolpath-generation algorithms. It checks
-cancellation during refinement. Fixture-bound overlap is **inconclusive**, never clear.
+flat-mill or drill-cone removal, local target-surface checks, and swept rapid/shank/holder bounds.
+Fixture checks use pinned `parry3d-f64 0.31.1` (Apache-2.0): separate cutter, drill cone, shank and
+holder shapes are swept against fixture triangles. Initial-distance and closed-volume winding
+checks catch stationary contact and tools already inside fixtures. Body groups preserve enclosed
+cavities and prevent opposite winding in separate fixtures from cancelling. Open/nonmanifold
+meshes, clearance within the interpolation/refinement margin, and failed numerical queries remain
+**inconclusive**. It does not call offset or toolpath-generation algorithms and observes cancellation
+during topology preparation and collision queries. These changes advance the algorithm fingerprint
+to `cam/2`.
 No target fitting, translation, unit guessing or discarded unknown NC commands is allowed.
 
 Default dimensional tolerance is 0.01 mm; interpolation/post error is 0.001 mm; requested spatial
@@ -87,7 +93,9 @@ independent point-height expectations; those probes do not replace whole-region 
 certification. This is an open M15 release gate, along with:
 
 - Certified surface-distance checks at vertical boundaries and detailed finished hole/wall dimensions.
-- Exact fixture contact refinement; supported stock/model geometry is vertical height-field scope.
+- Broader fixture regression coverage and performance acceptance; supported stock/model geometry
+  remains vertical height-field scope. Fixture triangles must form closed consistently wound bodies
+  for volume-containment certification; surface contact can still be detected on an open mesh.
 - A stitched watertight stock mesh. Current STL is the union of adaptive upper-bound cell columns,
   including internal faces. Exactly coplanar neighbors are merged without resampling; exports are
   bounded to 40,000 columns / 128 MiB and fail explicitly above that. It is a diagnostic approximation.

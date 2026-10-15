@@ -71,7 +71,7 @@ pub fn fixture(strategy: &str) -> Result<JobInput> {
         setup,
         tools: vec![tool],
         operations: vec![operation],
-        geometry: Geometry { target: vec![[a, b, c], [a, c, d]], fixtures: vec![] },
+        geometry: Geometry { target: vec![[a, b, c], [a, c, d]], fixtures: vec![], fixture_groups: vec![] },
         fingerprint: String::new(),
     };
     input.fingerprint = crate::fingerprint(&input)?;

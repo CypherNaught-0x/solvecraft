@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod collision;
 pub mod compare;
 pub mod corpus;
 pub mod generate;
@@ -18,7 +19,7 @@ pub(crate) fn invalid<T>(message: impl Into<String>) -> Result<T> {
     Err(Error(message.into()))
 }
 
-pub const VERSION: &str = "cam/1";
+pub const VERSION: &str = "cam/2";
 pub const TOLERANCE: f64 = 0.01;
 pub const POST_ERROR: f64 = 0.001;
 pub const VERIFY_ERROR: f64 = 0.0025;

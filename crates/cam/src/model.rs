@@ -377,6 +377,11 @@ pub struct Program {
 pub struct Geometry {
     pub target: Vec<[Vec3; 3]>,
     pub fixtures: Vec<[Vec3; 3]>,
+    /// Triangle counts for consecutive fixture bodies. Shells of one body share
+    /// a winding sum so enclosed cavities remain empty. Legacy snapshots contain
+    /// one triangle soup; an empty list treats that soup as one body.
+    #[serde(default)]
+    pub fixture_groups: Vec<usize>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JobInput {
@@ -405,6 +410,13 @@ impl JobInput {
         }
         if self.geometry.target.is_empty() || self.geometry.target.len() + self.geometry.fixtures.len() > 200_000 {
             return invalid("empty or excessive verification geometry");
+        }
+        if !self.geometry.fixture_groups.is_empty()
+            && (self.geometry.fixture_groups.len() > MAX_ITEMS
+                || self.geometry.fixture_groups.contains(&0)
+                || self.geometry.fixture_groups.iter().try_fold(0usize, |sum, n| sum.checked_add(*n)) != Some(self.geometry.fixtures.len()))
+        {
+            return invalid("invalid fixture body triangle groups");
         }
         for triangle in self.geometry.target.iter().chain(&self.geometry.fixtures) {
             for p in triangle {
