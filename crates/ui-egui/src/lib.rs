@@ -57,6 +57,8 @@ mod status_tests {
 #[cfg(test)]
 mod extrude_edit_tests;
 mod file_load;
+#[cfg(test)]
+mod file_ui_tests;
 mod manufacturing;
 pub mod palette;
 pub mod params_dialog;
@@ -469,6 +471,17 @@ impl SolveApp {
         }
         self.tool = None;
         self.home.open = false;
+        match id {
+            "file.save" => return toolbar::save(self),
+            "file.save_as" => return toolbar::save_as(self),
+            "doc.open" => {
+                if let Some(path) = self.services.pick_open.as_ref().and_then(|f| f()) {
+                    self.open_path_async(&path);
+                }
+                return;
+            }
+            _ => {}
+        }
         if matches!(id, "sketch.insert_dxf" | "sketch.insert_svg") {
             if let Some(path) = self.services.pick_open.as_ref().and_then(|f| f()) {
                 let _ = self.run(id, json!({"path": path}));

@@ -251,7 +251,7 @@ pub fn save(app: &mut SolveApp) {
     }
 }
 
-fn save_as(app: &mut SolveApp) {
+pub(crate) fn save_as(app: &mut SolveApp) {
     let name = format!("{}.{}", app.session.doc.name, solvecraft_engine::io::DESIGN_EXT);
     if let Some(p) = app.services.pick_save.as_ref().and_then(|f| f(&name, &[solvecraft_engine::io::DESIGN_EXT])) {
         let _ = app.run("file.save_as", json!({"path": p}));
@@ -546,12 +546,15 @@ pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
     if ctx.egui_wants_keyboard_input() {
         return;
     }
-    let (keys, mods) = ctx.input(|i| {
-        let keys: Vec<egui::Key> =
-            i.events.iter().filter_map(|e| if let egui::Event::Key { key, pressed: true, .. } = e { Some(*key) } else { None }).collect();
-        (keys, i.modifiers)
+    // A modifier can be released later in the same frame. Preserve the state
+    // attached to each key press instead of using the frame's final state.
+    let keys: Vec<_> = ctx.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|e| if let egui::Event::Key { key, pressed: true, modifiers, .. } = e { Some((*key, *modifiers)) } else { None })
+            .collect()
     });
-    for k in keys {
+    for (k, mods) in keys {
         use egui::Key;
         if mods.command {
             match k {

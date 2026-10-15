@@ -175,9 +175,10 @@ The Fusion oracle requires the same dimensional checks for both programs. Remain
 - Associated CAD curves use second-derivative chord-error bounds after placement, including a
   numerical reserve and a shared 10,000-vertex boundary limit. Requests exceeding precision or
   vertex budgets fail explicitly rather than silently loosening the operation tolerance.
-- Visible-UI regression coverage for all strategies and all local Fusion reference cases. Native
-  facing generate/simulate/post/save/reopen/edit/regenerate has been exercised, including stale-result
-  feedback after changing coolant.
+- Broader visible-UI regression coverage and all local Fusion reference cases. A native desktop
+  walkthrough now passes for one original CAD case per strategy, including generation, simulation,
+  posting through the system save dialog, save/reopen/edit/regenerate, stock display and playback.
+  This limited positive-case coverage does not replace the broader acceptance corpus.
 
 These gates must be closed before calling M15 complete or claiming Fusion machining parity.
 
@@ -255,8 +256,20 @@ check cancellation. Cancellation returns no partial mesh; synchronous STL export
 implementation. Native UI tests cover stock-frame
 placement, visibility, stale results and playback boundaries. The four-strategy headless UI
 walkthrough exercises background generation/simulation, posting, stock selection and playback zero,
-with CPU-rendered stock views. Interactive desktop-window coverage remains an acceptance task.
+with CPU-rendered stock views. A separate native desktop-window walkthrough exercises facing,
+internal contouring, pocketing and peck drilling on original CAD plates. Contour and pocket
+operations retain associated circular sketch boundaries and ramp entry; drilling retains a
+cylindrical face selected in the viewport. Closing and reopening the saved designs clears derived
+jobs while retaining those references. Editing coolant in the operation dialog and regenerating
+passes clearance and finished-dimension checks for each case. Native-posted contour, pocket and
+drill files match their command exports byte for byte. Playback, final-stock display and stale-post
+rejection were also checked. Local artifacts and screenshots are in ignored
+`target/cam-native-acceptance/`; this is SolveCraft evidence, not a Fusion comparison.
 
+Interactive Save, Save As and Open use the same picker/background-loading flows as the toolbar;
+JSON commands remain dialog-free. Keyboard shortcuts use the modifier state on each key event,
+so a quick Command/Ctrl+S still saves if the modifier is released in the same frame. Regression
+tests cover these flows, cancelled pickers and persistence of manufacturing definitions.
 
 Verification findings include a one-based interpreted NC `record` when a physical line is
 known. SolveCraft's independent post round trip also attaches `source` with physical line,
