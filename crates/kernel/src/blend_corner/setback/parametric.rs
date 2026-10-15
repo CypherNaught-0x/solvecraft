@@ -159,7 +159,16 @@ pub(crate) fn fit(
         let cy = solve_fixed(ry, &jets.iter().map(|(i, p)| (*i, p.dot(y))).collect())?;
         let cz = solve_fixed(rz, &jets.iter().map(|(i, p)| (*i, p.dot(z))).collect())?;
         let projection: Vec<_> = cx.iter().zip(&cy).map(|(a, b)| x * *a + y * *b).collect();
-        let project = |bu: &[f64], bv: &[f64]| tensor(bu, bv, 1.0, 0.0).entries.iter().fold(Vec3::ZERO, |s, (i, w)| s + projection[*i] * *w);
+        let project = |bu: &[f64], bv: &[f64]| {
+            let mut p = Vec3::ZERO;
+            for (i, a) in bu.iter().enumerate().filter(|(_, a)| a.abs() > 1e-14) {
+                for (j, b) in bv.iter().enumerate().filter(|(_, b)| b.abs() > 1e-14) {
+                    p += projection[i * n + j] * (a * b);
+                }
+            }
+            p
+        };
+        let mut row_sum = RowSum::new(n * n);
         let mut rows = Vec::new();
         for side in 0..4 {
             for i in 0..=1024 {
@@ -207,13 +216,10 @@ pub(crate) fn fit(
                         .map(|p| [p.dot(x), p.dot(y)]);
                     let (_, h) = physical_curvature_weights(d).ok_or_else(|| unsupported("singular section map"))?;
                     let weights: [f64; 5] = std::array::from_fn(|k| ax * ax * h[0][k] + 2.0 * ax * ay * h[1][k] + ay * ay * h[2][k]);
-                    let mut entries = std::collections::BTreeMap::new();
                     for ((aa, bb), c) in [(&ddu, &bv), (&du, &dv), (&bu, &ddv), (&du, &bv), (&bu, &dv)].into_iter().zip(weights) {
-                        for (index, value) in tensor(aa, bb, c * size * (corners[1] - corners[0]).len(), 0.0).entries {
-                            *entries.entry(index).or_insert(0.0) += value;
-                        }
+                        row_sum.add_product(aa, bb, c * size * (corners[1] - corners[0]).len());
                     }
-                    rows.push(Row { entries: entries.into_iter().collect(), rhs: 0.0 });
+                    rows.push(row_sum.finish());
                 }
             }
         }
@@ -302,24 +308,18 @@ pub(crate) fn fit(
                 {
                     let directional: [f64; 5] =
                         std::array::from_fn(|k| ax * ax * weights[0][k] + 2.0 * ax * ay * weights[1][k] + ay * ay * weights[2][k]);
-                    let mut entries = std::collections::BTreeMap::new();
                     for ((aa, bb), c) in [(ddu, bv), (du, dv), (bu, ddv), (du, bv), (bu, dv)].into_iter().zip(directional) {
-                        for (index, value) in tensor(aa, bb, c * w * 3.0, 0.0).entries {
-                            *entries.entry(index).or_insert(0.0) += value;
-                        }
+                        row_sum.add_product(aa, bb, c * w * 3.0);
                     }
-                    rows.push(Row { entries: entries.into_iter().collect(), rhs: 0.0 });
+                    rows.push(row_sum.finish());
                 }
                 // The radial chart collapses at the tip. Penalize curvature in
                 // physical projected coordinates, not derivatives of that chart.
                 for ([a, b, c, cu, cv], factor) in weights.into_iter().zip([1.0, 2.0_f64.sqrt(), 1.0]) {
-                    let mut entries = std::collections::BTreeMap::new();
                     for (aa, bb, coefficient) in [(ddu, bv, a), (du, dv, b), (bu, ddv, c), (du, bv, cu), (bu, dv, cv)] {
-                        for (index, value) in tensor(aa, bb, coefficient * w * factor, 0.0).entries {
-                            *entries.entry(index).or_insert(0.0) += value;
-                        }
+                        row_sum.add_product(aa, bb, coefficient * w * factor);
                     }
-                    rows.push(Row { entries: entries.into_iter().collect(), rhs: 0.0 });
+                    rows.push(row_sum.finish());
                 }
             }
         }
@@ -646,6 +646,47 @@ fn certify_with_correction(
     Ok(())
 }
 
+/// Sum sparse tensor rows without allocating a tree node per coefficient. Preserve
+/// both the summation order and explicit zeros, so the QR system is unchanged.
+struct RowSum {
+    values: Vec<f64>,
+    present: Vec<bool>,
+    touched: Vec<usize>,
+}
+impl RowSum {
+    fn new(count: usize) -> Self {
+        Self { values: vec![0.0; count], present: vec![false; count], touched: Vec::with_capacity(36) }
+    }
+
+    fn add_product(&mut self, a: &[f64], b: &[f64], weight: f64) {
+        for (i, x) in a.iter().enumerate().filter(|(_, x)| x.abs() > 1e-14) {
+            for (j, y) in b.iter().enumerate().filter(|(_, y)| y.abs() > 1e-14) {
+                let index = i * b.len() + j;
+                if !self.present[index] {
+                    self.present[index] = true;
+                    self.touched.push(index);
+                }
+                self.values[index] += x * y * weight;
+            }
+        }
+    }
+
+    fn finish(&mut self) -> Row {
+        self.touched.sort_unstable();
+        let entries = self
+            .touched
+            .drain(..)
+            .map(|i| {
+                let value = self.values[i];
+                self.values[i] = 0.0;
+                self.present[i] = false;
+                (i, value)
+            })
+            .collect();
+        Row { entries, rhs: 0.0 }
+    }
+}
+
 /// Banded QR avoids squaring the condition number of vanishing endpoint jets.
 fn solve_qr(rows: &[Row], count: usize) -> Result<Vec<f64>> {
     let width = rows.iter().filter_map(|r| Some(r.entries.last()?.0 - r.entries.first()?.0)).max().unwrap_or(0);
@@ -726,6 +767,17 @@ fn solve_qr(rows: &[Row], count: usize) -> Result<Vec<f64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sparse_row_sum_preserves_cancellation_and_resets() {
+        let mut sum = RowSum::new(9);
+        sum.add_product(&[0.0, 2.0, 3.0], &[1.0, 0.0, 4.0], 0.5);
+        sum.add_product(&[0.0, 1.0, 0.0], &[1.0, 5.0, 0.0], -1.0);
+        assert_eq!(sum.finish().entries, vec![(3, 0.0), (4, -5.0), (5, 4.0), (6, 1.5), (8, 6.0)]);
+        sum.add_product(&[1.0, 0.0, 0.0], &[0.0, 2.0, 0.0], 3.0);
+        assert_eq!(sum.finish().entries, vec![(1, 6.0)]);
+        assert!(sum.finish().entries.is_empty());
+    }
 
     #[test]
     fn physical_curvature_is_independent_of_a_cubic_parameter_map() {

@@ -153,13 +153,13 @@ pub(super) fn build(
     crate::blend_corner::setback::partition::check(&pieces.iter().map(|(wire, _, _)| wire.clone()).collect::<Vec<_>>(), out, size)?;
     let mut fitted = Vec::new();
     for density in [20, 32, 40, 56] {
-        let attempt = pieces
-            .iter()
-            .map(|(wire, conditions, singular)| {
-                crate::blend_corner::setback::parametric::fit(conditions, *singular, out, size, planes, density)
-                    .map(|surface| (wire.clone(), surface))
-            })
-            .collect::<Result<Vec<_>>>();
+        // Each sector has its own fit and certificate. Fit them concurrently,
+        // retaining their boundary order, before validating and sewing the seams.
+        let attempt = crate::par::map("fillet fan sector", &pieces, true, |(wire, conditions, singular)| {
+            crate::blend_corner::setback::parametric::fit(conditions, *singular, out, size, planes, density).map(|surface| (wire.clone(), surface))
+        })
+        .into_iter()
+        .collect::<Result<Vec<_>>>();
         if let Ok(value) = attempt {
             fitted = value;
             break;

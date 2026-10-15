@@ -108,3 +108,22 @@ feature errors, 14 bodies and 98,596 display triangles. The higher triangle coun
 reflects normal-aware rendering of the corner fills. The 60-second end-to-end
 opening guard remains unchanged. This is a local measurement, not a controlled
 cross-version benchmark.
+
+On Linux CI after rebasing to `16c49c3e`, the same document measured 105.04 seconds
+of evaluation plus 6.95 seconds of display preparation. Independent fan sectors
+now fit concurrently through the guarded worker pool. Endpoint dispatch samples
+edge curves without tessellating prior fills, and constraint assembly reuses a
+sparse accumulator instead of allocating temporary tensor rows and tree nodes.
+The coefficient accumulation order, explicit zero entries, QR equations,
+quadrature, and acceptance certificates are unchanged. A subsequent Linux run
+measured 42.77 seconds of evaluation plus 4.65 seconds of display preparation,
+with zero feature errors, 14 bodies and 98,761 triangles. These are separate CI
+runs, not a controlled microbenchmark; the opening test still has its 60-second
+limit and full document/cache assertions.
+
+Endpoint fills explicitly use the normal-aware reference mesher. The generic
+planner can sometimes succeed on their singular charts, but does not perform
+the limiting-normal refinement they need. On Linux this routing change reduced
+the small sloped-corner test's worst interpolated normal error from 41.47 degrees
+to 0.735 degrees, and its display mesh from 79,258 triangles to 19,029. The test's
+one-degree error limit and 20,000-triangle budget are unchanged.

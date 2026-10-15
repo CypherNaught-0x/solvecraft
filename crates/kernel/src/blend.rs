@@ -1897,12 +1897,31 @@ pub fn fillet(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
 /// Perpendicular caps and edges between curved faces gain nothing from this fallback; do
 /// not repeat their rolling-ball attempts just because another selected edge is straight.
 fn endpoint_case(body: &Body, points: &[Vec3]) -> Result<(bool, bool)> {
+    use mt::{BoundedCurve, ParametricCurve};
+    use truck_meshalgo::prelude::{Deflection, bounded_curve_parameters};
     let solid = &*body.solid;
     let edges = Body::unique_edges(solid);
+    // Dispatch only needs the edge curves. Meshing every face here repeats the
+    // expensive work on earlier endpoint fills before the actual blend starts.
+    let tol = (body.size() * 2e-3).max(1e-3);
+    let polylines: Vec<Vec<Vec3>> = edges
+        .iter()
+        .map(|e| match e.curve() {
+            mt::Curve::Line(_) => vec![vtx(e.front()), vtx(e.back())],
+            c => bounded_curve_parameters(&c, c.range_tuple(), Deflection::chord(tol)).into_iter().map(|t| from_p3(c.subs(t))).collect(),
+        })
+        .collect();
     let mut candidate = false;
     let mut inner = false;
     for p in points {
-        let Some((index, _)) = body.nearest_edge(*p, (body.size() * 2e-3).max(1e-3))? else { continue };
+        let nearest = polylines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, line)| line.windows(2).map(|ab| p.dist_to_segment(ab[0], ab[1])).min_by(f64::total_cmp).map(|d| (i, d)));
+        let Some((index, distance)) = nearest.min_by(|a, b| a.1.total_cmp(&b.1)) else { continue };
+        if distance > body.size() * 0.05 + 1e-3 {
+            continue;
+        }
         let Some(edge) = edges.get(index) else { continue };
         if !crate::blend_end::can_trim(solid, edge) || perpendicular_end_caps(solid, edge) {
             continue;
