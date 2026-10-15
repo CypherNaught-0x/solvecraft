@@ -4,12 +4,15 @@ use crate::*;
 use serde::{Deserialize, Serialize};
 use solvecraft_geom::Vec3;
 
-pub const DIALECT: &str = "solvecraft-reference-3axis/1; not a qualified machine post";
+pub const DIALECT: &str = "solvecraft-reference-3axis/2; not a qualified machine post";
+fn startup(setup: &Setup) -> [Motion; 3] {
+    [Motion::Spindle { rpm: 0.0 }, Motion::Coolant { on: false }, Motion::Rapid { to: Vec3::new(0., 0., setup.clearance) }]
+}
 pub fn post(path: &Toolpath, setup: &Setup) -> Result<String> {
     if path.blocks.is_empty() {
         return invalid("cannot post an empty path");
     }
-    let mut out = format!("({DIALECT})\n(Fingerprint {})\nG21 G90 G17 G94 G{} G40 G49 G80\n", path.fingerprint, setup.work_offset);
+    let mut out = format!("({DIALECT})\n(Fingerprint {})\nG21 G90 G17 G91.1 G94 G{} G40 G49 G80\nM5\nM9\n", path.fingerprint, setup.work_offset);
     let mut current = Vec3::new(0.0, 0.0, setup.clearance);
     out.push_str(&format!("G0 X0.000000 Y0.000000 Z{:.6}\n", setup.clearance));
     for block in &path.blocks {
@@ -223,6 +226,11 @@ pub fn parse(source: &str, tools: &[Tool]) -> Result<Parsed> {
         if moving && m.is_some() {
             return Err(fail("combined motion/M blocks unsupported by reference dialect"));
         }
+        // Speed changes precede motion and coolant/stop commands in a block.
+        // Other spindle-changing M codes below already emit its final state.
+        if seen.contains(&'S') && spindle_on && !matches!(m, Some(3 | 5 | 6 | 2 | 30)) {
+            out.push(Record { line: line_number, motion: Motion::Spindle { rpm } });
+        }
         if moving {
             let scale = units.ok_or_else(|| fail("missing units"))?;
             let abs = absolute.ok_or_else(|| fail("missing distance mode"))?;
@@ -290,6 +298,12 @@ pub fn parse(source: &str, tools: &[Tool]) -> Result<Parsed> {
                     if matches.len() != 1 {
                         return Err(fail("unknown or ambiguous tool number"));
                     }
+                    // NIST RS274/NGC §3.6.3: M6 stops the spindle without
+                    // restarting it; programmed speed and coolant are retained.
+                    if spindle_on {
+                        out.push(Record { line: line_number, motion: Motion::Spindle { rpm: 0.0 } });
+                    }
+                    spindle_on = false;
                     Some(Motion::Tool { tool: matches[0].id, number: n })
                 }
                 8 => {
@@ -316,8 +330,6 @@ pub fn parse(source: &str, tools: &[Tool]) -> Result<Parsed> {
             if let Some(motion) = motion {
                 out.push(Record { line: line_number, motion });
             }
-        } else if seen.contains(&'S') && spindle_on {
-            out.push(Record { line: line_number, motion: Motion::Spindle { rpm } });
         }
     }
     if !ended || !have_pos {
@@ -380,12 +392,19 @@ fn words(line: &str) -> Result<Vec<(char, f64)>> {
 
 pub fn round_trip(path: &Toolpath, setup: &Setup, tools: &[Tool]) -> Result<Parsed> {
     let mut parsed = parse(&post(path, setup)?, tools)?;
-    if parsed.work_offset != setup.work_offset || parsed.records.len() != path.blocks.len() + 1 {
+    let startup = startup(setup);
+    if parsed.work_offset != setup.work_offset || parsed.records.len() != path.blocks.len() + startup.len() {
         return invalid("post changed block count or work offset");
+    }
+    if !startup.iter().zip(&parsed.records).all(|(a, b)| equivalent(a, &b.motion)) {
+        return invalid("post changed startup state");
     }
     let mut original_position = Vec3::new(0., 0., setup.clearance);
     let mut posted_position = original_position;
-    for (i, (a, b)) in path.blocks.iter().zip(parsed.records.iter().skip(1)).enumerate() {
+    if let Some(Record { motion: Motion::Rapid { to }, .. }) = parsed.records.get(startup.len() - 1) {
+        posted_position = *to;
+    }
+    for (i, (a, b)) in path.blocks.iter().zip(parsed.records.iter().skip(startup.len())).enumerate() {
         if !equivalent(&a.motion, &b.motion) {
             return invalid(format!("post mismatch at NC line {}", b.line));
         }
@@ -543,16 +562,19 @@ mod provenance_tests {
             ],
         };
         let parsed = round_trip(&path, &input.setup, &input.tools).unwrap();
-        for (i, record) in parsed.records.iter().skip(1).enumerate() {
+        let prefix = startup(&input.setup).len();
+        for (i, record) in parsed.records.iter().skip(prefix).enumerate() {
             assert_eq!(
                 parsed.source_for_line(record.line),
                 Some(SourceLocation { line: record.line, block: i + 1, operation: path.blocks[i].operation })
             );
-            assert_eq!(parsed.record_for_line(record.line), Some(i + 1));
+            assert_eq!(parsed.record_for_line(record.line), Some(i + prefix));
         }
-        assert!(parsed.source_for_line(4).is_none()); // startup pose
-        assert!(parsed.source_for_line(5).is_none()); // comment
-        let arc = &parsed.records[4];
+        for record in parsed.records.iter().take(prefix) {
+            assert!(parsed.source_for_line(record.line).is_none());
+        }
+        assert!(parsed.source_for_line(7).is_none()); // comment
+        let arc = &parsed.records[prefix + 3];
         let segments = segments(&parsed, &input.setup).unwrap();
         assert!(segments.iter().filter(|s| s.line == arc.line).count() > 10);
         assert!(segments.iter().filter(|s| s.line == arc.line).all(|s| parsed.source_for_line(s.line).unwrap().block == 4));
@@ -583,7 +605,7 @@ mod provenance_tests {
         let source = finding.source.unwrap();
         assert_eq!(Some(source.line), finding.line);
         assert_eq!(source.operation, path.blocks[source.block - 1].operation);
-        assert_eq!(finding.record, Some(source.block + 1)); // initial pose is the first NC record
+        assert_eq!(finding.record, Some(source.block + startup(&input.setup).len()));
         let raw = parse(&post(&path, &input.setup).unwrap(), &input.tools).unwrap();
         let raw_report = verify::simulate(&input, &raw, Default::default()).unwrap();
         assert_eq!(raw_report.status, report.status);

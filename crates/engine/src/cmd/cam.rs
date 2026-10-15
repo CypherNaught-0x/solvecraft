@@ -344,7 +344,7 @@ mod tests {
         let v = s.execute("cam.simulate", &json!({"job":id})).unwrap();
         assert_eq!(v["verification"]["status"], "pass", "{v}");
         let posted = s.execute("cam.post", &json!({"job":id})).unwrap();
-        assert!(posted["content"].as_str().unwrap().contains("G21 G90 G17 G94 G54"));
+        assert!(posted["content"].as_str().unwrap().contains("G21 G90 G17 G91.1 G94 G54 G40 G49 G80\nM5\nM9\n"));
         for format in ["toolpath", "setup_sheet", "validation", "stock"] {
             assert!(!s.execute("cam.export", &json!({"job":id,"format":format})).unwrap()["content"].as_str().unwrap().is_empty());
         }

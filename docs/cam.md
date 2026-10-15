@@ -63,7 +63,9 @@ these avoid merging small distinct slices in round-island pockets with upstream 
 
 The post emits tool-tip coordinates, three linear axes, absolute mm positioning, XY arcs with
 incremental I/J centers, units-per-minute feed and geometrically applied cutter compensation.
-It explicitly initializes G21/G90/G17/G94/G54–59/G40/G49/G80, emits tool/spindle/coolant events,
+Post version `solvecraft-reference-3axis/2` explicitly initializes
+G21/G90/G17/G91.1/G94/G54–59/G40/G49/G80 and stops the spindle and coolant with M5/M9
+before the declared initial pose. It emits tool/spindle/coolant events,
 and expands drilling. Startup is a declared position at clearance; physical travel to that
 initial pose is outside this reference dialect's contract. There is no machine kinematics,
 G28/G53 homing, length offset activation, canned cycle or controller-specific behavior.
@@ -71,8 +73,12 @@ G28/G53 homing, length offset activation, canned cycle or controller-specific be
 The separate NC reader consumes every word and rejects unsupported commands. It supports G20
 and G91 for comparison, but requires complete absolute XYZ for the initial pose. Modal groups,
 units, feed, tool changes, spindle state, planar arc radii and program termination are checked.
-Program end includes spindle/coolant shutdown in the interpreted event stream. Posted motions
-are compared against the pre-post typed IR with a 0.001 mm error budget.
+M6 stops the spindle, preserves coolant and the programmed speed, and requires a subsequent
+M3 before cutting. Speed words take effect before motion and alongside coolant/stop commands.
+Program end includes spindle/coolant shutdown in the interpreted event stream. Hand-authored
+modal programs check these transitions and reject cutting with a stopped spindle. The post
+round trip checks its three startup events separately, without assigning them an operation;
+subsequent motions are compared against the pre-post typed IR with a 0.001 mm error budget.
 
 Semantics reference: [NIST RS274/NGC](https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=823374).
 The reader is a deliberately strict subset, not a general RS274 interpreter.
@@ -87,7 +93,8 @@ checks catch stationary contact and tools already inside fixtures. Body groups p
 cavities and prevent opposite winding in separate fixtures from cancelling. Open/nonmanifold
 meshes, clearance within the interpolation/refinement margin, and failed numerical queries remain
 **inconclusive**. It does not call offset or toolpath-generation algorithms and observes cancellation
-during topology preparation and collision queries. The current algorithm fingerprint is `cam/13`.
+during topology preparation and collision queries. The current algorithm fingerprint is `cam/15`;
+the machine-state corrections invalidate older generated/verified caches.
 No target fitting, translation, unit guessing or discarded unknown NC commands is allowed.
 
 Default dimensional tolerance is 0.01 mm; interpolation/post error is 0.001 mm; requested spatial
@@ -286,7 +293,11 @@ reversed winding, narrow channels, round profiles, offsets, through holes and mu
 All Fusion-produced files and derived reports belong in ignored `plan/` or outside the repository.
 The oracle refuses an unignored in-repository destination. Commit only original recipes, harness
 code and independently authored expectations. No vendor post source, templates or assets are
-part of SolveCraft. The current local capture is incomplete and contributes no parity passes.
+part of SolveCraft. One local facing capture now passes input reconciliation, setup values,
+clearance and dimensional checks, and all three NC/stock comparisons. Contour, pocket and drill
+captures remain incomplete, so the oracle reports 1/4 and does not establish full milestone parity.
+The captured simulation uses Fusion's unlabeled Accuracy slider; numeric resolution is recorded
+as not reported, without substituting the independent verifier's resolution.
 
 ## Manufacture display and playback
 
