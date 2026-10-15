@@ -1,8 +1,9 @@
 //! Immutable CAM jobs, independent of the desktop UI and document undo state.
 use crate::{EngineError, Result, Session, cam};
+mod snapshot;
 use std::collections::BTreeMap;
 use std::sync::{
-    Arc, Mutex,
+    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
@@ -12,18 +13,20 @@ pub struct Jobs {
     pub next: u64,
 }
 pub struct Job {
-    pub source: String,
     pub source_doc: Arc<solvecraft_doc::Document>,
     pub source_moves: BTreeMap<u64, solvecraft_doc::Mat>,
-    pub input: cam::JobInput,
+    input: Arc<OnceLock<cam::JobInput>>,
+    snapshot: Mutex<Option<snapshot::Snapshot>>,
+    stock: Arc<Mutex<Option<std::result::Result<Arc<crate::geom::Mesh>, String>>>>,
     pub cancelled: Arc<AtomicBool>,
     #[cfg(target_arch = "wasm32")]
-    pending: Mutex<Option<std::pin::Pin<Box<dyn std::future::Future<Output = cam::Result<JobState>>>>>>,
+    pending: Mutex<Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<JobState>>>>>>,
     pub progress: Arc<AtomicUsize>,
-    pub result: Mutex<JobState>,
+    pub result: Arc<Mutex<JobState>>,
 }
 #[derive(Clone)]
 pub enum JobState {
+    Preparing,
     Running,
     Generated(Arc<cam::Toolpath>),
     Verifying(Arc<cam::Toolpath>),
@@ -32,147 +35,42 @@ pub enum JobState {
     Cancelled,
 }
 impl Job {
+    /// Display geometry is a derived cache. It never substitutes for a verification report.
+    pub fn stock_mesh(&self) -> Result<Option<Arc<crate::geom::Mesh>>> {
+        if !matches!(self.state()?, JobState::Verified(..)) {
+            return Ok(None);
+        }
+        match self.stock.lock().map_err(|_| EngineError::Other("CAM stock display unavailable".into()))?.as_ref() {
+            Some(Ok(mesh)) => Ok(Some(mesh.clone())),
+            Some(Err(e)) => Err(EngineError::Other(e.clone())),
+            None => Ok(None),
+        }
+    }
+    pub fn input(&self) -> Result<&cam::JobInput> {
+        self.input.get().ok_or_else(|| EngineError::Other("CAM input is still being prepared".into()))
+    }
     pub fn state(&self) -> Result<JobState> {
         self.result.lock().map(|s| s.clone()).map_err(|_| EngineError::Other("CAM worker state unavailable".into()))
     }
     pub fn set(&self, state: JobState) {
         if let Ok(mut s) = self.result.lock() {
-            *s = state;
+            *s = if self.cancelled.load(Ordering::Relaxed) { JobState::Cancelled } else { state };
         }
     }
-}
-pub fn source(s: &Session) -> Result<String> {
-    cam::fingerprint(&(&*s.doc, &s.pending_moves)).map_err(error)
 }
 pub fn error(e: cam::Error) -> EngineError {
     EngineError::Other(e.to_string())
 }
 pub fn input(s: &Session, program: u64) -> Result<cam::JobInput> {
-    s.doc.manufacturing.validate().map_err(error)?;
-    let m = &s.doc.manufacturing;
-    let p = m.programs.iter().find(|p| p.id == program).ok_or_else(|| EngineError::Other("CAM program not found".into()))?;
-    let setup = m.setups.iter().find(|x| x.id == p.setup).cloned().ok_or_else(|| EngineError::Other("CAM setup missing".into()))?;
-    let mut operations = p
-        .operations
-        .iter()
-        .map(|id| m.operations.iter().find(|o| o.id == *id).cloned().ok_or_else(|| EngineError::Other("CAM operation missing".into())))
-        .collect::<Result<Vec<_>>>()?;
-    for o in &mut operations {
-        if let Some(source) = &o.source {
-            let boundary = profile_boundary(s, &setup, source, o.tolerance)?;
-            match &mut o.geometry {
-                cam::Strategy::Contour { boundary: b, .. } | cam::Strategy::Pocket { boundary: b } => *b = boundary,
-                _ => return Err(EngineError::Other("profile bound to unsupported operation".into())),
-            }
-        }
-    }
-    let tools = m.tools.iter().filter(|t| operations.iter().any(|o| o.tool == t.id)).cloned().collect::<Vec<_>>();
-    if tools.iter().map(|t| t.number).collect::<std::collections::BTreeSet<_>>().len() != tools.len() {
-        return Err(EngineError::Other("CAM tools must have unique tool numbers within a program".into()));
-    }
-    let mut fixtures = Vec::new();
-    let mut fixture_groups = Vec::new();
-    for reference in &setup.fixtures {
-        let triangles = mesh(s, &setup, std::slice::from_ref(reference))?;
-        fixture_groups.push(triangles.len());
-        fixtures.extend(triangles);
-    }
-    let geometry = cam::Geometry { target: mesh(s, &setup, &setup.models)?, fixtures, fixture_groups };
-    let mut input = cam::JobInput { setup, operations, tools, geometry, fingerprint: String::new() };
-    input.fingerprint = cam::fingerprint(&input).map_err(error)?;
-    Ok(input)
+    snapshot::ready(snapshot::Snapshot::capture(s, program)?.build(&|| false, &|_| {}, &mut || std::future::ready(())))
 }
 pub fn profile_boundary(s: &Session, setup: &cam::Setup, source: &cam::ProfileRef, tolerance: f64) -> Result<cam::Boundary> {
-    let state = s.model.state();
-    let sketch = state
-        .sketches
-        .iter()
-        .find(|x| x.feature == source.sketch)
-        .ok_or_else(|| EngineError::Other("CAM sketch missing; reselect the profile".into()))?;
-    let mut wanted = source.curves.clone();
-    wanted.sort();
-    let candidates: Vec<_> = sketch
-        .profiles
-        .iter()
-        .filter(|p| {
-            let mut ids = p.curve_ids();
-            ids.sort();
-            ids == wanted
-        })
-        .collect();
-    if candidates.len() != 1 {
-        return Err(EngineError::Other("CAM profile missing or ambiguous; reselect it".into()));
-    }
-    let component = s.doc.feature(source.sketch).map(|f| f.component).ok_or_else(|| EngineError::Other("CAM sketch feature missing".into()))?;
-    let transform = if source.occurrence.is_empty() {
-        if component != 0 {
-            return Err(EngineError::Other("CAM sketch needs an explicit occurrence path".into()));
-        }
-        solvecraft_doc::IDENTITY
-    } else {
-        let p = s.occurrence_placement(&source.occurrence)?;
-        if p.component != component {
-            return Err(EngineError::Other("CAM sketch occurrence mismatch".into()));
-        }
-        p.world
-    };
-    let convert = |ring: &crate::geom::Loop2| -> Result<Vec<[f64; 2]>> {
-        let mut points = Vec::new();
-        let mut z = None;
-        for p in ring.polyline(cam::profile_tolerance(tolerance)) {
-            let v = setup.frame.local(solvecraft_doc::apply_point(&transform, sketch.plane.to_world(p)));
-            if z.is_some_and(|z: f64| (z - v.z).abs() > tolerance / 4.0) {
-                return Err(EngineError::Other("CAM profile must be perpendicular to setup Z".into()));
-            }
-            z = Some(v.z);
-            points.push([v.x, v.y]);
-        }
-        if points.first() == points.last() {
-            points.pop();
-        }
-        Ok(points)
-    };
-    let p = candidates[0];
-    Ok(cam::Boundary { outer: convert(&p.region.outer)?, islands: p.region.holes.iter().map(convert).collect::<Result<Vec<_>>>()? })
-}
-fn mesh(s: &Session, setup: &cam::Setup, refs: &[cam::BodyRef]) -> Result<Vec<[crate::geom::Vec3; 3]>> {
-    let state = s.model.state();
-    let mut triangles = Vec::new();
-    for r in refs {
-        let candidates: Vec<_> = state.bodies.iter().filter(|b| b.name == r.body).collect();
-        if candidates.len() != 1 {
-            return Err(EngineError::Other(format!("CAM body `{}` missing or ambiguous; reselect it", r.body)));
-        }
-        let b = candidates[0];
-        let component = s.doc.model_body_component(b);
-        let placement = if r.occurrence.is_empty() {
-            if component != 0 {
-                return Err(EngineError::Other("CAM component body requires an occurrence path".into()));
-            }
-            solvecraft_doc::IDENTITY
-        } else {
-            let p = s.occurrence_placement(&r.occurrence)?;
-            if p.component != component {
-                return Err(EngineError::Other("CAM body no longer belongs to selected occurrence".into()));
-            }
-            p.world
-        };
-        let transform = s.doc.model_body_offset(b).map(|offset| solvecraft_doc::mat_mul(&placement, offset)).unwrap_or(placement);
-        let mesh = b.body.tessellate(cam::VERIFY_ERROR / 2.0)?;
-        for indices in &mesh.triangles {
-            let tri = mesh.tri(indices).ok_or_else(|| EngineError::Other("CAM mesh contains invalid indices".into()))?;
-            triangles.push(tri.map(|v| setup.frame.local(solvecraft_doc::apply_point(&transform, v))));
-            if triangles.len() > 200_000 {
-                return Err(EngineError::Other("CAM mesh exceeds verification budget".into()));
-            }
-        }
-    }
-    Ok(triangles)
+    snapshot::ready(snapshot::Profile::capture(s, setup, source, tolerance)?.sample(&|| false, &mut || std::future::ready(())))
 }
 pub fn start(s: &mut Session, program: u64, background: bool) -> Result<u64> {
     if s.cam_jobs.jobs.len() >= 16 {
         let removable = s.cam_jobs.jobs.iter().find_map(|(id, j)| match j.state() {
-            Ok(JobState::Running | JobState::Verifying(_)) => None,
+            Ok(JobState::Preparing | JobState::Running | JobState::Verifying(_)) => None,
             _ => Some(*id),
         });
         if let Some(id) = removable {
@@ -181,17 +79,18 @@ pub fn start(s: &mut Session, program: u64, background: bool) -> Result<u64> {
             return Err(EngineError::Other("too many running CAM jobs".into()));
         }
     }
-    let input = input(s, program)?;
+    let snapshot = snapshot::Snapshot::capture(s, program)?;
     let job = Arc::new(Job {
-        source: source(s)?,
         source_doc: s.doc.clone(),
         source_moves: s.pending_moves.clone(),
-        input,
+        input: Arc::new(OnceLock::new()),
+        snapshot: Mutex::new(Some(snapshot)),
+        stock: Arc::new(Mutex::new(None)),
         cancelled: Arc::new(AtomicBool::new(false)),
         #[cfg(target_arch = "wasm32")]
         pending: Mutex::new(None),
         progress: Arc::new(AtomicUsize::new(0)),
-        result: Mutex::new(JobState::Running),
+        result: Arc::new(Mutex::new(JobState::Preparing)),
     });
     s.cam_jobs.next = s.cam_jobs.next.checked_add(1).ok_or_else(|| EngineError::Other("CAM job ID exhausted".into()))?;
     let id = s.cam_jobs.next;
@@ -211,78 +110,133 @@ pub fn dispatch(job: Arc<Job>, background: bool, verify: bool) -> Result<()> {
     }
     #[cfg(target_arch = "wasm32")]
     if background {
-        let input = job.input.clone();
-        let cancelled = job.cancelled.clone();
-        let progress = job.progress.clone();
-        let state = job.state()?;
-        let future = async move {
-            if verify {
-                let path = match state {
-                    JobState::Verifying(path) => path,
-                    _ => return Err(cam::Error("generate first".into())),
-                };
-                let parsed = cam::nc::round_trip(&path, &input.setup, &input.tools)?;
-                let report =
-                    cam::verify::simulate_cooperative(&input, &parsed, Default::default(), || cancelled.load(Ordering::Relaxed), YieldOnce::default)
-                        .await?;
-                Ok(JobState::Verified(path, Arc::new(report)))
-            } else {
-                let mut generator = cam::generate::Generator::new(input)?;
-                loop {
-                    YieldOnce::default().await;
-                    if cancelled.load(Ordering::Relaxed) {
-                        return Ok(JobState::Cancelled);
-                    }
-                    let done = generator.step()?;
-                    progress.store((generator.progress() * 100.0) as usize, Ordering::Relaxed);
-                    if done {
-                        break;
-                    }
-                }
-                Ok(JobState::Generated(Arc::new(generator.finish()?)))
-            }
-        };
+        let future = task(&job, verify)?;
         *job.pending.lock().map_err(|_| EngineError::Other("CAM scheduler unavailable".into()))? = Some(Box::pin(future));
         return Ok(());
     }
     run(job, verify);
     Ok(())
 }
-fn run(job: Arc<Job>, verify: bool) {
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> cam::Result<JobState> {
-        if verify {
-            let state = job.state().map_err(|e| cam::Error(e.to_string()))?;
-            let path = match state {
-                JobState::Verifying(p) => p,
-                _ => return Err(cam::Error("generate a path before simulation".into())),
-            };
-            let parsed = cam::nc::round_trip(&path, &job.input.setup, &job.input.tools)?;
-            let report = cam::verify::simulate_cancellable(&job.input, &parsed, Default::default(), || job.cancelled.load(Ordering::Relaxed))?;
+// Capture owned task components instead of Job itself: a browser's pending
+// future must not keep its owning Job alive through an Arc cycle.
+fn task(job: &Job, verify: bool) -> Result<impl std::future::Future<Output = Result<JobState>> + use<>> {
+    let input = job.input.clone();
+    let cancelled = job.cancelled.clone();
+    let progress = job.progress.clone();
+    let state = job.result.clone();
+    let stock = job.stock.clone();
+    let path = if verify {
+        match job.state()? {
+            JobState::Verifying(path) => Some(path),
+            _ => return Err(EngineError::Other("generate a path before simulation".into())),
+        }
+    } else {
+        None
+    };
+    let snapshot = if verify { None } else { job.snapshot.lock().map_err(|_| EngineError::Other("CAM snapshot unavailable".into()))?.take() };
+    Ok(async move {
+        YieldOnce::default().await;
+        if cancelled.load(Ordering::Relaxed) {
+            return Ok(JobState::Cancelled);
+        }
+        if let Some(path) = path {
+            let input = input.get().ok_or_else(|| EngineError::Other("CAM prepared input missing".into()))?;
+            let parsed = cam::nc::round_trip(&path, &input.setup, &input.tools).map_err(error)?;
+            let report =
+                cam::verify::simulate_cooperative(input, &parsed, Default::default(), || cancelled.load(Ordering::Relaxed), YieldOnce::default)
+                    .await
+                    .map_err(error)?;
+            YieldOnce::default().await;
+            if cancelled.load(Ordering::Relaxed) {
+                return Ok(JobState::Cancelled);
+            }
+            let display = stock_display(&report, input.setup.frame, input.setup.stock.min.z, &cancelled).await;
+            if cancelled.load(Ordering::Relaxed) {
+                return Ok(JobState::Cancelled);
+            }
+            if let Ok(mut cache) = stock.lock() {
+                *cache = Some(display.map(Arc::new).map_err(|e| e.to_string()));
+            }
             Ok(JobState::Verified(path, Arc::new(report)))
         } else {
-            let mut generator = cam::generate::Generator::new(job.input.clone())?;
-            loop {
-                if job.cancelled.load(Ordering::Relaxed) {
-                    generator.cancel();
+            let snapshot = snapshot.ok_or_else(|| EngineError::Other("CAM snapshot already consumed".into()))?;
+            let prepared = snapshot
+                .build(
+                    &|| cancelled.load(Ordering::Relaxed),
+                    &|n| {
+                        progress.store(n, Ordering::Relaxed);
+                    },
+                    &mut YieldOnce::default,
+                )
+                .await?;
+            if cancelled.load(Ordering::Relaxed) {
+                return Ok(JobState::Cancelled);
+            }
+            input.set(prepared).map_err(|_| EngineError::Other("CAM snapshot already prepared".into()))?;
+            if let Ok(mut state) = state.lock() {
+                if cancelled.load(Ordering::Relaxed) {
                     return Ok(JobState::Cancelled);
                 }
-                let done = generator.step()?;
-                job.progress.store((generator.progress() * 100.0) as usize, Ordering::Relaxed);
+                *state = JobState::Running;
+            }
+            let mut generator =
+                cam::generate::Generator::new(input.get().ok_or_else(|| EngineError::Other("CAM prepared input missing".into()))?.clone())
+                    .map_err(error)?;
+            loop {
+                YieldOnce::default().await;
+                if cancelled.load(Ordering::Relaxed) {
+                    return Ok(JobState::Cancelled);
+                }
+                let done = generator.step().map_err(error)?;
+                progress.store(20 + (generator.progress() * 80.) as usize, Ordering::Relaxed);
                 if done {
                     break;
                 }
             }
-            Ok(JobState::Generated(Arc::new(generator.finish()?)))
+            Ok(JobState::Generated(Arc::new(generator.finish().map_err(error)?)))
+        }
+    })
+}
+async fn stock_display(report: &cam::verify::Report, frame: cam::Frame, bottom: f64, cancelled: &AtomicBool) -> Result<crate::geom::Mesh> {
+    let triangles = cam::verify::stock_triangles(report, bottom).map_err(error)?;
+    let mut mesh = crate::geom::Mesh::default();
+    for (i, triangle) in triangles.into_iter().enumerate() {
+        if i.is_multiple_of(256) {
+            YieldOnce::default().await;
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(EngineError::Other("CAM stock display cancelled".into()));
+            }
+        }
+        let triangle = triangle.map(|p| frame.world(p));
+        let normal = (triangle[1] - triangle[0])
+            .cross(triangle[2] - triangle[0])
+            .normalized()
+            .ok_or_else(|| EngineError::Other("invalid stock display triangle".into()))?;
+        let base = mesh.positions.len() as u32;
+        mesh.positions.extend(triangle);
+        mesh.normals.extend([normal; 3]);
+        mesh.triangles.push([base, base + 1, base + 2]);
+    }
+    Ok(mesh)
+}
+fn run(job: Arc<Job>, verify: bool) {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<JobState> {
+        let mut future = std::pin::pin!(task(&job, verify)?);
+        loop {
+            if job.cancelled.load(Ordering::Relaxed) {
+                return Ok(JobState::Cancelled);
+            }
+            if let std::task::Poll::Ready(result) =
+                std::future::Future::poll(future.as_mut(), &mut std::task::Context::from_waker(std::task::Waker::noop()))
+            {
+                return result;
+            }
         }
     }));
-    let state = if job.cancelled.load(Ordering::Relaxed) {
-        JobState::Cancelled
-    } else {
-        match outcome {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => JobState::Failed(e.to_string()),
-            Err(_) => JobState::Failed("CAM worker failed; no result published".into()),
-        }
+    let state = match outcome {
+        Ok(Ok(state)) => state,
+        Ok(Err(e)) => JobState::Failed(e.to_string()),
+        Err(_) => JobState::Failed("CAM worker failed; no result published".into()),
     };
     job.set(state);
 }
@@ -320,10 +274,8 @@ pub fn advance(job: &Job) {
     job.progress.store(100, Ordering::Relaxed);
     job.set(state);
 }
-#[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 struct YieldOnce(bool);
-#[cfg(target_arch = "wasm32")]
 impl std::future::Future for YieldOnce {
     type Output = ();
     fn poll(mut self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<()> {
@@ -333,5 +285,98 @@ impl std::future::Future for YieldOnce {
             self.0 = true;
             std::task::Poll::Pending
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+    fn captured() -> (Session, Arc<Job>) {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length":20,"width":20,"height":5})).unwrap();
+        let mut input = cam::corpus::fixture("face").unwrap();
+        input.setup.models[0].body = s.model.state().bodies[0].name.clone();
+        let m = &mut s.doc_mut().manufacturing;
+        m.setups.push(input.setup);
+        m.tools = input.tools;
+        m.operations = input.operations;
+        m.programs.push(cam::Program { id: 1, name: "Test".into(), setup: 1, operations: vec![1] });
+        let job = Arc::new(Job {
+            source_doc: s.doc.clone(),
+            source_moves: s.pending_moves.clone(),
+            input: Arc::new(OnceLock::new()),
+            snapshot: Mutex::new(Some(snapshot::Snapshot::capture(&s, 1).unwrap())),
+            stock: Arc::new(Mutex::new(None)),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            #[cfg(target_arch = "wasm32")]
+            pending: Mutex::new(None),
+            progress: Arc::new(AtomicUsize::new(0)),
+            result: Arc::new(Mutex::new(JobState::Preparing)),
+        });
+        (s, job)
+    }
+    #[test]
+    fn snapshot_is_immutable_and_preparation_is_deferred() {
+        let (mut s, job) = captured();
+        let expected = input(&s, 1).unwrap();
+        let mut future = std::pin::pin!(task(&job, false).unwrap());
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        assert!(job.input().is_err());
+        s.execute("solid.box", &json!({"length":2,"width":2,"height":2})).unwrap();
+        s.doc_mut().manufacturing.operations[0].feed = 900.;
+        let mut polls = 0;
+        let mut previous = 0;
+        let state = loop {
+            match future.as_mut().poll(&mut cx) {
+                Poll::Pending => {
+                    polls += 1;
+                    let progress = job.progress.load(Ordering::Relaxed);
+                    assert!(progress >= previous);
+                    previous = progress;
+                }
+                Poll::Ready(result) => break result.unwrap(),
+            }
+        };
+        assert!(polls > 2);
+        assert!(matches!(state, JobState::Generated(_)));
+        assert_eq!(serde_json::to_value(job.input().unwrap()).unwrap(), serde_json::to_value(&expected).unwrap());
+        assert!(current(&s, &job).is_err());
+    }
+    #[test]
+    fn preparation_cancellation_never_publishes_or_revives_job() {
+        let (_, job) = captured();
+        let mut future = std::pin::pin!(task(&job, false).unwrap());
+        let mut cx = Context::from_waker(Waker::noop());
+        for _ in 0..2 {
+            assert!(future.as_mut().poll(&mut cx).is_pending());
+        }
+        job.cancelled.store(true, Ordering::Relaxed);
+        job.set(JobState::Cancelled);
+        let result = loop {
+            if let Poll::Ready(result) = future.as_mut().poll(&mut cx) {
+                break result;
+            }
+        };
+        assert!(result.is_err() || matches!(result, Ok(JobState::Cancelled)));
+        assert!(job.input().is_err());
+        job.set(JobState::Running);
+        assert!(matches!(job.state().unwrap(), JobState::Cancelled));
+    }
+    #[test]
+    fn native_worker_prepares_generates_and_releases_its_snapshot() {
+        let (_, job) = captured();
+        let worker = job.clone();
+        std::thread::spawn(move || run(worker, false)).join().unwrap();
+        assert!(matches!(job.state().unwrap(), JobState::Generated(_)));
+        assert!(job.input().is_ok());
+        assert!(job.snapshot.lock().unwrap().is_none());
+        assert_eq!(job.progress.load(Ordering::Relaxed), 100);
     }
 }

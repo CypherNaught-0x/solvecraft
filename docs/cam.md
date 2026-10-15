@@ -25,7 +25,7 @@ The Manufacture workspace, CLI and MCP share these registered commands:
 | `cam.delete` | `{kind,id}`: refuses removal while referenced |
 | `cam.generate` | `{program, background?}`: immutable job; returns job ID/status |
 | `cam.job.status`, `cam.job.cancel` | `{job}` |
-| `cam.inspect` | `{job?, include_path?}` |
+| `cam.inspect` | `{job?, include_path?, include_stock?, motion?}`: world-space stock display mesh and machine state after the requested number of motion blocks |
 | `cam.simulate` | `{job, background?}`: independent post round trip and stock/clearance checks |
 | `cam.post` | `{job,path?}`: requires fresh generated paths and passing verification |
 | `cam.export` | `{job,format,path?}`: `toolpath`, `setup_sheet`, `stock`, `validation` |
@@ -75,7 +75,7 @@ checks catch stationary contact and tools already inside fixtures. Body groups p
 cavities and prevent opposite winding in separate fixtures from cancelling. Open/nonmanifold
 meshes, clearance within the interpolation/refinement margin, and failed numerical queries remain
 **inconclusive**. It does not call offset or toolpath-generation algorithms and observes cancellation
-during topology preparation and collision queries. The current algorithm fingerprint is `cam/7`.
+during topology preparation and collision queries. The current algorithm fingerprint is `cam/8`.
 No target fitting, translation, unit guessing or discarded unknown NC commands is allowed.
 
 Default dimensional tolerance is 0.01 mm; interpolation/post error is 0.001 mm; requested spatial
@@ -156,9 +156,17 @@ The Fusion oracle requires the same dimensional checks for both programs. Remain
 - Broader fixture regression coverage and performance acceptance; supported stock/model geometry
   remains vertical height-field scope. Fixture triangles must form closed consistently wound bodies
   for volume-containment certification; surface contact can still be detected on an open mesh.
-- Browser timing acceptance for worst-case single-operation offset jobs. Background wasm jobs
-  now yield between operations and bounded verification chunks; UI frames or status polls advance
-  them. Native background jobs run off the UI thread. Synchronous command calls remain available.
+- Browser timing acceptance for worst-case single-operation offset jobs. Background jobs yield
+  during preparation, boundary validation, between offset queries and every 256 emitted motions,
+  as well as during verification. UI frames or status polls advance browser jobs. One library offset
+  query, one body tessellation and input hashing remain atomic; their worst-case browser latency
+  is still an acceptance gate. Native background jobs perform profile sampling, tessellation,
+  transforms and hashing on the worker from an immutable captured snapshot. Synchronous command
+  calls remain available. Status distinguishes `preparing` from `running`; the fingerprint is null
+  until preparation completes. Cancellation cannot publish a partial path or revive a cancelled job.
+- Associated CAD curves use second-derivative chord-error bounds after placement, including a
+  numerical reserve and a shared 10,000-vertex boundary limit. Requests exceeding precision or
+  vertex budgets fail explicitly rather than silently loosening the operation tolerance.
 - Visible-UI regression coverage for all strategies and all local Fusion reference cases. Native
   facing generate/simulate/post/save/reopen/edit/regenerate has been exercised, including stale-result
   feedback after changing coolant.
@@ -205,3 +213,23 @@ All Fusion-produced files and derived reports belong in ignored `plan/` or outsi
 The oracle refuses an unignored in-repository destination. Commit only original recipes, harness
 code and independently authored expectations. No vendor post source, templates or assets are
 part of SolveCraft. The current local capture is incomplete and contributes no parity passes.
+
+## Manufacture display and playback
+
+The workspace shows the selected program's model, initial stock or simulated final stock, with
+separate fixture coloring and visibility controls. Stock uses the setup coordinate frame; hidden
+model and fixture bodies cannot be selected in the viewport. Editing a setup reveals the bodies
+for reference selection. Missing or stale stock falls back to the model with an explicit message.
+The remaining-stock display is the final conservative upper surface, not stock removal animated
+at each playback step. Its mesh is cached by the simulation job and shares the bounded, conforming
+boundary extraction used by STL export. Display extraction errors do not replace simulation status.
+
+Playback advances typed motion/event blocks at an adjustable rate, independent of frame rate.
+Zero means the initial clearance pose. The panel shows operation, tool, spindle and tool-tip
+coordinates; paths distinguish rapid and cutting motion, including full-circle arcs. `cam.inspect`
+exposes the same machine state, and `ui.inspect.manufacturing` exposes the current display choices.
+Stock extraction runs on the native worker; its topology phase remains atomic on WebAssembly and
+is included in the outstanding browser latency acceptance gate. Native UI tests cover stock-frame
+placement, visibility, stale results and playback boundaries. The four-strategy headless UI
+walkthrough exercises background generation/simulation, posting, stock selection and playback zero,
+with CPU-rendered stock views. Interactive desktop-window coverage remains an acceptance task.

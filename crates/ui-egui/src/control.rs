@@ -123,6 +123,17 @@ pub fn handle(app: &mut SolveApp, ctx: &egui::Context, req: &ControlRequest) -> 
             "viewport": app.viewport.rect.map(|r| json!([r.left(), r.top(), r.width(), r.height()])),
             "camera": app.cam,
             "tool": app.tool.as_ref().map(|t| t.cmd),
+            "manufacturing": {
+                "program": app.manufacturing.program,
+                "job": app.manufacturing.job,
+                "completed_motions": app.manufacturing.playback,
+                "playing": app.manufacturing.playing,
+                "workpiece": format!("{:?}", app.manufacturing.view.workpiece),
+                "fixtures": app.manufacturing.view.fixtures,
+                "paths": app.manufacturing.view.paths,
+                "stock_boundary": app.manufacturing.view.boundary,
+                "events_per_second": app.manufacturing.view.speed,
+            },
             "dialog": app.dialog.as_ref().map(|d| format!("{d:?}")),
             "hover": app.viewport.hover.as_ref().map(|h| format!("{h:?}")),
             "renderer": if app.viewport.gpu.is_some() { "gpu" } else { "cpu" },
@@ -523,7 +534,9 @@ pub fn handle(app: &mut SolveApp, ctx: &egui::Context, req: &ControlRequest) -> 
         "ui.render" => {
             let w = f("width").unwrap_or(1280.0).clamp(16.0, 8192.0) as usize;
             let h = f("height").unwrap_or(800.0).clamp(16.0, 8192.0) as usize;
-            let scene = solvecraft_engine::view::scene(&app.session, &app.cam);
+            let mut scene = solvecraft_engine::view::scene(&app.session, &app.cam);
+            crate::manufacturing::view::cpu(app, &mut scene);
+            crate::manufacturing::view::cpu_overlays(app, &mut scene);
             let Some(png) = render_png(&scene, &app.cam, w, h) else { return err("render failed") };
             match s("path") {
                 Some(path) => match std::fs::write(path, &png) {

@@ -715,7 +715,7 @@ impl SolveApp {
 
     /// `cam` moved to frame the whole model.
     pub fn fitted(&self, mut cam: Camera) -> Camera {
-        let b = solvecraft_engine::view::bounds(&self.session);
+        let b = if self.ui.tab == "MILLING" { crate::viewport::model_bounds(self) } else { solvecraft_engine::view::bounds(&self.session) };
         if b.is_empty() {
             cam.target = solvecraft_engine::geom::Vec3::ZERO;
             cam.distance = 150.0;

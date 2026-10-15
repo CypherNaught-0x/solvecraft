@@ -24,7 +24,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("cam.operation.order", "Reorder Operations", order).params("program: ID, operations: permutation of existing operation IDs"),
     CommandSpec::new("cam.delete", "Delete Manufacturing Item", delete)
         .params("kind: setup|tool|operation|program, id; referenced items cannot be deleted"),
-    CommandSpec::new("cam.inspect", "Inspect Manufacturing", inspect).noundo().params("job?: ID; include_path?: bool"),
+    CommandSpec::new("cam.inspect", "Inspect Manufacturing", inspect)
+        .noundo()
+        .params("job?: ID; include_path?: bool; include_stock?: bool (world-space display mesh); motion?: completed block count"),
     CommandSpec::new("cam.generate", "Generate Toolpaths", generate)
         .at("MILLING", "TOOLPATHS")
         .icon("cam_generate")
@@ -144,6 +146,24 @@ fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
         }
         _ => {}
     }
+    if let Some(motion) = p.get("motion") {
+        jobs::current(s, &job)?;
+        let motion = motion
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or_else(|| EngineError::Other("motion must be a nonnegative block count".into()))?;
+        let path = match job.state()? {
+            jobs::JobState::Generated(path) | jobs::JobState::Verified(path, _) => path,
+            _ => return Err(EngineError::Other("generate before inspecting playback".into())),
+        };
+        let state = cam::playback::at(&path, &job.input()?.setup, motion).map_err(jobs::error)?;
+        result["playback"] = json!(state);
+        result["source"] = json!(job.input()?.operations.iter().find(|o| Some(o.id) == state.operation).and_then(|o| o.source.as_ref()));
+    }
+    if p.get("include_stock").and_then(Value::as_bool) == Some(true) {
+        jobs::current(s, &job)?;
+        result["stock_mesh"] = serde_json::to_value(job.stock_mesh()?.as_deref()).map_err(|e| EngineError::Other(e.to_string()))?;
+    }
     Ok(result)
 }
 fn generate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -156,9 +176,10 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
     #[cfg(target_arch = "wasm32")]
     jobs::advance(&job);
     let stale = jobs::current(s, &job).is_err();
-    let mut v = json!({"job":id,"stale":stale,"progress":job.progress.load(Ordering::Relaxed),"fingerprint":job.input.fingerprint});
+    let mut v = json!({"job":id,"stale":stale,"progress":job.progress.load(Ordering::Relaxed),"fingerprint":job.input().ok().map(|input| &input.fingerprint)});
     match job.state()? {
         jobs::JobState::Verifying(_) => v["state"] = json!("simulating"),
+        jobs::JobState::Preparing => v["state"] = json!("preparing"),
         jobs::JobState::Running => v["state"] = json!("running"),
         jobs::JobState::Cancelled => v["state"] = json!("cancelled"),
         jobs::JobState::Failed(e) => {
@@ -172,6 +193,11 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
         jobs::JobState::Verified(path, r) => {
             v["state"] = json!("verified");
             v["blocks"] = json!(path.blocks.len());
+            v["stock_preview"] = match job.stock_mesh() {
+                Ok(Some(mesh)) => json!({"available":true,"triangles":mesh.triangles.len()}),
+                Ok(None) => json!({"available":false}),
+                Err(e) => json!({"available":false,"error":e.to_string()}),
+            };
             v["verification"] = json!({"status":r.status,"finished_dimensions":r.finished_dimensions,"stock_complete":r.stock_complete,
                 "findings":r.findings,"cells":r.cells.len(),"work":r.work});
         }
@@ -212,8 +238,8 @@ fn post(s: &mut Session, p: &Value) -> Result<Value> {
     if report.status != cam::verify::Status::Pass || report.finished_dimensions != cam::verify::Status::Pass || !report.stock_complete {
         return Err(EngineError::Other("posting blocked by failed or inconclusive verification".into()));
     }
-    cam::nc::round_trip(&path, &job.input.setup, &job.input.tools).map_err(jobs::error)?;
-    output(p, cam::nc::post(&path, &job.input.setup).map_err(jobs::error)?)
+    cam::nc::round_trip(&path, &job.input()?.setup, &job.input()?.tools).map_err(jobs::error)?;
+    output(p, cam::nc::post(&path, &job.input()?.setup).map_err(jobs::error)?)
 }
 fn export(s: &mut Session, p: &Value) -> Result<Value> {
     let job = jobs::job(s, id(p, "job")?)?;
@@ -224,7 +250,7 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(EngineError::Other("no generated result".into())),
     };
     let format = p.get("format").and_then(Value::as_str).unwrap_or("validation");
-    output(p, crate::io::cam::artifact(&job.input, &path, report.as_deref(), format)?)
+    output(p, crate::io::cam::artifact(job.input()?, &path, report.as_deref(), format)?)
 }
 
 #[cfg(test)]

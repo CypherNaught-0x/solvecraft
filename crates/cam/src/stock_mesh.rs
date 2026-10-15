@@ -124,7 +124,7 @@ fn cells(report: &Report, bottom: f64) -> Result<Vec<Cell>> {
         }
     }
     if cells.len() > MAX_CELLS {
-        return invalid("stock STL exceeds 40000 merged cells; use validation JSON for this resolution");
+        return invalid("stock mesh exceeds 40000 merged cells; use validation JSON for this resolution");
     }
     Ok(cells)
 }
@@ -229,7 +229,7 @@ struct Mesh {
 impl Mesh {
     fn triangle(&mut self, a: Vec3, b: Vec3, c: Vec3) -> Result<()> {
         if self.triangles.len() >= MAX_TRIANGLES {
-            return invalid("stock STL exceeds 500000 triangles");
+            return invalid("stock mesh exceeds 500000 triangles");
         }
         if (b - a).cross(c - a).len2() == 0.0 {
             return invalid("degenerate stock boundary triangle");
@@ -344,6 +344,10 @@ fn boundary(report: &Report, bottom: f64) -> Result<Mesh> {
     Ok(mesh)
 }
 
+pub(crate) fn triangles(report: &Report, bottom: f64) -> Result<Vec<[Vec3; 3]>> {
+    Ok(boundary(report, bottom)?.triangles)
+}
+
 pub(crate) fn stl(report: &Report, bottom: f64) -> Result<String> {
     let mesh = boundary(report, bottom)?;
     let mut out = String::from("solid cam_remaining_stock\n");
@@ -354,7 +358,7 @@ pub(crate) fn stl(report: &Report, bottom: f64) -> Result<String> {
         }
         out.push_str("endloop\nendfacet\n");
         if out.len() > 128 * 1024 * 1024 {
-            return invalid("stock STL exceeds 128 MiB");
+            return invalid("stock mesh exceeds 128 MiB");
         }
     }
     out.push_str("endsolid cam_remaining_stock\n");

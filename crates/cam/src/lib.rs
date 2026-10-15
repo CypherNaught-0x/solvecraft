@@ -10,6 +10,7 @@ mod dimensions;
 pub mod generate;
 mod model;
 pub mod nc;
+pub mod playback;
 mod region;
 mod spatial;
 mod stock_mesh;
@@ -25,7 +26,7 @@ pub(crate) fn invalid<T>(message: impl Into<String>) -> Result<T> {
     Err(Error(message.into()))
 }
 
-pub const VERSION: &str = "cam/7";
+pub const VERSION: &str = "cam/8";
 pub const TOLERANCE: f64 = 0.01;
 pub const POST_ERROR: f64 = 0.001;
 pub const VERIFY_ERROR: f64 = 0.0025;

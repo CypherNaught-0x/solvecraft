@@ -461,6 +461,12 @@ pub fn stock_stl(report: &Report, bottom: f64) -> Result<String> {
     crate::stock_mesh::stl(report, bottom)
 }
 
+/// The same conforming conservative boundary as `stock_stl`, without serialization.
+/// Coordinates are in the setup frame. An empty mesh represents fully removed stock.
+pub fn stock_triangles(report: &Report, bottom: f64) -> Result<Vec<[Vec3; 3]>> {
+    crate::stock_mesh::triangles(report, bottom)
+}
+
 /// Independently evaluate a point on the upper stock surface. Used for analytic
 /// acceptance probes, never as a substitute for whole-region verification.
 pub fn probe_height(input: &JobInput, nc: &Parsed, p: [f64; 2]) -> Result<f64> {
