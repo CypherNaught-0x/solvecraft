@@ -3,19 +3,52 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
 use solvecraft_geom::Vec3;
+use std::{
+    future::Future,
+    task::{Context, Poll, Waker},
+};
 
 pub const DIALECT: &str = "solvecraft-reference-3axis/2; not a qualified machine post";
+// A maximum-size path also emits the three explicit startup events below.
+const MAX_RECORDS: usize = MAX_MOVES + 3;
+fn complete<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
+    let mut future = std::pin::pin!(future);
+    match future.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(result) => result,
+        Poll::Pending => invalid("synchronous NC checkpoint unexpectedly suspended"),
+    }
+}
+async fn checkpoint<F: Future<Output = ()>>(cancelled: &impl Fn() -> bool, yield_control: &mut impl FnMut() -> F) -> Result<()> {
+    if cancelled() {
+        return invalid("NC processing cancelled");
+    }
+    yield_control().await;
+    if cancelled() { invalid("NC processing cancelled") } else { Ok(()) }
+}
 fn startup(setup: &Setup) -> [Motion; 3] {
     [Motion::Spindle { rpm: 0.0 }, Motion::Coolant { on: false }, Motion::Rapid { to: Vec3::new(0., 0., setup.clearance) }]
 }
 pub fn post(path: &Toolpath, setup: &Setup) -> Result<String> {
-    if path.blocks.is_empty() {
-        return invalid("cannot post an empty path");
+    complete(post_cooperative(path, setup, || false, || std::future::ready(())))
+}
+/// Preserve post bytes while yielding every 256 blocks. No partial output on cancellation.
+pub async fn post_cooperative<F: Future<Output = ()>>(
+    path: &Toolpath,
+    setup: &Setup,
+    cancelled: impl Fn() -> bool,
+    mut yield_control: impl FnMut() -> F,
+) -> Result<String> {
+    checkpoint(&cancelled, &mut yield_control).await?;
+    if path.blocks.is_empty() || path.blocks.len() > MAX_MOVES {
+        return invalid("cannot post an empty or excessive path");
     }
     let mut out = format!("({DIALECT})\n(Fingerprint {})\nG21 G90 G17 G91.1 G94 G{} G40 G49 G80\nM5\nM9\n", path.fingerprint, setup.work_offset);
     let mut current = Vec3::new(0.0, 0.0, setup.clearance);
     out.push_str(&format!("G0 X0.000000 Y0.000000 Z{:.6}\n", setup.clearance));
-    for block in &path.blocks {
+    for (index, block) in path.blocks.iter().enumerate() {
+        if index.is_multiple_of(256) {
+            checkpoint(&cancelled, &mut yield_control).await?;
+        }
         out.push_str(&format!("(Operation {})\n", block.operation));
         let line = match &block.motion {
             Motion::Rapid { to } => format!("G0 X{:.6} Y{:.6} Z{:.6}", to.x, to.y, to.z),
@@ -54,6 +87,7 @@ pub fn post(path: &Toolpath, setup: &Setup) -> Result<String> {
         }
     }
     out.push_str("M30\n");
+    checkpoint(&cancelled, &mut yield_control).await?;
     Ok(out)
 }
 
@@ -91,6 +125,16 @@ impl Parsed {
 
 /// Strictly consumes every word. Units and distance mode must be declared before motion.
 pub fn parse(source: &str, tools: &[Tool]) -> Result<Parsed> {
+    complete(parse_cooperative(source, tools, || false, || std::future::ready(())))
+}
+/// Independent modal reader with cancellation and a checkpoint every 256 physical lines.
+pub async fn parse_cooperative<F: Future<Output = ()>>(
+    source: &str,
+    tools: &[Tool],
+    cancelled: impl Fn() -> bool,
+    mut yield_control: impl FnMut() -> F,
+) -> Result<Parsed> {
+    checkpoint(&cancelled, &mut yield_control).await?;
     if source.len() > 32 * 1024 * 1024 {
         return invalid("NC file too large");
     }
@@ -110,6 +154,9 @@ pub fn parse(source: &str, tools: &[Tool]) -> Result<Parsed> {
     let mut selected = None;
     let mut ended = false;
     for (index, line) in source.lines().enumerate() {
+        if index.is_multiple_of(256) {
+            checkpoint(&cancelled, &mut yield_control).await?;
+        }
         let line_number = index + 1;
         let fail = |s: &str| Error(format!("NC line {line_number}: {s}"));
         let mut words = words(line).map_err(|e| fail(&e.0))?;
@@ -120,9 +167,6 @@ pub fn parse(source: &str, tools: &[Tool]) -> Result<Parsed> {
         }
         if ended {
             return Err(fail("content after program end"));
-        }
-        if out.len() > MAX_MOVES {
-            return Err(fail("NC motion limit"));
         }
         let mut coordinates = [None; 3];
         let mut ij = [None; 2];
@@ -331,10 +375,14 @@ pub fn parse(source: &str, tools: &[Tool]) -> Result<Parsed> {
                 out.push(Record { line: line_number, motion });
             }
         }
+        if out.len() > MAX_RECORDS {
+            return Err(fail("NC motion limit"));
+        }
     }
     if !ended || !have_pos {
         return invalid("NC program requires motion and an explicit program end");
     }
+    checkpoint(&cancelled, &mut yield_control).await?;
     Ok(Parsed { records: out, work_offset: offset.ok_or_else(|| Error("missing work offset".into()))?, sources: Vec::new() })
 }
 fn words(line: &str) -> Result<Vec<(char, f64)>> {
@@ -391,7 +439,18 @@ fn words(line: &str) -> Result<Vec<(char, f64)>> {
 }
 
 pub fn round_trip(path: &Toolpath, setup: &Setup, tools: &[Tool]) -> Result<Parsed> {
-    let mut parsed = parse(&post(path, setup)?, tools)?;
+    complete(round_trip_cooperative(path, setup, tools, || false, || std::future::ready(())))
+}
+/// Post, independently interpret and compare in bounded batches, retaining trusted line mappings.
+pub async fn round_trip_cooperative<F: Future<Output = ()>>(
+    path: &Toolpath,
+    setup: &Setup,
+    tools: &[Tool],
+    cancelled: impl Fn() -> bool,
+    mut yield_control: impl FnMut() -> F,
+) -> Result<Parsed> {
+    let source = post_cooperative(path, setup, &cancelled, &mut yield_control).await?;
+    let mut parsed = parse_cooperative(&source, tools, &cancelled, &mut yield_control).await?;
     let startup = startup(setup);
     if parsed.work_offset != setup.work_offset || parsed.records.len() != path.blocks.len() + startup.len() {
         return invalid("post changed block count or work offset");
@@ -405,6 +464,9 @@ pub fn round_trip(path: &Toolpath, setup: &Setup, tools: &[Tool]) -> Result<Pars
         posted_position = *to;
     }
     for (i, (a, b)) in path.blocks.iter().zip(parsed.records.iter().skip(startup.len())).enumerate() {
+        if i.is_multiple_of(256) {
+            checkpoint(&cancelled, &mut yield_control).await?;
+        }
         if !equivalent(&a.motion, &b.motion) {
             return invalid(format!("post mismatch at NC line {}", b.line));
         }
@@ -423,6 +485,7 @@ pub fn round_trip(path: &Toolpath, setup: &Setup, tools: &[Tool]) -> Result<Pars
         }
         parsed.sources.push(SourceLocation { line: b.line, block: i + 1, operation: a.operation });
     }
+    checkpoint(&cancelled, &mut yield_control).await?;
     Ok(parsed)
 }
 fn sweep(from: Vec3, to: Vec3, center: Vec3, clockwise: bool) -> f64 {

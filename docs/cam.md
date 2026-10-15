@@ -188,7 +188,7 @@ The Fusion oracle requires the same dimensional checks for both programs. Remain
   as well as during verification and conforming stock extraction. The browser shares a four-ms
   scheduling target across jobs in round-robin order; status queries advance one checkpoint.
   This target is checked between polls, so it is not a hard deadline. One library offset
-  query, one body tessellation, one setup/operation encoding during hashing and NC round-trip parsing remain atomic; their worst-case browser latency
+  query, one body tessellation, one setup/operation encoding during hashing and direct synchronous exports remain atomic; their worst-case browser latency
   is still an acceptance gate. Native background jobs perform profile sampling, tessellation,
   transforms and hashing on the worker from an immutable captured snapshot. Synchronous command
   calls remain available. Status distinguishes `preparing` from `running`; the fingerprint is null
@@ -423,6 +423,27 @@ On the same local probe, maximum scheduler batches for those three large cases w
 deadlines.
 
 One setup or operation is still encoded atomically. This change does not close timing acceptance
-for unusually large reference lists, CAD tessellation, a single offset query or NC round-trip
-parsing. The probe isolates hashing from those stages and does not establish whole-application
+for unusually large reference lists, CAD tessellation, a single offset query or direct synchronous
+exports. The probe isolates hashing from those stages and does not establish whole-application
 latency guarantees.
+
+### NC round-trip responsiveness and limits
+
+Background simulation now yields during reference posting, independent modal interpretation
+and IR correspondence checking. Posting and correspondence yield every 256 blocks; the reader
+yields every 256 physical lines, including comment/blank lines. Cancellation is checked before
+and after each yield and returns no partial G-code, parsed program or trusted line mapping.
+The synchronous APIs use the same processing code with immediately ready checkpoints.
+
+A local Chrome 155 release-Wasm probe measured a 228.9 ms synchronous round trip for 199,990
+blocks. The cooperative path's largest scheduler batch was 4.2 ms. A 200,000-block path also
+passes, with 200,003 interpreted records including the three post startup events; its largest
+batch was 4.1 ms. Neither case had a batch over 16 ms. The former reader incorrectly counted
+startup against the generated-path limit and rejected the maximum-size path. Both posted blocks
+and external interpreted records now have explicit, independently checked bounds.
+
+Regression tests exercise the exact path limit and excess input, synchronous/cooperative bytes
+and machine-state equality, operation/block/line provenance, unchanged unknown-command errors,
+and cancellation at every checkpoint across all three stages. Measurements exclude direct
+synchronous export commands, CAD preparation, offset queries and the rendered application;
+these observations do not establish a universal latency guarantee.

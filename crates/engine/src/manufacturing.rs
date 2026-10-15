@@ -142,7 +142,9 @@ fn task(job: &Job, verify: bool) -> Result<impl std::future::Future<Output = Res
         }
         if let Some(path) = path {
             let input = input.get().ok_or_else(|| EngineError::Other("CAM prepared input missing".into()))?;
-            let parsed = cam::nc::round_trip(&path, &input.setup, &input.tools).map_err(error)?;
+            let parsed = cam::nc::round_trip_cooperative(&path, &input.setup, &input.tools, || cancelled.load(Ordering::Relaxed), YieldOnce::default)
+                .await
+                .map_err(error)?;
             let report =
                 cam::verify::simulate_cooperative(input, &parsed, Default::default(), || cancelled.load(Ordering::Relaxed), YieldOnce::default)
                     .await
