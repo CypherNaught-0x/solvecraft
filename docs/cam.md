@@ -74,8 +74,7 @@ checks catch stationary contact and tools already inside fixtures. Body groups p
 cavities and prevent opposite winding in separate fixtures from cancelling. Open/nonmanifold
 meshes, clearance within the interpolation/refinement margin, and failed numerical queries remain
 **inconclusive**. It does not call offset or toolpath-generation algorithms and observes cancellation
-during topology preparation and collision queries. These changes advance the algorithm fingerprint
-to `cam/2`.
+during topology preparation and collision queries. The current algorithm fingerprint is `cam/5`.
 No target fitting, translation, unit guessing or discarded unknown NC commands is allowed.
 
 Default dimensional tolerance is 0.01 mm; interpolation/post error is 0.001 mm; requested spatial
@@ -89,8 +88,7 @@ for a closed, consistently oriented manifold. Coplanar cells merge exactly witho
 Exports are bounded to 40,000 merged cells, 500,000 triangles and 128 MiB. Non-manifold touching
 stock is rejected explicitly; validation JSON retains the cell intervals. `stock_complete` is
 false after verification budget exhaustion, which blocks export of a misleading partial stock.
-These artifact/completeness changes advance the fingerprint to `cam/3`. A watertight upper-bound
-mesh does not establish finished-part dimensional accuracy.
+A watertight upper-bound mesh does not establish finished-part dimensional accuracy.
 
 The current passing verification status certifies the implemented no-gouge/clearance checks.
 The separate `finished_dimensions` status certifies facing planes and analytic drill cylinders/cones,
@@ -101,17 +99,25 @@ Multiple facing/drilling cuts compose by taking the minimum allowed remaining he
 requires zero stock allowance: use the explicit depth, since drill paths do not apply milling allowance.
 Wall certification remains **inconclusive**, so contour/pocket posting is currently blocked.
 Posting requires both clearance and finished dimensions to pass and a complete stock result.
-These changes advance the algorithm fingerprint to `cam/4`.
-Protected CAD boundaries are a separate open gate: cells spanning a vertical hole wall can still
-leave the no-gouge check inconclusive, even when the analytic hole dimensions agree. An original
-triangulated drilled-plate experiment confirms this limitation; it is not counted as a passing
-hole workflow. Such results remain blocked from posting.
+
+Protected height-field boundaries use local spatial certificates. A conservative upper target
+height at a neighboring XY point bounds distance to the outside of the protected solid for an
+entire potentially removed cell column. A gouge is reported only with a definitely removed point
+inside a protected volume by more than tolerance. Clearance reserves 0.001 mm post/interpolation
+error plus the 0.0025 mm verifier budget; CAD tessellation requests half that verifier budget.
+Queries use an independent XY index, observe work limits and cancellation, and leave unsuccessful
+certificates explicitly inconclusive with a `protected_surface_unresolved` finding.
+
+The original drilling fixture now contains the plate top, hole wall and cone, replacing its former
+plane-only protected target. Tests cover boundary clearance, shifted-hole and through gouges,
+sloping surfaces, overlapping projected targets and large-coordinate precision. A native CAD
+drilled body also passes create/generate/simulate/post/save/reopen through registered commands.
+This does not establish qualification of arbitrary non-height-field solids or Fusion parity.
 The Fusion oracle additionally requires passing finished-dimension checks for both programs. Analytic acceptance currently adds
 independent point-height expectations; those probes do not replace whole-region dimensional
 certification. This is an open M15 release gate, along with:
 
-- Certified surface-distance checks at protected CAD boundaries, contour/pocket wall dimensions,
-  and broader dimensional regression coverage.
+- Contour/pocket wall dimensions and broader protected-surface/dimensional regression coverage.
 - Broader fixture regression coverage and performance acceptance; supported stock/model geometry
   remains vertical height-field scope. Fixture triangles must form closed consistently wound bodies
   for volume-containment certification; surface contact can still be detected on an open mesh.

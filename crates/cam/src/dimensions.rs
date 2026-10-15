@@ -254,6 +254,11 @@ mod tests {
     #[test]
     fn facing_and_multiple_holes_compose_without_restoring_stock() {
         let mut input = corpus::fixture("drill").unwrap();
+        for t in &mut input.geometry.target {
+            for p in t {
+                p.z = 0.0;
+            }
+        }
         input.operations[0].geometry = Strategy::Drill { holes: vec![[10., 10.], [12., 10.]], peck: Some(0.3), full_diameter: false };
         let mut face = corpus::fixture("face").unwrap();
         face.tools[0].id = 2;

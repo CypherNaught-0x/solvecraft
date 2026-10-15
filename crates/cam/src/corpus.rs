@@ -74,8 +74,40 @@ pub fn fixture(strategy: &str) -> Result<JobInput> {
         geometry: Geometry { target: vec![[a, b, c], [a, c, d]], fixtures: vec![], fixture_groups: vec![] },
         fingerprint: String::new(),
     };
+    if strategy == "drill" {
+        input.geometry.target = drilled_plate_target();
+    }
     input.fingerprint = crate::fingerprint(&input)?;
     Ok(input)
+}
+
+// Original faceted plate with a blind drilled hole, vertical wall and cone.
+fn drilled_plate_target() -> Vec<[Vec3; 3]> {
+    let mut triangles = Vec::new();
+    let n = 48;
+    let slope = 1.0 / (59_f64.to_radians().tan());
+    for k in 0..n {
+        let point = |index: usize, r: f64, z: f64| {
+            let a = index as f64 * std::f64::consts::TAU / n as f64;
+            [10. + r * a.cos(), 10. + r * a.sin(), z]
+        };
+        let outer = |index: usize| {
+            let a = index as f64 * std::f64::consts::TAU / n as f64;
+            point(index, 10. / a.cos().abs().max(a.sin().abs()), 6.)
+        };
+        let a = point(k, 0.5, 6.);
+        let b = point(k + 1, 0.5, 6.);
+        let c = outer(k);
+        let d = outer(k + 1);
+        triangles.push([a.into(), c.into(), d.into()]);
+        triangles.push([a.into(), d.into(), b.into()]);
+        let e = point(k, 0.5, 5. + 0.5 * slope);
+        let f = point(k + 1, 0.5, 5. + 0.5 * slope);
+        triangles.push([[10., 10., 5.].into(), e.into(), f.into()]);
+        triangles.push([a.into(), b.into(), f.into()]);
+        triangles.push([a.into(), f.into(), e.into()]);
+    }
+    triangles
 }
 
 #[cfg(test)]

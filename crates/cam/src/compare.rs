@@ -1,4 +1,5 @@
 //! Conservative artifact comparison, separate from toolpath generation.
+use crate::spatial::Index;
 use crate::{
     verify::{Report, Status},
     *,
@@ -133,41 +134,6 @@ pub fn stock_mesh(report: &Report, mesh: &[[Vec3; 3]], bottom: f64, tolerance: f
         r.status = Status::Inconclusive;
     }
     Ok(r)
-}
-// Independent median-split XY index: artifact comparison never calls CAM offsets.
-struct Index {
-    min: [f64; 2],
-    max: [f64; 2],
-    ids: Vec<usize>,
-    children: Vec<Index>,
-}
-impl Index {
-    fn new(mut items: Vec<(usize, [f64; 2], [f64; 2])>) -> Self {
-        let mut min = [f64::INFINITY; 2];
-        let mut max = [f64::NEG_INFINITY; 2];
-        for (_, a, b) in &items {
-            for k in 0..2 {
-                min[k] = min[k].min(a[k]);
-                max[k] = max[k].max(b[k]);
-            }
-        }
-        if items.len() <= 8 {
-            return Self { min, max, ids: items.iter().map(|i| i.0).collect(), children: vec![] };
-        }
-        let axis = usize::from(max[1] - min[1] > max[0] - min[0]);
-        items.sort_unstable_by(|a, b| (a.1[axis] + a.2[axis]).total_cmp(&(b.1[axis] + b.2[axis])));
-        let rest = items.split_off(items.len() / 2);
-        Self { min, max, ids: vec![], children: vec![Self::new(items), Self::new(rest)] }
-    }
-    fn query(&self, min: [f64; 2], max: [f64; 2], out: &mut Vec<usize>) {
-        if (0..2).any(|k| self.min[k] > max[k] || self.max[k] < min[k]) {
-            return;
-        }
-        out.extend(&self.ids);
-        for child in &self.children {
-            child.query(min, max, out);
-        }
-    }
 }
 /// Strict STL decoding: malformed triangles are rejected, never silently dropped.
 pub fn read_stl(bytes: &[u8]) -> Result<Vec<[Vec3; 3]>> {

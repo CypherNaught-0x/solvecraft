@@ -172,7 +172,8 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
         jobs::JobState::Verified(path, r) => {
             v["state"] = json!("verified");
             v["blocks"] = json!(path.blocks.len());
-            v["verification"] = json!({"status":r.status,"findings":r.findings,"cells":r.cells.len(),"work":r.work});
+            v["verification"] = json!({"status":r.status,"finished_dimensions":r.finished_dimensions,"stock_complete":r.stock_complete,
+                "findings":r.findings,"cells":r.cells.len(),"work":r.work});
         }
     }
     Ok(v)
@@ -314,5 +315,29 @@ mod tests {
             job.set(jobs::JobState::Verified(path, std::sync::Arc::new(report)));
         }
         assert!(s.execute("cam.post", &json!({"job":id})).is_err());
+    }
+    #[test]
+    fn drilled_cad_body_generates_verifies_posts_and_reopens() {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length":20,"width":20,"height":6})).unwrap();
+        s.execute("solid.hole", &json!({"position":[10,10,6],"direction":[0,0,-1],"diameter":1,"depth":1,"type":"drilled","tip_angle":118})).unwrap();
+        let mut input = cam::corpus::fixture("drill").unwrap();
+        input.setup.models[0].body = s.model.state().bodies[0].name.clone();
+        input.operations[0].geometry = cam::Strategy::Drill { holes: vec![[10., 10.]], peck: Some(0.3), full_diameter: true };
+        s.execute("cam.setup.put", &json!({"setup":input.setup})).unwrap();
+        s.execute("cam.tool.put", &json!({"tool":input.tools[0]})).unwrap();
+        s.execute("cam.operation.put", &json!({"operation":input.operations[0]})).unwrap();
+        s.execute("cam.program.put", &json!({"program":{"id":1,"name":"Drilled plate","setup":1,"operations":[1]}})).unwrap();
+        let generated = s.execute("cam.generate", &json!({"program":1})).unwrap();
+        let id = generated["job"].clone();
+        let verified = s.execute("cam.simulate", &json!({"job":id})).unwrap();
+        assert_eq!(verified["verification"]["status"], "pass", "{verified}");
+        assert_eq!(verified["verification"]["finished_dimensions"], "pass", "{verified}");
+        assert!(s.execute("cam.post", &json!({"job":id})).unwrap()["content"].as_str().unwrap().contains("M30"));
+        let saved = crate::io::write_design(&s.doc);
+        let mut reopened = Session::new(crate::io::read_design(&saved).unwrap());
+        let generated = reopened.execute("cam.generate", &json!({"program":1})).unwrap();
+        let verified = reopened.execute("cam.simulate", &json!({"job":generated["job"]})).unwrap();
+        assert_eq!(verified["verification"]["finished_dimensions"], "pass");
     }
 }

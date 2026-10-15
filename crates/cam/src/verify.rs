@@ -114,6 +114,7 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
     let segments = nc::segments(nc, &input.setup)?;
     let tol = input.operations.iter().map(|o| o.tolerance).fold(TOLERANCE, f64::min);
     let stock = input.setup.stock;
+    let surface = crate::surface::Surface::new(&input.geometry.target, stock.min.z)?;
     let finished = crate::dimensions::Finished::new(input, tol)?;
     let dimension_resolution = finished.as_ref().map_or(limits.uncertainty, |f| limits.uncertainty.min(f.refinement));
     let mut r = Report {
@@ -236,17 +237,23 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
                 }
             }
         }
-        let (target_low, target_high, uncertain_target) =
-            target_height(center, (max[0] - min[0]).max(max[1] - min[1]) / 2.0, &input.geometry.target, stock.min.z, &mut r.work, limits.work);
-        let gouge = target_low - high > tol;
+        let (target_low, target_high, _) = surface.bounds(center, (max[0] - min[0]).max(max[1] - min[1]) / 2.0, &mut r.work, limits.work);
+        let protection = surface
+            .protect(
+                crate::surface::Region { center, half, low, high, target_high, tolerance: tol },
+                &mut r.work,
+                limits,
+                &cancelled,
+                &mut yield_control,
+            )
+            .await?;
         let rest = low - target_high > tol;
         let expected =
             if let Some(f) = &finished { f.envelope((center, half), &mut r.work, limits.work, &cancelled, &mut yield_control).await? } else { None };
         let dimension = expected.map(|e| e.classify(low, high));
         // Refine both the machined result and the requested finished features:
         // an omitted hole must not hide inside one large untouched stock cell.
-        let unresolved = ((high - low > tol / 2.0 || (uncertain_target && low < target_high - tol) || collision.is_some())
-            && half > limits.uncertainty)
+        let unresolved = ((high - low > tol / 2.0 || protection == Status::Inconclusive || collision.is_some()) && half > limits.uncertainty)
             || (dimension == Some(Status::Inconclusive) && half > dimension_resolution);
         if unresolved && depth < 24 && r.work <= limits.work {
             pending.extend([
@@ -288,14 +295,14 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
                 });
             }
         }
-        if gouge {
+        if protection == Status::Fail {
             r.status = Status::Fail;
             if r.findings.len() < 200 {
                 r.findings.push(Finding {
                     kind: "gouge".into(),
                     line: removal_line,
                     at,
-                    detail: format!("Protected target removed by at least {:.6} mm", target_low - high),
+                    detail: format!("A definitely removed point lies more than {:.6} mm inside the protected height-field solid", tol),
                 });
             }
         }
@@ -308,8 +315,18 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
                 detail: format!("At least {:.6} mm above target; may be intentional outside selected finished regions", low - target_high),
             });
         }
-        if low < target_high - tol && !gouge && r.status == Status::Pass {
-            r.status = Status::Inconclusive;
+        if protection == Status::Inconclusive {
+            if r.status == Status::Pass {
+                r.status = Status::Inconclusive;
+            }
+            if r.findings.len() < 200 {
+                r.findings.push(Finding {
+                    kind: "protected_surface_unresolved".into(),
+                    line: removal_line,
+                    at,
+                    detail: "Local surface-distance bounds cannot yet certify the protected CAD boundary at this resolution or work budget".into(),
+                });
+            }
         }
         let area = (max[0] - min[0]) * (max[1] - min[1]);
         r.remaining_volume_low += area * (low - stock.min.z);
@@ -361,7 +378,7 @@ pub(crate) fn target_height(p: [f64; 2], half: f64, tris: &[[Vec3; 3]], bottom: 
         }
         let [a, b, c] = *tri;
         // Positive-Z faces form the top envelope of supported height-field solids.
-        if (b - a).cross(c - a).z <= 1e-12 {
+        if (b - a).cross(c - a).z <= 0.0 {
             continue;
         }
         let mut poly = tri.to_vec();
@@ -385,8 +402,10 @@ pub(crate) fn target_height(p: [f64; 2], half: f64, tris: &[[Vec3; 3]], bottom: 
         if poly.len() < 3 {
             continue;
         }
-        let covered = poly.iter().zip(poly.iter().cycle().skip(1)).take(poly.len()).map(|(a, b)| a.x * b.y - a.y * b.x).sum::<f64>().abs() / 2.0;
-        if covered < 1e-18 {
+        let origin = poly[0];
+        let covered =
+            poly.iter().zip(poly.iter().cycle().skip(1)).take(poly.len()).map(|(a, b)| (*a - origin).cross(*b - origin).z).sum::<f64>().abs() / 2.0;
+        if covered <= 0.0 {
             continue;
         }
         area += covered;
