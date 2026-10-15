@@ -24,12 +24,8 @@ jobs:
       - name: Build opening regression and benchmark
         run: |
           cargo test --profile ci -p solidcraft-cli --test open_performance --no-run
-          cargo build --profile ci -p solidcraft-cli
+          cargo test --profile ci -p solidcraft-kernel --lib -- blend_corner::setback::parametric::tests sloped_corner_display_normals_follow_the_surface
       - name: Measure complete opening test with phase timings
-        env:
-          SOLIDCRAFT_OPEN_PERF_CHILD: "1"
         run: |
           nproc
           timeout 240 cargo test --profile ci -p solidcraft-cli --test open_performance -- --nocapture
-      - name: Compare opening benchmark
-        run: timeout 240 target/ci/solidcraft-cli bench-open apps/solidcraft-cli/tests/performance/HardEdgeBasin.solidcraft

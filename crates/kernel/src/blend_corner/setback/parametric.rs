@@ -159,15 +159,7 @@ pub(crate) fn fit(
         let cy = solve_fixed(ry, &jets.iter().map(|(i, p)| (*i, p.dot(y))).collect())?;
         let cz = solve_fixed(rz, &jets.iter().map(|(i, p)| (*i, p.dot(z))).collect())?;
         let projection: Vec<_> = cx.iter().zip(&cy).map(|(a, b)| x * *a + y * *b).collect();
-        let project = |bu: &[f64], bv: &[f64]| {
-            let mut p = Vec3::ZERO;
-            for (i, a) in bu.iter().enumerate().filter(|(_, a)| a.abs() > 1e-14) {
-                for (j, b) in bv.iter().enumerate().filter(|(_, b)| b.abs() > 1e-14) {
-                    p += projection[i * n + j] * (a * b);
-                }
-            }
-            p
-        };
+        let project = |bu: &[f64], bv: &[f64]| project_tensor(&projection, n, bu, bv);
         let mut row_sum = RowSum::new(n * n);
         let mut rows = Vec::new();
         for side in 0..4 {
@@ -646,6 +638,28 @@ fn certify_with_correction(
     Ok(())
 }
 
+/// A quintic basis has at most six active entries. Trim its zero tails once,
+/// rather than scanning the entire second basis for every active first entry.
+/// Keep the original threshold and iteration order, including interior zeros.
+fn basis_support(values: &[f64]) -> (usize, &[f64]) {
+    let Some(first) = values.iter().position(|x| x.abs() > 1e-14) else { return (0, &[]) };
+    let end = values.iter().rposition(|x| x.abs() > 1e-14).unwrap_or(first) + 1;
+    (first, &values[first..end])
+}
+
+fn project_tensor(projection: &[Vec3], stride: usize, bu: &[f64], bv: &[f64]) -> Vec3 {
+    let (iu, bu) = basis_support(bu);
+    let (iv, bv) = basis_support(bv);
+    let mut p = Vec3::ZERO;
+    for (i, a) in bu.iter().enumerate().filter(|(_, a)| a.abs() > 1e-14) {
+        let row = &projection[(iu + i) * stride + iv..][..bv.len()];
+        for (point, b) in row.iter().zip(bv).filter(|(_, b)| b.abs() > 1e-14) {
+            p += *point * (a * b);
+        }
+    }
+    p
+}
+
 /// Sum sparse tensor rows without allocating a tree node per coefficient. Preserve
 /// both the summation order and explicit zeros, so the QR system is unchanged.
 struct RowSum {
@@ -659,9 +673,12 @@ impl RowSum {
     }
 
     fn add_product(&mut self, a: &[f64], b: &[f64], weight: f64) {
+        let stride = b.len();
+        let (ia, a) = basis_support(a);
+        let (ib, b) = basis_support(b);
         for (i, x) in a.iter().enumerate().filter(|(_, x)| x.abs() > 1e-14) {
             for (j, y) in b.iter().enumerate().filter(|(_, y)| y.abs() > 1e-14) {
-                let index = i * b.len() + j;
+                let index = (ia + i) * stride + ib + j;
                 if !self.present[index] {
                     self.present[index] = true;
                     self.touched.push(index);
@@ -767,6 +784,29 @@ fn solve_qr(rows: &[Row], count: usize) -> Result<Vec<f64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_support_preserves_projection_and_constraint_coefficients() {
+        for n in [20, 32, 40, 56] {
+            let mut knots = vec![0.0; 6];
+            knots.extend((1..n - 5).map(|i| i as f64 / (n - 5) as f64));
+            knots.extend([1.0; 6]);
+            let projection: Vec<_> = (0..n * n).map(|i| Vec3::new((i as f64).sin(), i as f64 / 7.0, -(i as f64))).collect();
+            for t in [0.0, 1e-10, 0.1, 0.5, 0.9, 1.0 - 1e-10, 1.0] {
+                let (b, d, dd) = basis(&knots, t, n).unwrap();
+                for a in [&b, &d, &dd] {
+                    for b in [&b, &d, &dd] {
+                        let expected = tensor(a, b, 1.0, 0.0);
+                        let p = expected.entries.iter().fold(Vec3::ZERO, |p, (i, w)| p + projection[*i] * *w);
+                        assert_eq!(project_tensor(&projection, n, a, b), p);
+                        let mut sum = RowSum::new(n * n);
+                        sum.add_product(a, b, 0.75);
+                        assert_eq!(sum.finish().entries, tensor(a, b, 0.75, 0.0).entries);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn sparse_row_sum_preserves_cancellation_and_resets() {
