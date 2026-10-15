@@ -7,6 +7,8 @@ pub mod compare;
 pub mod corpus;
 mod coverage;
 mod dimensions;
+mod hashing;
+pub use hashing::fingerprint_job_cooperative;
 pub mod generate;
 mod model;
 pub mod nc;

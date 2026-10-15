@@ -188,7 +188,7 @@ The Fusion oracle requires the same dimensional checks for both programs. Remain
   as well as during verification and conforming stock extraction. The browser shares a four-ms
   scheduling target across jobs in round-robin order; status queries advance one checkpoint.
   This target is checked between polls, so it is not a hard deadline. One library offset
-  query, one body tessellation, input hashing and NC round-trip parsing remain atomic; their worst-case browser latency
+  query, one body tessellation, one setup/operation encoding during hashing and NC round-trip parsing remain atomic; their worst-case browser latency
   is still an acceptance gate. Native background jobs perform profile sampling, tessellation,
   transforms and hashing on the worker from an immutable captured snapshot. Synchronous command
   calls remain available. Status distinguishes `preparing` from `running`; the fingerprint is null
@@ -196,7 +196,7 @@ The Fusion oracle requires the same dimensional checks for both programs. Remain
 - Associated CAD curves use second-derivative chord-error bounds after placement, including a
   numerical reserve and a shared 10,000-vertex boundary limit. Requests exceeding precision or
   vertex budgets fail explicitly rather than silently loosening the operation tolerance.
-- Broader visible-UI regression coverage and all local Fusion reference cases. A native desktop
+- Broader visible-UI regression coverage. The four initial local Fusion reference cases pass. A native desktop
   walkthrough now passes for one original CAD case per strategy, including generation, simulation,
   posting through the system save dialog, save/reopen/edit/regenerate, stock display and playback.
   This limited positive-case coverage does not replace the broader acceptance corpus.
@@ -293,11 +293,14 @@ reversed winding, narrow channels, round profiles, offsets, through holes and mu
 All Fusion-produced files and derived reports belong in ignored `plan/` or outside the repository.
 The oracle refuses an unignored in-repository destination. Commit only original recipes, harness
 code and independently authored expectations. No vendor post source, templates or assets are
-part of SolveCraft. One local facing capture now passes input reconciliation, setup values,
-clearance and dimensional checks, and all three NC/stock comparisons. Contour, pocket and drill
-captures remain incomplete, so the oracle reports 1/4 and does not establish full milestone parity.
-The captured simulation uses Fusion's unlabeled Accuracy slider; numeric resolution is recorded
-as not reported, without substituting the independent verifier's resolution.
+part of SolveCraft. Local references for facing, contouring, pocketing and drilling now pass
+input reconciliation, setup values, both programs' clearance and dimensional checks, and all
+three NC/stock comparisons (4/4). This closes the initial four-strategy oracle gate, not the
+remaining milestone acceptance gates. The contour, pocket and drill exports use the maximum
+Stock Accuracy setting after replay to completion; the original coarser exports and their
+failed/inconclusive comparisons remain in ignored local storage. Numeric Fusion resolution is
+recorded as not reported, without substituting the independent verifier's resolution. Acceptance
+remains 0.01 mm with the original post and verifier error budgets.
 
 ## Manufacture display and playback
 
@@ -404,3 +407,22 @@ depth remain user-controlled. The complete operation settings, resolved centers 
 identities are included in setup sheets and canonical toolpath JSON; inspection exposes the
 operation's hole sources. Selection establishes an axis only: independent machining and clearance
 verification still decides whether the program can be posted.
+
+### Snapshot hashing responsiveness
+
+A local Chrome 155 release-Wasm stress probe found synchronous snapshot hashing calls of
+54.6 ms for 32 operations with 10,000 boundary vertices each, 172.6 ms for 1,000 operations
+with 1,000 vertices each, and 92.2 ms for 200,000 target triangles. Background snapshot
+preparation now hashes incrementally, yielding before each operation/tool and every 256
+triangles. It preserves the exact existing serialized fingerprint, including field order and
+numeric/string encoding; no algorithm-version or cache-key change is needed. Cancellation
+checks surround every yield and cannot return a partial digest. Regression tests compare the
+old and incremental encoders across the original corpus and a maximum-size triangle snapshot.
+On the same local probe, maximum scheduler batches for those three large cases were 5.1,
+4.2 and 4.2 ms respectively; none exceeded 16 ms. These are measured observations, not hard
+deadlines.
+
+One setup or operation is still encoded atomically. This change does not close timing acceptance
+for unusually large reference lists, CAD tessellation, a single offset query or NC round-trip
+parsing. The probe isolates hashing from those stages and does not establish whole-application
+latency guarantees.

@@ -141,7 +141,7 @@ impl Snapshot {
             fingerprint: String::new(),
         };
         input.validate().map_err(super::error)?;
-        input.fingerprint = cam::fingerprint(&input).map_err(super::error)?;
+        input.fingerprint = cam::fingerprint_job_cooperative(&input, check, yield_control).await.map_err(super::error)?;
         cancelled(check)?;
         progress(20);
         Ok(input)
