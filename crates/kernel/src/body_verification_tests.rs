@@ -2,6 +2,11 @@
 #![allow(clippy::unwrap_used)]
 use super::*;
 
+// Run the original candidate-index differential tests in ordinary workspace CI;
+// the vendored crate's standalone test targets are intentionally disabled.
+#[path = "../../../vendor/truck-meshalgo/src/tessellation/boundary_index.rs"]
+mod boundary_index;
+
 fn radial_error(mesh: &Mesh, radius: f64, center: Vec3) -> f64 {
     let mut error = 0_f64;
     for indices in &mesh.triangles {
@@ -28,6 +33,9 @@ fn verification_tessellation_keeps_physical_tolerance_for_large_curved_bodies() 
     assert!(radial_error(&display, radius, center) > tolerance * 4.);
     let mesh = body.tessellate_for_verification(tolerance, 200_000).unwrap();
     assert!(mesh.triangles.len() > display.triangles.len());
+    let volume = mesh.measure().volume;
+    assert!(volume >= std::f64::consts::PI * (radius - tolerance).powi(2) * 6.);
+    assert!(volume <= std::f64::consts::PI * (radius + tolerance).powi(2) * 6.);
     assert!(radial_error(&mesh, radius, center) <= tolerance, "{}", radial_error(&mesh, radius, center));
     assert_eq!(mesh.tri_face.iter().copied().collect::<std::collections::BTreeSet<_>>().len(), body.face_count());
 }
@@ -59,4 +67,28 @@ fn verification_tessellation_does_not_accept_refinement_budget_fallback() {
     let sphere = crate::sphere(Vec3::ZERO, 10.).unwrap();
     let error = sphere.tessellate_for_verification(1e-5, 200_000).unwrap_err();
     assert!(error.to_string().contains("refinement budget"), "{error}");
+}
+
+#[test]
+fn verification_tessellation_preserves_concave_material_and_multiple_holes() {
+    use solvecraft_geom::{Loop2, Plane, Region2, Vec2};
+    let polygon = |points: &[(f64, f64)]| Loop2::polygon(&points.iter().map(|&(x, y)| Vec2::new(x, y)).collect::<Vec<_>>());
+    let region = Region2 {
+        outer: polygon(&[(0., 0.), (20., 0.), (20., 10.), (10., 10.), (10., 20.), (0., 20.)]),
+        holes: vec![polygon(&[(2., 2.), (2., 4.), (4., 4.), (4., 2.)]), polygon(&[(12., 2.), (12., 4.), (14., 4.), (14., 2.)])],
+    };
+    let bodies = crate::extrude(&Plane::XY, &[region], 0., 6.).unwrap();
+    assert_eq!(bodies.len(), 1);
+    let mesh = bodies.first().unwrap().tessellate_for_verification(0.00125, 200_000).unwrap();
+    assert!((mesh.measure().volume - 1752.).abs() < 1e-6);
+    for (point, material) in [
+        (Vec3::new(1., 1., 3.), true),
+        (Vec3::new(19., 9., 3.), true),
+        (Vec3::new(9., 19., 3.), true),
+        (Vec3::new(3., 3., 3.), false),
+        (Vec3::new(13., 3., 3.), false),
+        (Vec3::new(15., 15., 3.), false),
+    ] {
+        assert_eq!(mesh.contains(point), material, "{point:?}");
+    }
 }

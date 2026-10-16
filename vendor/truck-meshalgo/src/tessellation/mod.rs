@@ -1,3 +1,5 @@
+mod boundary_index;
+
 use crate::*;
 use spade::{iterators::*, *};
 use truck_topology::{compress::*, *};

@@ -102,8 +102,8 @@ checks catch stationary contact and tools already inside fixtures. Body groups p
 cavities and prevent opposite winding in separate fixtures from cancelling. Open/nonmanifold
 meshes, clearance within the interpolation/refinement margin, and failed numerical queries remain
 **inconclusive**. It does not call offset or toolpath-generation algorithms and observes cancellation
-during topology preparation and collision queries. The current algorithm fingerprint is `cam/17`;
-the boundary validation and offset adapter changes invalidate older generated/verified caches.
+during topology preparation and collision queries. The current algorithm fingerprint is `cam/18`;
+the geometry and tessellation changes invalidate older generated/verified caches.
 No target fitting, translation, unit guessing or discarded unknown NC commands is allowed.
 
 Default dimensional tolerance is 0.01 mm; interpolation/post error is 0.001 mm; requested spatial
@@ -193,31 +193,43 @@ This does not establish qualification of arbitrary non-height-field solids or Fu
 Native CAD pocket and contour workflows also pass through durable sketch-profile references,
 ramp entry, generation, simulation, posting and save/reopen. All four analytic strategies now
 require passing finished-dimension checks; independent point probes supplement those certificates.
-The Fusion oracle requires the same dimensional checks for both programs. Remaining M15 gates:
+The Fusion oracle requires the same dimensional checks for both programs. Current acceptance
+evidence and the remaining finite gates are:
 
-- Broader protected-surface, concave-region and multi-operation dimensional regression coverage.
-- Broader fixture regression coverage and performance acceptance; supported stock/model geometry
+- Nine analytic recipes / fourteen operation stages cover concave regions, two islands, a narrow
+  channel, allowances, multiple depths/tools, shifted origins and blind/through drilling. Deliberate
+  faulty programs check missing cuts, protected material, unsafe leads and inaccessible channels.
+- Fixture regressions cover thin swept obstacles, initial overlap, enclosed volumes and cavities,
+  holder/shank interference, malformed/open meshes and cancellation. Supported stock/model geometry
   remains vertical height-field scope. Fixture triangles must form closed consistently wound bodies
   for volume-containment certification; surface contact can still be detected on an open mesh.
-- Browser timing acceptance for worst-case single-operation offset jobs. Background jobs yield
-  during preparation, boundary validation, between offset queries and every 256 emitted motions,
-  as well as during verification and conforming stock extraction. The browser shares a four-ms
-  scheduling target across jobs in round-robin order; status queries advance one checkpoint.
-  This target is checked between polls, so it is not a hard deadline. One library offset
-  query, one body tessellation, one setup/operation encoding during hashing and direct synchronous exports remain atomic; their worst-case browser latency
-  is still an acceptance gate. Native background jobs perform profile sampling, tessellation,
-  transforms and hashing on the worker from an immutable captured snapshot. Synchronous command
-  calls remain available. Status distinguishes `preparing` from `running`; the fingerprint is null
-  until preparation completes. Cancellation cannot publish a partial path or revive a cancelled job.
+- Background jobs yield during preparation, boundary validation, between offset queries and every
+  256 emitted motions, as well as during verification, NC round trips, fingerprint encoding and
+  conforming stock extraction. The browser shares a four-ms scheduling target across jobs in
+  round-robin order; status queries advance one checkpoint. This target is checked between polls,
+  so it is not a hard deadline. Measured dense offset, large-body tessellation and long-reference
+  encoding remain atomic for about 21.2, 90.8 and 8 ms respectively on the documented browser.
+  Direct export timing is still unmeasured except for NC posting. Complete that finite timing
+  assessment and record any needed responsiveness changes before closing browser acceptance.
+  Native background jobs perform profile sampling, tessellation, transforms and hashing on the
+  worker from an immutable snapshot. Synchronous command calls remain available. Status distinguishes
+  `preparing` from `running`; the fingerprint is null until preparation completes. Cancellation
+  cannot publish a partial path or revive a cancelled job.
 - Associated CAD curves use second-derivative chord-error bounds after placement, including a
   numerical reserve and a shared 10,000-vertex boundary limit. Requests exceeding precision or
   vertex budgets fail explicitly rather than silently loosening the operation tolerance.
-- Broader visible-UI regression coverage. The four initial local Fusion reference cases pass. A native desktop
-  walkthrough now passes for one original CAD case per strategy, including generation, simulation,
-  posting through the system save dialog, save/reopen/edit/regenerate, stock display and playback.
-  This limited positive-case coverage does not replace the broader acceptance corpus.
+- The four initial local Fusion reference cases pass. Native desktop walkthroughs cover each
+  strategy through generation, simulation, posting through the system save dialog, save/reopen/
+  edit/regenerate, stock display and playback. Eight additional recovery captures cover lost-profile
+  reselection, line-linked fixture collisions and correction, simulation cancellation and stale
+  feed edits followed by regeneration. Preparation cancellation is covered by an engine regression;
+  it was not manually clicked during that walkthrough.
+- Finish the original requirement-to-evidence audit after the export timing assessment. Do not
+  treat generic requests for broader coverage as an unlimited gate or expand into later milestones.
 
-These gates must be closed before calling M15 complete or claiming Fusion machining parity.
+M15 remains in progress while these concrete acceptance items are open. The available passing
+reference corpus is evidence for its recorded fixtures, not qualification of arbitrary parts or
+physical controllers.
 
 ## Reproducible comparisons
 
@@ -516,3 +528,23 @@ silently coarsening it. Native preparation runs on its worker, but a Wasm shell 
 still atomic and the measured large-body stall remains a browser responsiveness gap. Local
 before/after evidence is in `target/cam-web-probe/primitive-baseline.json` and
 `primitive-fixed.json`; output budgets and tolerances were not relaxed.
+
+
+The follow-up mesher optimization uses Spade's bulk point insertion and an original conservative
+line/AABB index for trim-boundary candidates. It retains every boundary segment and the existing
+winding predicate; uncertain arithmetic visits candidates rather than pruning them. Rounded
+positions are mapped back to vertex handles so duplicate points do not change constraint indices.
+Differential tests compare indexed and complete winding scans across concavity, holes, reversed
+winding, translated/scaled coordinates, boundary points and nearly parallel rays. Kernel checks
+independently assert concave two-hole prism volume/containment and large-cylinder chord/volume
+bounds. The algorithm fingerprint advances to `cam/18` because tessellation can change triangle
+ordering. A local instrumented prototype reduced the radius-5000 case from about 1089.8 ms to
+96.5 ms with the same 28,382 triangles and 0.00100715 mm maximum measured radial chord error.
+Its segment visits fell from 352,784,748 to 1,462,907. This optimization does not make shell
+meshing incremental; remaining atomic latency and direct exports are still acceptance work.
+
+The uninstrumented production release-Wasm follow-up measured 10.3 / 27.2 / 90.8 ms for radii
+10 / 500 / 5000 mm, with the same triangle counts and radial errors as the fixed-tolerance
+baseline. The largest case remains an approximately 91 ms atomic step on this machine; no
+hard scheduling deadline or full browser responsiveness claim follows from this measurement.
+Evidence: `target/cam-web-probe/tessellation-production-index.json`.

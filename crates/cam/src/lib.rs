@@ -28,7 +28,7 @@ pub(crate) fn invalid<T>(message: impl Into<String>) -> Result<T> {
     Err(Error(message.into()))
 }
 
-pub const VERSION: &str = "cam/17";
+pub const VERSION: &str = "cam/18";
 pub const TOLERANCE: f64 = 0.01;
 pub const POST_ERROR: f64 = 0.001;
 pub const VERIFY_ERROR: f64 = 0.0025;

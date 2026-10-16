@@ -52,6 +52,13 @@ Changes:
   worker threads or sequential Wasm execution. Verification rejects these fallbacks; ordinary
   display meshing retains its bounded approximation behavior. These checks do not constitute
   an analytic error proof for arbitrary oscillatory surfaces.
+- `tessellation/boundary_index.rs`, `tessellation/triangulation.rs`: original conservative
+  line/AABB candidate index retains the existing winding predicate and all boundary segments;
+  uncertain/nonfinite pruning arithmetic falls back to visiting candidates. Empty triangulations
+  bulk-load rounded points through Spade (minimum 2.15.1), map duplicate positions to handles,
+  and retain the existing constraint insertion loop. Nonempty/failed loads retain sequential
+  insertion. Workspace kernel tests cover differential winding, concavity, holes and physical
+  chord/volume accuracy. No profiling instrumentation is included.
 - `lib.rs`: compiler warnings no longer fail the build. Example, test and bench targets are
   dropped (their sources are not vendored).
 

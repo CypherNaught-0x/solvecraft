@@ -67,8 +67,17 @@ close worst-case browser responsiveness acceptance.
 ## Other candidates
 
 [spade 2.15.1](https://docs.rs/spade/2.15.1/spade/) provides constrained 2D triangulation and
-already exists transitively. Consider it if conforming planar top-surface triangulation is needed
-for stock export. It does not supply the side-wall stitching or a complete solid boundary.
+already exists transitively. The 2026-10-16 meshing profile justified using its `bulk_load_cdt`
+API for empty boundary triangulations, replacing expensive sequential point location. The vendor
+manifest now requires at least the inspected 2.15.1 release. No constraints are passed during
+bulk loading; rounded positions (including duplicates and signed zero) map back to vertex
+handles before the existing constraint insertion loop. Nonempty or failed loads retain the
+sequential path. The installed release's API documentation and implementation were inspected;
+workspace native/Wasm gates and analytic kernel tests exercise the adapter. Combined with an
+original conservative boundary candidate index, the original large-cylinder browser measurement
+fell from about 1087 ms to 91 ms without changing its measured chord error or triangle count.
+This is a concrete reuse of an existing dependency, not a new mesh Boolean or solid-boundary
+library. It does not supply stock side-wall stitching or close atomic browser latency acceptance.
 
 [rstar](https://docs.rs/crate/rstar/0.13.0) is an alternative spatial index. Defer an additional
 index dependency until profiling shows a need beyond the existing XY index or Parry's structures.

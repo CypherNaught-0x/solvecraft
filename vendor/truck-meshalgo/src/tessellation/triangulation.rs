@@ -99,7 +99,7 @@ pub fn retriangulate_projected(mesh: &PolygonMesh, direction: Vector3) -> Option
     if !loop_orientation(&polygon) {
         polygon.reverse();
     }
-    let boundary = PolyBoundary(vec![polygon]);
+    let boundary = PolyBoundary::from_loops(vec![polygon]);
     let mut cdt = Cdt::new();
     let mut handles = Vec::with_capacity(positions.len());
     let mut original = HashMap::default();
@@ -475,7 +475,7 @@ fn get_mindiff(u: f64, u0: f64, up: f64) -> f64 {
 }
 
 #[derive(Debug, Default, Clone)]
-struct PolyBoundary(Vec<Vec<Point2>>);
+struct PolyBoundary(Vec<Vec<Point2>>, boundary_index::BoundaryIndex);
 
 fn normalize_range(curve: &mut Vec<Point2>, compidx: usize, (u0, u1): (f64, f64)) {
     let p = curve[0];
@@ -510,6 +510,13 @@ fn loop_orientation(curve: &[Point2]) -> bool {
 }
 
 impl PolyBoundary {
+    fn from_loops(loops: Vec<Vec<Point2>>) -> Self {
+        let index = boundary_index::BoundaryIndex::new(
+            loops.iter().flat_map(|ring| ring.iter().circular_tuple_windows())
+                .map(|(a, b)| ([a.x, a.y], [b.x, b.y])),
+        );
+        Self(loops, index)
+    }
     fn new(pieces: Vec<PolyBoundaryPiece>, surface: &impl PreMeshableSurface, tol: f64) -> Self {
         let (mut closed, mut open) = (Vec::new(), Vec::new());
         pieces.into_iter().for_each(|PolyBoundaryPiece(mut vec)| {
@@ -615,48 +622,44 @@ impl PolyBoundary {
                 closed.push(connect_edges([vec0, vec1, vec2, vec3]));
             }
         }
-        Self(closed)
+        Self::from_loops(closed)
     }
 
     /// whether `c` is included in the domain with boundary = `self`.
     fn include(&self, c: Point2) -> bool {
         let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
         let r = Vector2::new(f64::cos(t), f64::sin(t));
-        self.0
-            .iter()
-            .flat_map(|vec| vec.iter().circular_tuple_windows())
-            .try_fold(0_i32, move |counter, (p0, p1)| {
-                let a = p0 - c;
-                let b = p1 - c;
-                let s0 = r.x * a.y - r.y * a.x; // v times a
-                let s1 = r.x * b.y - r.y * b.x; // v times b
-                let s2 = a.x * b.y - a.y * b.x; // a times b
-                let x = s2 / (s1 - s0);
-                if x.so_small() && s0 * s1 < 0.0 {
-                    None
-                } else if x > 0.0 && s0 <= 0.0 && s1 > 0.0 {
-                    Some(counter + 1)
-                } else if x > 0.0 && s0 >= 0.0 && s1 < 0.0 {
-                    Some(counter - 1)
-                } else {
-                    Some(counter)
-                }
-            })
-            .map(|counter| counter > 0)
-            .unwrap_or(false)
+        let mut counter = 0_i32;
+        let complete = self.1.visit([c.x, c.y], [r.x, r.y], |p0, p1| {
+            let a = Point2::new(p0[0], p0[1]) - c;
+            let b = Point2::new(p1[0], p1[1]) - c;
+            let s0 = r.x * a.y - r.y * a.x;
+            let s1 = r.x * b.y - r.y * b.x;
+            let s2 = a.x * b.y - a.y * b.x;
+            let x = s2 / (s1 - s0);
+            if x.so_small() && s0 * s1 < 0.0 { return false; }
+            if x > 0.0 && s0 <= 0.0 && s1 > 0.0 { counter += 1; }
+            else if x > 0.0 && s0 >= 0.0 && s1 < 0.0 { counter -= 1; }
+            true
+        });
+        complete && counter > 0
     }
 
     /// Inserts points and adds constraint into triangulation.
     fn insert_to(&self, triangulation: &mut Cdt) {
-        let poly2tri: Vec<_> = self
-            .0
-            .iter()
-            .flatten()
-            .map(|pt| {
-                let p = [spade_round(pt.x), spade_round(pt.y)];
-                triangulation.insert(SPoint2::from(p)).ok()
-            })
-            .collect();
+        let points: Vec<_> = self.0.iter().flatten().map(|p| SPoint2::new(spade_round(p.x), spade_round(p.y))).collect();
+        let key = |p: SPoint2| (if p.x == 0. { 0 } else { p.x.to_bits() }, if p.y == 0. { 0 } else { p.y.to_bits() });
+        // SolveCraft: bulk insertion avoids quadratic location walks on ordered boundaries.
+        // Keep the original constraint loop and map duplicate/rounded points by position.
+        // No constraints are passed to bulk loading, so edge conflicts cannot panic.
+        let bulk = if triangulation.num_vertices() == 0 { Cdt::bulk_load_cdt(points.clone(), Vec::new()).ok() } else { None };
+        let poly2tri: Vec<_> = if let Some(bulk) = bulk {
+            *triangulation = bulk;
+            let handles: HashMap<_, _> = triangulation.vertices().map(|v| (key(v.position()), v.fix())).collect();
+            points.iter().map(|p| handles.get(&key(*p)).copied()).collect()
+        } else {
+            points.into_iter().map(|p| triangulation.insert(p).ok()).collect()
+        };
         let mut prev: Option<usize> = None;
         let mut counter = 0;
         self.0
