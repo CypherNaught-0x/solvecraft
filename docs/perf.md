@@ -1,3 +1,35 @@
+# Design loading
+
+`solvecraft-cli bench-open design.solvecraft` reports JSON lines for file reading,
+JSON decoding and migrations (including input-name repair), timeline evaluation, individual
+features, and world placement/display meshing. `--parse-only` stops before geometry evaluation.
+The parse timer includes document validation and repair, not just the JSON parser.
+
+Windows x64, optimized `ci` profile, measured during other builds:
+
+| Design | Parse/repair | Evaluate | Display meshes |
+|---|---:|---:|---:|
+| 19-feature enclosure, 34 KB | 1.2 ms | 14.9 s | 6 ms |
+| 25-feature assembly, 15.2 MB, 2,990 bodies | 21 ms | 12.5 s | 2.1 s |
+| Generated 1,000 independent boxes, 185 KB | 5 ms | 0.82 s | 0.15 s |
+| Generated 5,000 boxes in five grids, 10 features | 0.45 ms | 17.6 s | 0.81 s |
+
+The enclosures spend most of evaluation in joins and cuts, not parsing. Designs save feature
+definitions; opening them rebuilds their geometry. Those times remain after the repair fix.
+
+A separate generated timeline with missing input names reproduced minutes in the reader:
+
+| Timeline (geometry rolled back) | Parse/repair before | After |
+|---|---:|---:|
+| 2,000 boxes, 6,000 unnamed inputs | 78.1 s | 10–20 ms |
+| 5,000 boxes, 15,000 unnamed inputs | interrupted after 131 s, still repairing | 26–46 ms |
+
+Previously, each missing input restarted the `d1`, `d2`, … search, scanning the document for
+every candidate. This approaches cubic work as unnamed inputs accumulate. Loading now reserves
+names once and assigns missing names with an advancing cursor. Existing names, names on later
+features, parameter collisions and reuse of surplus names retain the previous behavior.
+Regression tests compare the old and bulk repairs and load a 5,000-feature unnamed timeline.
+
 # Viewport performance
 
 Measured with the control channel (`ui.inspect` `frame_ms`: CPU time of one UI frame, which
@@ -81,3 +113,43 @@ errors) through edits, suppression, roll-back, undo and redo. Setting a sketch d
 can still recompute (oracle 61, 62): solving the sketch moves its points by rounding noise, so
 its inputs are not exactly the old ones. Oracle 59's first parameter edit fails (a recipe
 expression the bench's `* 1.02` can't scale) and is left out.
+
+
+## Desktop loading and recent thumbnails (2026-10-10)
+
+The Arduino Uno enclosure (19 features, 34 KB) and Raspberry Pi 5 case (24 features,
+61 KB) each decode in about 1 ms. A release build spends roughly 12.1 s and 8.2 s,
+respectively, evaluating their geometry on this Windows machine. Changing the document
+encoding does not eliminate these boolean operations.
+
+Interactive Open, recent-file clicks, drag/drop and STEP/mesh insertion now execute on a
+worker, including preparation of the world-space bodies and display meshes. The existing
+design stays available until the result is ready; a failed or cancelled job cannot replace
+it. Insertion preserves the file, saved state, earlier undo history and view settings.
+Timeline copies share their lazy mesh cell, and adopting a prepared session keeps its warm
+world-space cache instead of transforming and tessellating its components again on the UI.
+A STEP body's missing-face check reuses its orientation tessellation when the tolerances
+match and its orientation was not reversed.
+
+Live desktop tests (`ci` profile, with other builds/tests running) opened the Arduino and
+Pi case in 15.2 s and 10.5 s. During those jobs, median `ui.inspect` round trips were 20.5 ms
+and 8.3 ms; the slowest were 33.7 ms and 28.6 ms. This fixes the window freeze, not the
+remaining cost of cold geometry evaluation.
+
+Recent thumbnails are 240 � 150 PNG files in `SolveCraft/thumbnails` under the platform
+cache directory (`LOCALAPPDATA` on Windows). Their keys include the source path, file size
+and modification time. Open and Save render from the model already in memory. Cached
+recents decode the PNG without reading or rebuilding a document, and run before cold
+recents and sample thumbnails. Missing or invalid pictures fall back to a background rebuild.
+No thumbnail or base64 image is added to the design JSON. A regression test verifies the
+source bytes remain unchanged, a cached picture works even without a parseable source
+file, and changing the source invalidates the cache.
+
+`solvecraft-cli bench-open` also accepts STEP/IGES. For exchange files its `parse` phase
+includes constructing and checking the imported B-rep, not merely decoding STEP syntax.
+
+The live test loaded both cached recent cards in 21 ms and inserted the 2 MB lightweight
+Pi STEP (27 bodies) into the case in 279 ms; undo restored the original two bodies. The
+full 77 MB board STEP (2689 solid definitions, 45,689 faces) still had not completed after
+300 s. Its window continued handling inspection and Cancel, and cancelling preserved the
+case. Complex STEP construction remains an outstanding kernel performance problem.

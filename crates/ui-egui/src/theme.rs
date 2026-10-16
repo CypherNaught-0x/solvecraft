@@ -16,7 +16,6 @@ pub fn is_dark() -> bool {
 pub struct Tokens {
     pub app_bar: Color32,
     pub toolbar: Color32,
-    pub tab_active: Color32,
     pub panel: Color32,
     pub panel_header: Color32,
     pub border: Color32,
@@ -71,6 +70,12 @@ pub struct Tokens {
     pub preview_add: Color32,
     /// Removed material in a feature preview (translucent).
     pub preview_cut: Color32,
+    // ---- manufacturing ----
+    pub cam_stock: Color32,
+    pub cam_fixture: Color32,
+    pub cam_cut: Color32,
+    pub cam_rapid: Color32,
+    pub cam_tool: Color32,
     // ---- viewport ----
     /// Viewport background (top and bottom of the gradient; equal for a flat fill).
     pub viewport_top: Color32,
@@ -132,7 +137,6 @@ impl Tokens {
         Tokens {
             app_bar: Color32::from_rgb(52, 56, 64),
             toolbar: Color32::from_rgb(246, 247, 249),
-            tab_active: Color32::from_rgb(255, 255, 255),
             panel: Color32::from_rgb(250, 251, 252),
             panel_header: Color32::from_rgb(236, 238, 242),
             border: Color32::from_rgb(208, 212, 220),
@@ -172,6 +176,11 @@ impl Tokens {
             manipulator: Color32::from_rgb(40, 110, 220),
             preview_add: Color32::from_rgb(112, 160, 226),
             preview_cut: Color32::from_rgba_unmultiplied_const(232, 84, 44, 110),
+            cam_stock: Color32::from_rgb(166, 127, 65),
+            cam_fixture: Color32::from_rgb(150, 90, 180),
+            cam_cut: Color32::from_rgb(20, 110, 160),
+            cam_rapid: Color32::from_rgb(185, 115, 25),
+            cam_tool: Color32::from_rgb(40, 150, 70),
             viewport_top: Color32::from_rgb(240, 243, 247),
             viewport_bottom: Color32::from_rgb(203, 210, 221),
             grid: Color32::from_rgb(196, 202, 212),
@@ -212,7 +221,6 @@ impl Tokens {
         let mut t = Tokens::light();
         t.app_bar = Color32::from_rgb(28, 31, 38);
         t.toolbar = Color32::from_rgb(37, 41, 49);
-        t.tab_active = Color32::from_rgb(46, 52, 64);
         t.panel = Color32::from_rgb(39, 43, 52);
         t.panel_header = Color32::from_rgb(47, 52, 62);
         t.border = Color32::from_rgb(63, 69, 82);
@@ -229,6 +237,11 @@ impl Tokens {
         t.hover = Color32::from_rgb(54, 61, 74);
         t.hover_edge_halo = Color32::from_rgb(203, 203, 203);
         t.origin_point = Color32::from_rgb(214, 215, 218);
+        t.cam_stock = Color32::from_rgb(190, 154, 92);
+        t.cam_fixture = Color32::from_rgb(177, 119, 209);
+        t.cam_cut = Color32::from_rgb(50, 180, 240);
+        t.cam_rapid = Color32::from_rgb(230, 170, 65);
+        t.cam_tool = Color32::from_rgb(135, 220, 145);
         t.viewport_top = Color32::from_rgb(46, 52, 64);
         t.viewport_bottom = Color32::from_rgb(46, 52, 64);
         t.grid = Color32::from_rgb(59, 65, 76);

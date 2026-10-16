@@ -81,6 +81,26 @@ fn parametric_plate_reevaluates() {
     assert!(rel(measure(&m.state().bodies[0].body).unwrap().volume, 50.0 * 30.0 * 10.0) < 1e-9);
 }
 
+/// Setting a parameter back takes the earlier results from the cache: nothing is recomputed, but
+/// the evaluation reports the features it restored (their geometry did change back).
+#[test]
+fn set_back_reports_restored_features() {
+    let (mut doc, _) = plate_doc();
+    let mut m = Model::new();
+    m.evaluate(&doc);
+    assert_eq!((m.last_recomputed, m.last_restored), (2, 0));
+    doc.set_param("width", "50 mm", None, None).unwrap();
+    m.evaluate(&doc);
+    assert_eq!((m.last_recomputed, m.last_restored), (2, 0));
+    doc.set_param("width", "40 mm", None, None).unwrap();
+    m.evaluate(&doc);
+    assert_eq!((m.last_recomputed, m.last_restored), (0, 2));
+    assert!(rel(measure(&m.state().bodies[0].body).unwrap().volume, 24000.0) < 1e-9);
+    // No change: nothing recomputed and nothing restored.
+    m.evaluate(&doc);
+    assert_eq!((m.last_recomputed, m.last_restored), (0, 0));
+}
+
 #[test]
 fn box_fillet_cut_timeline() {
     let (mut doc, _) = plate_doc();
@@ -137,6 +157,7 @@ fn errors_are_reported_not_fatal() {
             targets: vec![],
             angle2: None,
             symmetric: false,
+            convention: Default::default(),
             to: None,
         },
         None,
@@ -145,7 +166,13 @@ fn errors_are_reported_not_fatal() {
     doc.add_feature(FeatureKind::Fillet { edges: vec![Vec3::new(500.0, 0.0, 0.0)], radius: "1".into(), body: None, style: Default::default() }, None)
         .unwrap();
     doc.add_feature(
-        FeatureKind::Box { corner: Vec3::ZERO, length: "nope".into(), width: "1".into(), height: "1".into(), operation: Operation::NewBody },
+        FeatureKind::Box {
+            corner: point_expr(Vec3::ZERO),
+            length: "nope".into(),
+            width: "1".into(),
+            height: "1".into(),
+            operation: Operation::NewBody,
+        },
         None,
     )
     .unwrap();
@@ -182,13 +209,19 @@ fn params_and_serialization() {
 fn primitives_and_combine() {
     let mut doc = Document::new("p");
     doc.add_feature(
-        FeatureKind::Box { corner: Vec3::ZERO, length: "10".into(), width: "10".into(), height: "10".into(), operation: Operation::NewBody },
+        FeatureKind::Box {
+            corner: point_expr(Vec3::ZERO),
+            length: "10".into(),
+            width: "10".into(),
+            height: "10".into(),
+            operation: Operation::NewBody,
+        },
         None,
     )
     .unwrap();
     doc.add_feature(
         FeatureKind::Cylinder {
-            base: Vec3::new(5.0, 5.0, 0.0),
+            base: point_expr(Vec3::new(5.0, 5.0, 0.0)),
             axis: Vec3::Z,
             radius: "2".into(),
             height: "20".into(),
@@ -274,4 +307,63 @@ fn parameter_cycles_are_found() {
     let (vals, errs) = crate::expr::eval_params(&defs, 1.0);
     assert!(errs["a"].contains("circular reference: a → b → c → a"), "{}", errs["a"]);
     assert!(vals.contains_key("d") && errs.contains_key("a") && errs.contains_key("e"));
+}
+
+/// Features that use a sketch's points or regions go with it (not only profile and path users).
+#[test]
+fn input_sketches_cover_points_and_patches() {
+    let hole: FeatureKind = serde_json::from_value(serde_json::json!({
+        "type": "hole", "position": [0, 0, 0], "direction": [0, 0, -1], "diameter": "3",
+        "points": {"sketch": 7, "ids": ["p1"]},
+    }))
+    .unwrap();
+    assert_eq!(hole.input_sketches(), vec![7]);
+    let patch: FeatureKind = serde_json::from_value(serde_json::json!({"type": "patch", "sketch": 9})).unwrap();
+    assert_eq!(patch.input_sketches(), vec![9]);
+    let pipe: FeatureKind = serde_json::from_value(serde_json::json!({"type": "pipe", "path_sketch": 72, "path": ["l1"], "diameter": "4"})).unwrap();
+    assert_eq!(pipe.input_sketches(), vec![72]);
+}
+
+/// Guard for `FeatureKind::input_sketches`: a variant with a field that refers to a sketch
+/// (a field named `*sketch*` holding an id, sketch points or loft sections) must not sit in the
+/// arm that returns no sketches. New variants are caught by the compiler (the match has no
+/// wildcard); this catches a sketch field added to an existing variant.
+#[test]
+fn input_sketches_lists_every_variant_with_a_sketch_field() {
+    let src = include_str!("document.rs");
+    let body = src.split("pub enum FeatureKind {").nth(1).and_then(|s| s.split("\n}\n").next()).unwrap();
+    let mut with_sketch = Vec::new();
+    let mut variant = "";
+    for line in body.lines() {
+        let t = line.trim();
+        if line.starts_with("    ") && !line.starts_with("     ") && t.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+            variant = t.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("");
+            continue;
+        }
+        let Some((name, ty)) = t.strip_prefix("pub ").unwrap_or(t).split_once(':') else { continue };
+        let refers = (name.contains("sketch") && (ty.contains("u64") || ty.contains("SketchPoints")))
+            || ty.contains("SketchPoints")
+            || ty.contains("LoftSection");
+        if refers && !line.trim_start().starts_with("//") && !with_sketch.contains(&variant) {
+            with_sketch.push(variant);
+        }
+    }
+    assert!(with_sketch.len() >= 10, "the FeatureKind parse found too few sketch users: {with_sketch:?}");
+    let f = src.split("pub fn input_sketches(&self)").nth(1).unwrap();
+    let empty_arm = f.split("=> Vec::new()").next().and_then(|s| s.rsplit("=> ").next()).unwrap();
+    for v in with_sketch {
+        assert!(
+            !empty_arm.contains(&format!("K::{v} {{")),
+            "FeatureKind::{v} has a sketch field but input_sketches says it uses no sketch: deleting the sketch would leave it broken"
+        );
+    }
+}
+
+#[test]
+fn timeline_clones_share_meshes_even_when_cloned_before_tessellation() {
+    let body = solvecraft_kernel::box_solid(Vec3::ZERO, Vec3::new(10., 10., 10.)).unwrap();
+    let a = crate::eval::ModelBody::new("box".into(), body, 1);
+    let b = a.clone();
+    assert!(std::sync::Arc::ptr_eq(&a.mesh(), &b.mesh()));
+    assert!(!a.mesh().triangles.is_empty());
 }

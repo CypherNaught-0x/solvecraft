@@ -9,14 +9,14 @@ use serde_json::{Value, json};
 use solvecraft_doc::FeatureKind;
 
 use super::CommandSpec;
-use crate::params::{bad, str_};
+use crate::params::{bad, bool_, str_};
 use crate::{Result, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("body.rename", "Rename Body", rename_body).params("body: its name, name: the new name (features that use the body follow)"),
     CommandSpec::new("sketch.redefine", "Redefine Sketch Plane", redefine_sketch)
         .icon("plane")
-        .params("sketch: id or name; plane: XY|XZ|YZ | construction plane name | {face: [x,y,z]} | {origin, normal} (the sketch keeps its geometry)"),
+        .params("sketch: id or name; plane: as sketch.create; author_path?: exact owner occurrence ids; explicitly rebinds or freezes the plane while preserving geometry and dimension names"),
     CommandSpec::new("browser.group", "New Group", group)
         .icon("folder")
         .params("folder: bodies|sketches|construction; component?: id (default 0); name?; items?: [keys] (they leave other groups)"),
@@ -34,6 +34,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("view.delete", "Delete Named View", view_delete).params("view: name"),
     CommandSpec::new("view.list", "List Named Views", view_list).noundo(),
     CommandSpec::new("browser.order", "Order Browser Items", order).params("folder, component?, order: [keys] (the folder's items in display order)"),
+    CommandSpec::new("browser.visibility", "Show/Hide", visibility).icon("eye").noundo().params(
+        "visible: bool; items?: [sketch id or name | body name | construction name | O|X|Y|Z|XY|XZ|YZ]; \
+         or folder?: bodies|sketches|construction|origin (all of it); or paths?: [[occurrence ids]] (exact placements and descendants), isolate?: bool (requires paths and visible:true). View state: not saved, not an undo step",
+    ),
 ];
 
 const FOLDERS: [&str; 3] = ["bodies", "sketches", "construction"];
@@ -155,6 +159,146 @@ fn order(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({}))
 }
 
+const ORIGIN: [&str; 7] = ["O", "X", "Y", "Z", "XY", "XZ", "YZ"];
+
+/// A browser item whose visibility can change.
+enum Shown {
+    Sketch(u64),
+    Body(String),
+    /// Origin items and construction geometry, by name.
+    Origin(String),
+}
+
+fn is_construction(k: &FeatureKind) -> bool {
+    matches!(k, FeatureKind::ConstructionPlane { .. } | FeatureKind::ConstructionAxis { .. } | FeatureKind::ConstructionPoint { .. })
+}
+
+fn shown_item(s: &Session, key: &str) -> Option<Shown> {
+    if let Some(f) = s.doc.find_feature(key) {
+        if matches!(f.kind, FeatureKind::Sketch { .. }) {
+            return Some(Shown::Sketch(f.id));
+        }
+        if is_construction(&f.kind) {
+            return Some(Shown::Origin(f.name.clone()));
+        }
+    }
+    if s.world_state().bodies.iter().any(|b| b.name == key) {
+        return Some(Shown::Body(key.to_string()));
+    }
+    ORIGIN.iter().find(|o| o.eq_ignore_ascii_case(key)).map(|o| Shown::Origin(o.to_string()))
+}
+
+fn visibility(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "browser.visibility";
+    let visible = bool_(p, "visible").ok_or_else(|| bad(cmd, "`visible` must be true or false"))?;
+    if let Some(value) = p.get("paths") {
+        if p.get("items").is_some() || p.get("folder").is_some() {
+            return Err(bad(cmd, "give paths, items or folder, not several"));
+        }
+        let paths =
+            value.as_array().filter(|a| !a.is_empty() && a.len() <= 10_000).ok_or_else(|| bad(cmd, "paths must list 1..10000 occurrence paths"))?;
+        let paths: Vec<Vec<u64>> = paths
+            .iter()
+            .map(|value| {
+                let path = value
+                    .as_array()
+                    .filter(|a| !a.is_empty() && a.len() <= 64)
+                    .and_then(|a| a.iter().map(Value::as_u64).collect::<Option<Vec<_>>>())
+                    .ok_or_else(|| bad(cmd, "each path must list 1..64 occurrence ids"))?;
+                s.occurrence_placement(&path).map_err(|e| bad(cmd, e.to_string()))?;
+                Ok(path)
+            })
+            .collect::<Result<_>>()?;
+        if bool_(p, "isolate").unwrap_or(false) {
+            if !visible {
+                return Err(bad(cmd, "isolate requires visible:true"));
+            }
+            let mut hidden = Vec::new();
+            let mut ancestor_bodies = Vec::new();
+            let mut stack = vec![Vec::<u64>::new()];
+            let mut count = 0;
+            while let Some(parent) = stack.pop() {
+                for child in s.occurrence_children(&parent)? {
+                    count += 1;
+                    if count > 100_000 {
+                        return Err(bad(cmd, "isolate exceeds 100000 placements"));
+                    }
+                    if paths.iter().any(|selected| child.path.starts_with(selected)) {
+                        continue;
+                    }
+                    if paths.iter().any(|selected| selected.starts_with(&child.path)) {
+                        ancestor_bodies.extend(child.bodies.into_iter().map(|b| b.world));
+                        stack.push(child.path);
+                    } else {
+                        hidden.push(child.path);
+                    }
+                }
+            }
+            let mut root_bodies: Vec<String> =
+                s.model.state().bodies.iter().filter(|b| s.doc.model_body_component(b) == 0).map(|b| b.name.clone()).collect();
+            root_bodies.extend(ancestor_bodies);
+            s.visibility.hidden_occurrences = hidden;
+            s.visibility.hidden_bodies = root_bodies;
+            s.revision += 1;
+            return Ok(json!({"visible":true,"isolated":paths,"visibility":s.visibility}));
+        }
+        for path in &paths {
+            s.visibility.hidden_occurrences.retain(|p| p != path);
+            if !visible {
+                s.visibility.hidden_occurrences.push(path.clone());
+            }
+        }
+        s.revision += 1;
+        return Ok(json!({"visible":visible,"changed":paths.len(),"visibility":s.visibility}));
+    }
+    let items: Vec<Shown> = match (str_(p, "folder"), p.get("items")) {
+        (Some(_), Some(_)) => return Err(bad(cmd, "give `items` or `folder`, not both")),
+        (Some("bodies"), None) => s.world_state().bodies.iter().map(|b| Shown::Body(b.name.clone())).collect(),
+        (Some("sketches"), None) => s.model.state().sketches.iter().map(|x| Shown::Sketch(x.feature)).collect(),
+        (Some("construction"), None) => s.doc.features.iter().filter(|f| is_construction(&f.kind)).map(|f| Shown::Origin(f.name.clone())).collect(),
+        (Some("origin"), None) => ORIGIN.iter().map(|o| Shown::Origin(o.to_string())).collect(),
+        (Some(f), None) => return Err(bad(cmd, format!("unknown folder `{f}` (bodies, sketches, construction, origin)"))),
+        (None, Some(_)) => {
+            let keys = keys(p, "items", cmd)?;
+            if keys.is_empty() {
+                return Err(bad(cmd, "`items` must list sketches, bodies or construction geometry"));
+            }
+            // Every item is found before anything changes.
+            keys.iter()
+                .map(|k| shown_item(s, k).ok_or_else(|| bad(cmd, format!("no sketch, body or construction item `{k}`"))))
+                .collect::<Result<_>>()?
+        }
+        (None, None) => return Err(bad(cmd, "`items` or `folder` is required")),
+    };
+    let v = &mut s.visibility;
+    if visible && str_(p, "folder") == Some("bodies") {
+        v.hidden_occurrences.clear();
+    }
+    for it in &items {
+        match it {
+            Shown::Sketch(id) => {
+                v.hidden_sketches.retain(|x| x != id);
+                v.shown_sketches.retain(|x| x != id);
+                if visible { v.shown_sketches.push(*id) } else { v.hidden_sketches.push(*id) }
+            }
+            Shown::Body(n) => {
+                v.hidden_bodies.retain(|x| x != n);
+                if !visible {
+                    v.hidden_bodies.push(n.clone());
+                }
+            }
+            Shown::Origin(n) => {
+                v.hidden_origin.retain(|x| x != n);
+                if !visible {
+                    v.hidden_origin.push(n.clone());
+                }
+            }
+        }
+    }
+    s.revision += 1;
+    Ok(json!({ "visible": visible, "changed": items.len(), "visibility": s.visibility }))
+}
+
 fn document_units(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "document.units";
     let u = str_(p, "units").ok_or_else(|| bad(cmd, "`units` is required"))?;
@@ -166,6 +310,7 @@ fn document_units(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({ "units": u, "kept": [] }));
     }
     // What the geometry reads: every feature's length inputs.
+    let matched_configuration = s.doc.configuration_matches().then(|| s.doc.configs.active.clone()).flatten();
     let before = s.doc.length_inputs();
     s.doc_mut().units = u.to_string();
     // Unit-less user parameters holding a bare number read it in the design's units where they
@@ -196,6 +341,10 @@ fn document_units(s: &mut Session, p: &Value) -> Result<Value> {
                 kept.push(name);
             }
         }
+    }
+    s.doc_mut().preserve_configuration_units(&old, &kept);
+    if let Some(row) = matched_configuration {
+        s.doc_mut().apply_configuration(&row)?;
     }
     Ok(json!({ "units": u, "kept": kept }))
 }
@@ -312,6 +461,19 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
     // Later features refer to bodies by name.
     let mut failed = None;
     for f in d.features.iter_mut().filter(|f| f.id != fid) {
+        if let FeatureKind::Sketch { plane, sketch } = &mut f.kind
+            && let Some(anchor) = super::sketch::face::anchor_mut(plane)
+            && anchor.target.body == old
+        {
+            let ids = std::collections::BTreeMap::from([(anchor.target.origin_feature, anchor.target.origin_feature)]);
+            let bodies = std::collections::BTreeMap::from([(old.clone(), name.to_string())]);
+            anchor.remap_target(&ids, &bodies)?;
+            for link in &mut sketch.links {
+                if link.auto_face && matches!(&link.source,solvecraft_sketch::LinkSource::Face {body,..} if *body==old) {
+                    link.face_name = Some(anchor.target.name.clone());
+                }
+            }
+        }
         let Ok(mut v) = serde_json::to_value(&f.kind) else { continue };
         if replace_str(&mut v, &old, name, 0) {
             match serde_json::from_value(v) {
@@ -332,6 +494,17 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
     for f in d.appearances.faces.iter_mut().filter(|f| f.body == old) {
         f.body = name.to_string();
     }
+    for column in &mut d.configs.columns {
+        match column {
+            solvecraft_doc::config::Column::Material(body) | solvecraft_doc::config::Column::Appearance(body) if *body == old => {
+                *body = name.to_string();
+            }
+            solvecraft_doc::config::Column::FaceAppearance(target) if target.body == old => {
+                target.body = name.to_string();
+            }
+            _ => {}
+        }
+    }
     if let Some(o) = d.body_offsets.remove(&old) {
         d.body_offsets.insert(name.to_string(), o);
     }
@@ -339,6 +512,9 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
         d.body_components.insert(name.to_string(), c);
     }
     rename_key(d, "bodies", &old, name);
+    for b in s.visibility.hidden_bodies.iter_mut().filter(|b| **b == old) {
+        *b = name.to_string();
+    }
     Ok(json!({"body": old, "name": name}))
 }
 
@@ -356,13 +532,89 @@ fn redefine_sketch(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("plane").is_none() {
         return Err(bad(cmd, "`plane` is required"));
     }
-    let plane = super::sketch::plane_ref(s, p, cmd)?;
-    let (vals, _) = s.doc.param_values();
-    s.doc.resolve_plane_in(&vals, &plane, 0, Some(&s.model.state()))?;
-    if let Some(FeatureKind::Sketch { plane: slot, .. }) = s.doc_mut().feature_mut(id).map(|f| &mut f.kind) {
+    let feature = s.doc.feature(id).ok_or_else(|| bad(cmd, "sketch disappeared"))?;
+    let component = feature.component;
+    let index = s.doc.feature_index(id).ok_or_else(|| bad(cmd, "sketch disappeared"))?;
+    let author_path = super::sketch::author_path_for_rebind(s, feature, p, cmd)?;
+    let marker = s.doc.marker;
+    let mut baseline = s.scratch();
+    baseline.doc_mut().marker = Some(index + 1);
+    baseline.refresh();
+    let visible_geometry = baseline.model.state().sketch(id).map(|resolved| resolved.sketch.clone());
+    let mut trial = s.scratch();
+    trial.active_component = component;
+    trial.active_occurrence_path = (!author_path.is_empty()).then_some(author_path);
+    // A new attachment may only depend on geometry preceding this sketch.
+    trial.doc_mut().marker = Some(index);
+    trial.refresh();
+    let old_anchor = trial
+        .doc
+        .feature(id)
+        .and_then(|feature| match &feature.kind {
+            FeatureKind::Sketch { plane, .. } => super::sketch::face::anchor(plane),
+            _ => None,
+        })
+        .cloned();
+    let plane = super::sketch::plane_ref(&trial, p, cmd)?;
+    if super::sketch::face::is_face(p) {
+        super::sketch::face::capture_positions(&mut trial, &plane)?;
+    }
+    if let Some(anchor) = old_anchor
+        && super::sketch::face::anchor(&plane)
+            .is_none_or(|next| next.target != anchor.target || next.component != anchor.component || next.path != anchor.path)
+    {
+        let sketch = trial.doc_mut().sketch_mut(id)?;
+        if let Some(mut visible) = visible_geometry {
+            let constraints: std::collections::BTreeMap<_, _> =
+                sketch.constraints.iter().map(|constraint| (constraint.id.clone(), constraint.clone())).collect();
+            for constraint in &mut visible.constraints {
+                if let Some(original) = constraints.get(&constraint.id) {
+                    if std::mem::discriminant(&constraint.kind) != std::mem::discriminant(&original.kind) {
+                        return Err(bad(cmd, "a dimension role changed during border refresh; repair it explicitly before rebinding"));
+                    }
+                    // Keep evaluated entity indices after linked topology rebuilds.
+                    constraint.param = original.param.clone();
+                    constraint.driven = original.driven;
+                    constraint.text = original.text;
+                    if let Some(value) = original.kind.value() {
+                        constraint.kind.set_value(value);
+                    }
+                }
+            }
+            *sketch = visible;
+        }
+        let affected: Vec<_> = sketch
+            .links
+            .iter()
+            .filter(|link| {
+                link.auto_face
+                    && link.face_name.as_ref() == Some(&anchor.target.name)
+                    && matches!(&link.source,solvecraft_sketch::LinkSource::Face {body,..} if *body==anchor.target.body)
+            })
+            .map(|link| link.id.clone())
+            .collect();
+        for link in affected {
+            sketch.break_link(&link)?;
+        }
+    }
+    if let Some(FeatureKind::Sketch { plane: slot, .. }) = trial.doc_mut().feature_mut(id).map(|feature| &mut feature.kind) {
         *slot = plane;
     }
-    Ok(json!({ "sketch": id }))
+    trial.doc_mut().marker = Some(index + 1);
+    trial.refresh();
+    if let Some(error) = trial.model.result(id).and_then(|result| result.error.as_ref()) {
+        return Err(bad(cmd, error.clone()));
+    }
+    trial.doc_mut().marker = marker;
+    trial.refresh();
+    s.doc = trial.doc;
+    s.pending_moves = trial.pending_moves;
+
+    let attachment = s.doc.feature(id).and_then(|feature| match &feature.kind {
+        FeatureKind::Sketch { plane, .. } => Some(if super::sketch::face::anchor(plane).is_some() { "exact_face" } else { "fixed" }),
+        _ => None,
+    });
+    Ok(json!({ "sketch": id,"attachment":attachment }))
 }
 
 #[cfg(test)]
@@ -411,7 +663,9 @@ mod tests {
         assert!((zmax(&mut s) - 5.0).abs() < 1e-6);
         run(&mut s, "sketch.redefine", json!({"sketch": sk, "plane": "XZ"}));
         let z = zmax(&mut s);
-        assert!(z > 9.0, "the profile stands up on XZ: {z}");
+        assert!(z.abs() < 1e-6, "positive sketch Y on XZ extends toward -Z: {z}");
+        let ymin = run(&mut s, "inspect.measure", json!({}))["bodies"][0]["bbox"]["min"][2].as_f64().unwrap();
+        assert!((ymin + 20.0).abs() < 1e-6);
         assert!(s.execute("sketch.redefine", &json!({"sketch": sk, "plane": "nope"})).is_err());
         assert!(s.execute("sketch.redefine", &json!({"sketch": 999, "plane": "XY"})).is_err());
     }
@@ -476,6 +730,60 @@ mod tests {
         }
         run(&mut s, "edit.undo", json!({}));
         assert_eq!(s.doc.named_views.len(), 2);
+    }
+
+    #[test]
+    fn helper_sketches_hide_and_show() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10}));
+        let floor = run(&mut s, "sketch.create", json!({"plane": "XY"}))["sketch"].as_u64().unwrap();
+        run(&mut s, "sketch.line", json!({"points": [[0, 0], [50, 0]], "construction": true}));
+        run(&mut s, "sketch.finish", json!({}));
+        let drain = run(&mut s, "sketch.create", json!({"plane": "XY"}))["sketch"].as_u64().unwrap();
+        run(&mut s, "sketch.point", json!({"point": [25, 5]}));
+        run(&mut s, "sketch.finish", json!({}));
+        run(&mut s, "construct.plane.offset", json!({"base": "XY", "offset": 5, "name": "Floor"}));
+        let body = s.model.state().bodies[0].name.clone();
+        let drain_name = s.doc.feature(drain).unwrap().name.clone();
+        let cam = solvecraft_render::Camera::default();
+        let lines = |s: &Session| crate::view::scene(s, &cam).lines.len();
+        let shown = |s: &mut Session| {
+            let d = run(s, "document.inspect", json!({}));
+            d["sketches"].as_array().unwrap().iter().filter(|x| x["visible"] == true).count()
+        };
+        let (n0, undo0, doc0) = (lines(&s), s.undo.len(), s.doc.clone());
+        assert_eq!(shown(&mut s), 2);
+        // By id and by name; the view loses their lines, the design and its history don't change.
+        let r = run(&mut s, "browser.visibility", json!({"items": [floor, drain_name], "visible": false}));
+        assert_eq!(r["changed"], 2);
+        assert_eq!(shown(&mut s), 0);
+        assert!(lines(&s) < n0);
+        assert!(std::sync::Arc::ptr_eq(&s.doc, &doc0) && s.undo.len() == undo0, "view state, not a design change");
+        run(&mut s, "browser.visibility", json!({"folder": "sketches", "visible": true}));
+        assert_eq!(lines(&s), n0);
+        // Bodies (following a rename) and construction planes.
+        run(&mut s, "browser.visibility", json!({"items": [body.clone(), "Floor", "xy"], "visible": false}));
+        assert!(crate::view::scene(&s, &cam).meshes.is_empty());
+        assert_eq!(s.visibility.hidden_origin, vec!["Floor".to_string(), "XY".to_string()]);
+        run(&mut s, "body.rename", json!({"body": body, "name": "Tray"}));
+        assert_eq!(s.visibility.hidden_bodies, vec!["Tray".to_string()]);
+        let d = run(&mut s, "document.inspect", json!({}));
+        assert_eq!(d["bodies"][0]["visible"], false);
+        // Hostile input is refused and changes nothing.
+        let before = s.visibility.clone();
+        for p in [
+            json!({"items": [floor]}),
+            json!({"items": [floor], "visible": "no"}),
+            json!({"items": [floor, "Nope"], "visible": false}),
+            json!({"items": [], "visible": false}),
+            json!({"items": "Floor", "visible": false}),
+            json!({"folder": "sketches", "items": [floor], "visible": false}),
+            json!({"folder": "nope", "visible": false}),
+            json!({"visible": false}),
+        ] {
+            assert!(s.execute("browser.visibility", &p).is_err(), "{p}");
+        }
+        assert_eq!(s.visibility, before);
     }
 
     #[test]

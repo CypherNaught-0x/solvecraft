@@ -13,6 +13,26 @@ fn sample_app() -> SolveApp {
     SolveApp::new(s, Services::default())
 }
 
+#[test]
+fn properties_leave_with_the_document_but_survive_a_failed_open() {
+    let mut app = sample_app();
+    app.menu.props = Some(("Prior body".into(), json!({"volume_mm3":42})));
+    app.start("config.table");
+    assert!(app.dialog.is_some());
+    assert!(app.run("doc.open", json!({"path":"__missing_properties_regression__.solvecraft"})).is_err());
+    assert!(app.menu.props.is_some());
+    assert!(app.dialog.is_some());
+    app.run("file.new", json!({"name":"New design"})).unwrap();
+    assert!(app.menu.props.is_none());
+    assert!(app.dialog.is_none());
+    app.menu.props = Some(("New design".into(), json!({})));
+    crate::documents::open_tab(&mut app, Session::default()).unwrap();
+    assert!(app.menu.props.is_none());
+    app.menu.props = Some(("Blank design".into(), json!({})));
+    crate::documents::adopt(&mut app, Session::default());
+    assert!(app.menu.props.is_none());
+}
+
 fn find(items: &[Item], label: &str) -> Item {
     items
         .iter()
@@ -46,6 +66,32 @@ fn empty_space_offers_view_items_and_greys_out_undo() {
 }
 
 #[test]
+fn appearance_browser_action_targets_the_clicked_body() {
+    let mut app = sample_app();
+    let b = body(&app);
+    app.run("select.clear", json!({})).unwrap();
+    act(&mut app, &Target::Body { name: b.clone() }, "Appearance");
+    let dialog = app.dialog.as_ref().unwrap();
+    assert!(matches!(dialog.kind, crate::dialogs::Kind::Appearance(_)));
+    assert_eq!(dialog.inputs[0].items, vec![solvecraft_engine::Sel::Body { name: b }]);
+}
+
+#[test]
+fn appearance_component_action_assigns_an_inherited_look() {
+    let mut app = sample_app();
+    let created = app.run("component.create", json!({"name": "Painted part"})).unwrap();
+    let id = created["component"].as_u64().unwrap();
+    act(&mut app, &Target::Component { id }, "Appearance");
+    let d = app.dialog.clone().unwrap();
+    let commands = crate::dialogs::apply_commands(&app, &d).unwrap();
+    assert_eq!(commands[0].1["components"], json!(["Painted part"]));
+    for (id, p) in commands {
+        app.run(&id, p).unwrap();
+    }
+    assert!(app.session.doc.appearances.components.contains_key(&id));
+}
+
+#[test]
 fn face_menu_hides_and_finds_the_body() {
     let mut app = sample_app();
     let b = body(&app);
@@ -54,11 +100,11 @@ fn face_menu_hides_and_finds_the_body() {
     for l in ["Create Sketch", "Offset Plane", "Press Pull", "Extrude", "Measure", "Find in Browser", "Find in Timeline"] {
         assert!(find(&items, l).enabled, "{l}");
     }
-    assert!(!find(&items, "Appearance").enabled);
+    assert!(find(&items, "Appearance").enabled);
     context_menu::run_item(&mut app, &find(&items, "Find in Timeline"), pos2(0.0, 0.0));
     assert!(matches!(app.session.selection.as_slice(), [solvecraft_engine::Sel::Feature { .. }]));
     context_menu::run_item(&mut app, &find(&items, "Show/Hide"), pos2(0.0, 0.0));
-    assert_eq!(app.ui.hidden_bodies, vec![b]);
+    assert_eq!(app.session.visibility.hidden_bodies, vec![b]);
 }
 
 #[test]
@@ -69,8 +115,8 @@ fn body_menu_isolates_renames_locks_and_deletes() {
     let t = Target::Body { name: b.clone() };
     let items = context_menu::items(&app, &t);
     context_menu::run_item(&mut app, &find(&items, "Isolate"), pos2(0.0, 0.0));
-    assert_eq!(app.ui.hidden_bodies.len(), 1, "the other body is hidden");
-    assert!(!app.ui.hidden_bodies.contains(&b));
+    assert_eq!(app.session.visibility.hidden_bodies.len(), 1, "the other body is hidden");
+    assert!(!app.session.visibility.hidden_bodies.contains(&b));
     // Rename through the rename box.
     context_menu::run_item(&mut app, &find(&items, "Rename"), pos2(10.0, 10.0));
     assert!(context_menu::finish_rename(&mut app, Some("Base"), true));
@@ -95,6 +141,24 @@ fn properties_measure_the_body() {
     let (_, v) = app.menu.props.clone().unwrap();
     assert!(v["total"]["volume_mm3"].as_f64().unwrap() > 1000.0);
     assert!(v["total"]["mass_g"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn component_properties_measure_one_assembly_placement() {
+    let mut session = Session::default();
+    let component = session.execute("component.create", &json!({"name": "Subassembly"})).unwrap()["component"].as_u64().unwrap();
+    session.execute("component.create", &json!({"name": "Block"})).unwrap();
+    session.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+    session.execute("occurrence.copy", &json!({"component": component, "translate": [100, 0, 0]})).unwrap();
+    let mut app = SolveApp::new(session, Services::default());
+    act(&mut app, &Target::Component { id: component }, "Properties");
+    let (title, properties) = app.menu.props.as_ref().unwrap();
+    assert_eq!(title, "Subassembly");
+    assert_eq!(properties["body_count"], 1);
+    assert!((properties["total"]["volume_mm3"].as_f64().unwrap() - 1000.0).abs() < 1e-6);
+    assert!((properties["total"]["center_of_mass"][0].as_f64().unwrap() - 5.0).abs() < 1e-6);
+    act(&mut app, &Target::Component { id: 0 }, "Properties");
+    assert_eq!(app.menu.props.as_ref().unwrap().1["body_count"], 2);
 }
 
 #[test]
@@ -184,7 +248,7 @@ fn folder_and_group_menus_make_rename_and_drop_groups() {
     assert!(context_menu::finish_rename(&mut app, Some("Parts"), true));
     assert_eq!(app.session.doc.browser_groups[0].name, "Parts");
     act(&mut app, &t, "Show/Hide");
-    assert_eq!(app.ui.hidden_bodies.len(), 2);
+    assert_eq!(app.session.visibility.hidden_bodies.len(), 2);
     act(&mut app, &t, "Ungroup");
     assert!(app.session.doc.browser_groups.is_empty());
     act(&mut app, &folder, "New Group");
@@ -232,8 +296,10 @@ fn delete_key_handles_every_kind_and_asks_about_dependents() {
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(app.session.doc.features.len(), n);
     // A face its neighbours can't close (a side of the plate): refused, nothing changes.
-    let b0 = app.session.model.state().bodies[0].name.clone();
-    app.run("select.set", json!({"items": [{"type": "face", "body": b0, "index": 0, "point": [0, 0, 0]}]})).unwrap();
+    let body = &app.session.model.state().bodies[0];
+    let face = body.body.faces(0.01).unwrap().into_iter().find(|f| f.plane_normal.is_some_and(|n| n.x < -0.99)).unwrap();
+    let b0 = body.name.clone();
+    app.run("select.set", json!({"items": [{"type": "face", "body": b0, "index": face.index, "point": face.centroid}]})).unwrap();
     crate::delete::delete_selection(&mut app);
     assert!(app.status.as_ref().is_some_and(|s| s.0.contains("Delete Face")), "{:?}", app.status);
     assert_eq!(app.session.doc.features.len(), n);
@@ -243,10 +309,33 @@ fn delete_key_handles_every_kind_and_asks_about_dependents() {
 fn menu_delete_items_use_the_same_path() {
     let mut app = sample_app();
     let b = body(&app);
-    app.run("component.from_bodies", json!({"bodies": [b]})).unwrap();
+    let original_volume = solvecraft_engine::kernel::measure(&app.session.world_state().body(&b).unwrap().body).unwrap().volume;
+    let created = app.run("component.from_bodies", json!({"bodies": [b]})).unwrap();
     let c = app.session.doc.components[0].id;
+    let transfer = created["components"][0]["feature"].as_u64().unwrap();
+    let transfer_name = app.session.doc.feature(transfer).unwrap().name.clone();
+    let saved = app.session.doc.to_json();
     act(&mut app, &Target::Component { id: c }, "Delete");
+    let confirmation = app.menu.confirm.as_ref().expect("recorded transfer history needs confirmation");
+    assert!(confirmation.report["deleted"].as_array().unwrap().iter().any(|name| name.as_str() == Some(transfer_name.as_str())));
+    assert!(crate::delete::confirm(&mut app, false));
+    assert_eq!(app.session.doc.to_json(), saved, "cancel keeps component and transfer history");
+    act(&mut app, &Target::Component { id: c }, "Delete");
+    assert!(crate::delete::confirm(&mut app, true));
     assert!(app.session.doc.components.is_empty());
+    assert!(app.session.doc.feature(transfer).is_none());
+    let restored = app.session.world_state();
+    assert_eq!(restored.bodies.len(), 1, "the original joined plate stays intact");
+    let plate = restored.body(&b).unwrap();
+    assert_eq!(plate.component, 0);
+    assert!((solvecraft_engine::kernel::measure(&plate.body).unwrap().volume - original_volume).abs() < 1e-6);
+    assert!(plate.mesh().contains(solvecraft_engine::geom::Vec3::new(40.0, 35.0, 12.0)));
+    let mut reopened = solvecraft_engine::Session::new(solvecraft_engine::doc::Document::from_json(&app.session.doc.to_json()).unwrap());
+    reopened.refresh();
+    let reopened_state = reopened.world_state();
+    assert_eq!(reopened_state.bodies.len(), 1);
+    assert_eq!(reopened_state.body(&b).unwrap().component, 0);
+    assert!((solvecraft_engine::kernel::measure(&reopened_state.body(&b).unwrap().body).unwrap().volume - original_volume).abs() < 1e-6);
     // A sketch from the browser: asks, since its features go too.
     let id = app.session.doc.features.iter().find(|f| f.name == "Base").unwrap().id;
     act(&mut app, &Target::Sketch { id }, "Delete");
@@ -351,7 +440,7 @@ fn menus_follow_fusion_order() {
     let origin = context_menu::items(&app, &Target::Origin);
     order(&origin, &["Show/Hide", "Show All", "Hide Planes", "Hide Axes"]);
     context_menu::run_item(&mut app, &find(&origin, "Hide Planes"), pos2(0.0, 0.0));
-    assert!(["XY", "XZ", "YZ"].iter().all(|p| app.ui.hidden_origin.iter().any(|h| h == p)));
+    assert!(["XY", "XZ", "YZ"].iter().all(|p| app.session.visibility.hidden_origin.iter().any(|h| h == p)));
     app.run("select.clear", json!({})).unwrap();
     let empty = context_menu::items(&app, &Target::Viewport);
     order(&empty, &["Pan", "Zoom", "Orbit", "Show All", "Unisolate", "Extrude", "Fillet"]);
@@ -367,17 +456,17 @@ fn v_toggles_what_is_selected() {
     app.run("select.set", json!({"items": [{"type": "body", "name": b}, {"type": "plane", "name": "XY"}, {"type": "feature", "id": sk}]})).unwrap();
     crate::browser::set_sketch_visible(&mut app, sk, true);
     context_menu::toggle_visibility(&mut app);
-    assert!(app.ui.hidden_bodies.contains(&b) && app.ui.hidden_origin.iter().any(|h| h == "XY"));
+    assert!(app.session.visibility.hidden_bodies.contains(&b) && app.session.visibility.hidden_origin.iter().any(|h| h == "XY"));
     assert!(!crate::browser::sketch_visible(&app, sk));
     context_menu::toggle_visibility(&mut app);
-    assert!(app.ui.hidden_bodies.is_empty() && app.ui.hidden_origin.is_empty());
+    assert!(app.session.visibility.hidden_bodies.is_empty() && app.session.visibility.hidden_origin.is_empty());
     assert!(crate::browser::sketch_visible(&app, sk));
     // Components picked in the browser hide their bodies.
     app.run("component.from_bodies", json!({"bodies": [b.clone()]})).unwrap();
     app.run("select.clear", json!({})).unwrap();
     app.tree.picked_components = vec![app.session.doc.components[0].id];
     context_menu::toggle_visibility(&mut app);
-    assert_eq!(app.ui.hidden_bodies, vec![b]);
+    assert_eq!(app.session.visibility.hidden_bodies, vec![b]);
     assert_eq!(find(&context_menu::items(&app, &Target::Body { name: body(&app) }), "Show/Hide").shortcut, "V");
 }
 

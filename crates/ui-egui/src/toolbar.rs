@@ -14,6 +14,7 @@ pub fn panels(tab: &str) -> &'static [&'static str] {
         return p;
     }
     match tab {
+        "MILLING" => &["SETUP", "TOOLPATHS", "VERIFY", "EXPORT"],
         "SOLID" => &["CREATE", "MODIFY", "ASSEMBLE", "CONSTRUCT", "INSPECT", "INSERT", "SELECT"],
         "SKETCH" => &["CREATE", "MODIFY", "CONSTRAINTS", "INSPECT", "INSERT", "SELECT", "FINISH SKETCH"],
         "SURFACE" => &["CREATE", "MODIFY", "ASSEMBLE", "CONSTRUCT", "INSPECT", "INSERT", "SELECT"],
@@ -38,7 +39,7 @@ pub fn promoted(tab: &str, panel: &str) -> usize {
 
 pub fn app_bar(app: &mut SolveApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
-    egui::Panel::top("sc_appbar").exact_size(34.0).frame(egui::Frame::NONE.fill(t.app_bar)).show(ui, |ui| {
+    egui::Panel::top("sc_appbar").exact_size(34.0).show_separator_line(false).frame(egui::Frame::NONE.fill(t.app_bar)).show(ui, |ui| {
         let r = ui.max_rect();
         // The bar is the window's title bar: its empty space moves the window.
         if app.custom_titlebar || app.integrated_titlebar {
@@ -54,6 +55,7 @@ pub fn app_bar(app: &mut SolveApp, ui: &mut egui::Ui) {
             let br = Rect::from_center_size(pos2(x, r.center().y), vec2(26.0, 26.0));
             x += 30.0;
             let resp = ui.interact(br, ui.id().with(("ab", icon)), Sense::click());
+            crate::scenario::publish_handle(&format!("appbar:{icon}"), br.center());
             if resp.hovered() {
                 ui.painter().rect_filled(br, 4.0, Color32::from_white_alpha(30));
             }
@@ -148,8 +150,11 @@ fn file_menu(app: &mut SolveApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_min_width(190.0);
+                ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::NONE;
+                ui.visuals_mut().widgets.hovered.weak_bg_fill = Tokens::get().hover;
                 let item = |ui: &mut egui::Ui, label: &str, key: &str| {
-                    ui.add(egui::Button::new(label).shortcut_text(key).frame(false).min_size(vec2(180.0, 22.0))).clicked()
+                    ui.add(egui::Button::new(label).shortcut_text(key).min_size(vec2(180.0, 22.0))).clicked()
                 };
                 if item(ui, "New Design", "Ctrl+N") {
                     crate::documents::new_design(app);
@@ -157,10 +162,28 @@ fn file_menu(app: &mut SolveApp, ctx: &egui::Context) {
                 }
                 if item(ui, "Open…", "Ctrl+O") {
                     if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f()) {
-                        app.open_path(&p);
+                        app.open_path_async(&p);
                     }
                     close = true;
                 }
+                ui.menu_button("Open Recent", |ui| {
+                    for path in app.home.recent.clone() {
+                        let missing = !solvecraft_engine::io::vfs::exists(&path);
+                        let label = format!("{path}{}", if missing { " (missing)" } else { "" });
+                        if ui.button(label).clicked() {
+                            crate::home::open_recent(app, &path);
+                            close = true;
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Clear Recent").clicked() {
+                        app.home.recent.clear();
+                        app.home.opened_at.clear();
+                        close = true;
+                        ui.close();
+                    }
+                });
                 if item(ui, "Insert STEP…", "") {
                     app.start("file.insert_step");
                     close = true;
@@ -228,7 +251,7 @@ pub fn save(app: &mut SolveApp) {
     }
 }
 
-fn save_as(app: &mut SolveApp) {
+pub(crate) fn save_as(app: &mut SolveApp) {
     let name = format!("{}.{}", app.session.doc.name, solvecraft_engine::io::DESIGN_EXT);
     if let Some(p) = app.services.pick_save.as_ref().and_then(|f| f(&name, &[solvecraft_engine::io::DESIGN_EXT])) {
         let _ = app.run("file.save_as", json!({"path": p}));
@@ -260,8 +283,8 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
         painter.text(
             pos2(ws.center().x - 5.0, ws.top() + 52.0),
             Align2::CENTER_CENTER,
-            crate::toolbar_custom::WORKSPACE,
-            FontId::proportional(12.0),
+            if app.ui.tab == "MILLING" { "Manufacture" } else { crate::toolbar_custom::WORKSPACE },
+            FontId::proportional(if app.ui.tab == "MILLING" { 10.0 } else { 12.0 }),
             t.text,
         );
         caret(&painter, pos2(ws.center().x + 27.0, ws.top() + 52.0), t.text);
@@ -276,14 +299,17 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
         if sketching {
             tabs.push("SKETCH");
         }
-        tabs.extend(TABS.iter());
+        if app.ui.tab == "MILLING" {
+            tabs.push("MILLING");
+        } else {
+            tabs.extend(TABS.iter());
+        }
         for tab in tabs {
             let w = 12.0 + tab.len() as f32 * 7.4;
             let tr = Rect::from_min_size(pos2(x, tabs_y), vec2(w, 22.0));
             let active = app.ui.tab == tab;
             let resp = ui.interact(tr, ui.id().with(("tab", tab)), Sense::click());
             if active {
-                painter.rect_filled(tr, egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 }, t.tab_active);
                 let c = if tab == "SKETCH" { t.sketch_accent } else { t.accent };
                 painter.line_segment([pos2(tr.left() + 4.0, tr.bottom() - 1.0), pos2(tr.right() - 4.0, tr.bottom() - 1.0)], Stroke::new(2.0, c));
             } else if resp.hovered() {
@@ -308,11 +334,16 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
         let top = r.top() + 26.0;
         let mut drop: Option<(&'static str, &'static str, Option<&'static str>)> = None;
         let mut menu: Option<(egui::Pos2, &'static str)> = None;
+        let mut overflow = Vec::new();
         for (panel, cmds, promote) in crate::toolbar_custom::panel_lists(&tab) {
             let panel: &&str = &panel;
             let shown = crate::toolbar_custom::buttons(app, &tab, panel, &cmds, promote);
             let n = shown.len().max(1);
             let width = (n as f32 * 40.0).max(64.0) + 8.0;
+            if !overflow.is_empty() || px + width > r.right() - 40.0 {
+                overflow.push((*panel, cmds));
+                continue;
+            }
             let enabled_panel = !cmds.is_empty() || *panel == "SELECT";
             // Dropped on the panel's free space: the button goes to its end.
             let free = Rect::from_min_size(
@@ -433,6 +464,31 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
             painter.line_segment([pos2(px, top + 4.0), pos2(px, top + 58.0)], Stroke::new(1.0, t.border));
             px += 2.0;
         }
+        if !overflow.is_empty() {
+            let at = Rect::from_min_size(pos2(px.min(r.right() - 40.0), top + 4.0), vec2(38.0, 52.0));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| {
+                let response = ui.menu_button("»", |ui| {
+                    for (panel, cmds) in &overflow {
+                        ui.menu_button(*panel, |ui| {
+                            if *panel == "SELECT" {
+                                selection_filter(app, ui);
+                            }
+                            for c in cmds {
+                                let info = c.info(&app.session);
+                                let response = ui.add_enabled(info.enabled, egui::Button::new(c.label).shortcut_text(c.shortcut.unwrap_or("")));
+                                crate::scenario::publish_handle(&format!("toolbar:{}", c.id), response.rect.center());
+                                if response.clicked() {
+                                    app.start(c.id);
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
+                });
+                crate::scenario::publish_handle("toolbar:overflow", response.response.rect.center());
+                response.response.on_hover_text("More toolbar panels");
+            });
+        }
         painter.line_segment([pos2(r.left(), r.bottom() - 0.5), pos2(r.right(), r.bottom() - 0.5)], Stroke::new(1.0, t.border));
         if let Some((id, panel, before)) = drop {
             crate::toolbar_custom::reorder(app, &tab, id, panel, before);
@@ -480,6 +536,9 @@ fn caret(p: &egui::Painter, c: egui::Pos2, col: Color32) {
 
 /// Global keyboard shortcuts (when no text field has focus).
 pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
+    if app.file_load.busy() {
+        return;
+    }
     // The Keyboard Shortcuts window is waiting for a key: it is not a shortcut.
     if crate::keymap::capturing(app) {
         return;
@@ -487,12 +546,15 @@ pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
     if ctx.egui_wants_keyboard_input() {
         return;
     }
-    let (keys, mods) = ctx.input(|i| {
-        let keys: Vec<egui::Key> =
-            i.events.iter().filter_map(|e| if let egui::Event::Key { key, pressed: true, .. } = e { Some(*key) } else { None }).collect();
-        (keys, i.modifiers)
+    // A modifier can be released later in the same frame. Preserve the state
+    // attached to each key press instead of using the frame's final state.
+    let keys: Vec<_> = ctx.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|e| if let egui::Event::Key { key, pressed: true, modifiers, .. } = e { Some((*key, *modifiers)) } else { None })
+            .collect()
     });
-    for k in keys {
+    for (k, mods) in keys {
         use egui::Key;
         if mods.command {
             match k {
@@ -503,7 +565,7 @@ pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
                 Key::Comma => crate::prefs::open_at(app, 0),
                 Key::O => {
                     if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f()) {
-                        app.open_path(&p);
+                        app.open_path_async(&p);
                     }
                 }
                 _ => {

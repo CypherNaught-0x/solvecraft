@@ -1,7 +1,7 @@
 //! Solid feature commands: extrude, revolve, fillet, chamfer, primitives, combine, move.
 
 use serde_json::{Value, json};
-use solvecraft_doc::{AxisRef, Direction, Extent, FeatureKind, Operation, ProfileSel, expr::Kind};
+use solvecraft_doc::{AxisRef, Direction, Extent, FeatureKind, Operation, PointExpr, ProfileSel, expr::Kind, point_expr};
 use solvecraft_geom::Vec3;
 
 use super::CommandSpec;
@@ -13,20 +13,20 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "CREATE")
         .icon("extrude")
         .key("E")
-        .params("distance: expr (or through_all: true); taper?: angle expr; sketch?: id|name (default: active or last sketch); profiles?: all | [index] | [[curve ids]] | [{point:[x,y]}]; face?: [x,y,z] (extrude a planar body face instead of a sketch profile); direction?: positive|negative|symmetric; distance2?; start_offset?; to?: [x,y,z] (To Object: a face, vertex or point; to_offset?: expr past it); from?: [x,y,z] (From Object: start at that face or point); operation?: new|join|cut|intersect|auto (cut into a body, join out of one, else new); targets?: [body]; name?; body_name?"),
+        .params("distance: expr (or through_all: true); taper?: angle expr; sketch?: id|name (default: active or last sketch); profiles?: all | [index] | [[curve ids]] | [{point:[x,y]}]; face?: [x,y,z] (extrude a planar body face instead of a sketch profile); direction?: positive|negative|symmetric; distance2?; start_offset?: expr (along the sketch normal, also with direction: negative); to?: [x,y,z] (To Object: a face, vertex or point; to_offset?: expr past it); from?: [x,y,z] (From Object: start at that face or point); operation?: new|join|cut|intersect|auto (cut into a body, otherwise join existing solids; new in an empty component); targets?: [body]; name?; body_name?"),
     CommandSpec::new("solid.revolve", "Revolve", revolve)
         .at("SOLID", "CREATE")
         .icon("revolve")
-        .params("axis: sketch line id | x | y (sketch axes) | X|Y|Z (world); angle?: expr (default 360 deg); angle2?: expr (Two Sides: the other side's angle); direction?: symmetric (angle split either side); to?: [x,y,z] (To Object: turn until that face, vertex or point); sketch?, profiles? | face: [x,y,z] (a planar body face as the profile), operation?, targets?, name?, body_name?"),
+        .params("axis: sketch line id | x | y (sketch axes) | X|Y|Z (world); angle?: expr (default 360 deg); angle2?: expr (Two Sides: the other side's angle); direction?: symmetric (angle split either side, independent of axis direction); convention?: sketch_normal|legacy_axis_start (default sketch_normal; legacy retains older angular starts); to?: [x,y,z] (To Object: turn until that face, vertex or point); sketch?, profiles? | face: [x,y,z] (a planar body face as the profile), operation?, targets?, name?, body_name?"),
     CommandSpec::new("solid.sweep", "Sweep", sweep)
         .at("SOLID", "CREATE")
         .icon("sweep")
         .params("sketch: profile sketch; profiles?; path_sketch: sketch; path: [curve ids in order]; operation?"),
     CommandSpec::new("solid.loft", "Loft", loft).at("SOLID", "CREATE").icon("loft").params("sections: [{sketch, profiles?} | {sketch, point: id} (an apex)] (2 or more, in order); operation?"),
-    CommandSpec::new("solid.box", "Box", prim_box).at("SOLID", "CREATE").icon("box").params("length, width, height: expr; corner?: [x,y,z] | center?: [x,y,z]; operation?"),
-    CommandSpec::new("solid.cylinder", "Cylinder", prim_cylinder).at("SOLID", "CREATE").icon("cylinder").params("radius | diameter, height: expr; base?: [x,y,z]; axis?: [x,y,z]; operation?"),
-    CommandSpec::new("solid.sphere", "Sphere", prim_sphere).at("SOLID", "CREATE").icon("sphere").params("radius | diameter: expr; center?: [x,y,z]; operation?"),
-    CommandSpec::new("solid.torus", "Torus", prim_torus).at("SOLID", "CREATE").icon("torus").params("major, minor: expr (radii); center?; operation?"),
+    CommandSpec::new("solid.box", "Box", prim_box).at("SOLID", "CREATE").icon("box").params("length, width, height: expr; corner?: [x,y,z] | center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?"),
+    CommandSpec::new("solid.cylinder", "Cylinder", prim_cylinder).at("SOLID", "CREATE").icon("cylinder").params("radius | diameter, height: expr; base?: [x,y,z] (centre of the bottom: numbers in mm or length expressions; default: the origin); axis?: X|Y|Z|[x,y,z] (default Z); operation?"),
+    CommandSpec::new("solid.sphere", "Sphere", prim_sphere).at("SOLID", "CREATE").icon("sphere").params("radius | diameter: expr; center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?"),
+    CommandSpec::new("solid.torus", "Torus", prim_torus).at("SOLID", "CREATE").icon("torus").params("major, minor: expr (radii); center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?"),
     CommandSpec::new("solid.fillet", "Fillet", fillet)
         .at("SOLID", "MODIFY")
         .icon("fillet")
@@ -46,7 +46,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "CREATE")
         .icon("pattern_rect")
         .params("features: [names] | bodies: [names]; path_sketch: sketch; path: [curve ids in order]; count; spacing (between instances) | distance (first to last); orientation?: identical|path; flip?: bool"),
-    CommandSpec::new("solid.mirror", "Mirror", mirror).at("SOLID", "CREATE").icon("mirror").params("features: [names] | bodies: [names] (combine?: join with the original); plane: XY|XZ|YZ | {origin, x_dir, y_dir}"),
+    CommandSpec::new("solid.mirror", "Mirror", mirror).at("SOLID", "CREATE").icon("mirror").params("features: [names] | bodies: [names] (combine?: join with the original); plane: XY|XZ|YZ|construction plane name or id|{origin, normal}|{origin, x_dir, y_dir} (a construction plane keeps the mirror following it)"),
     CommandSpec::new("solid.hole", "Hole", hole)
         .at("SOLID", "CREATE")
         .icon("hole")
@@ -141,7 +141,8 @@ fn extrude_base(s: &Session, p: &Value) -> Option<(Vec3, Vec3)> {
 }
 
 /// What `operation: "auto"` means for an extrude with these parameters: `cut` when it goes
-/// into a body, `join` when it grows out of one, `new` otherwise.
+/// into a body, otherwise `join` when the active component has a solid. Keeping an
+/// addition separate requires an explicit `new` operation.
 pub fn auto_operation(s: &Session, p: &Value) -> Option<&'static str> {
     let d = s.doc.eval(&expr(p, "distance")?, Kind::Length).ok()?;
     let dir = str_(p, "direction").map(str::to_ascii_lowercase);
@@ -154,23 +155,25 @@ pub fn auto_operation(s: &Session, p: &Value) -> Option<&'static str> {
     }
     // Only the active component's bodies take part (or the ones named as participants).
     let parts = string_list(p, "participants");
-    let inside = |q: Vec3| {
-        st.bodies
-            .iter()
-            .filter(|b| if parts.is_empty() { s.doc.body_component(&b.name, b.feature) == s.active_component } else { parts.contains(&b.name) })
-            .any(|b| b.mesh().contains(q))
-    };
-    let eps = (d.abs() * 1e-3).max(1e-3);
-    let sign = if d < 0.0 { -1.0 } else { 1.0 };
+    let bodies: Vec<_> = st
+        .bodies
+        .iter()
+        .filter(|b| if parts.is_empty() { s.doc.model_body_component(b) == s.active_component } else { parts.contains(&b.name) })
+        .collect();
+    if bodies.is_empty() {
+        return Some("new");
+    }
+    let inside = |q: Vec3| bodies.iter().any(|b| b.mesh().contains(q));
     if symmetric {
-        return Some(if inside(base + n * (d.abs() * 0.5)) || inside(base - n * (d.abs() * 0.5)) { "cut" } else { "new" });
+        return Some(if inside(base + n * (d.abs() * 0.5)) || inside(base - n * (d.abs() * 0.5)) { "cut" } else { "join" });
     }
     if inside(base + n * (d * 0.5)) {
         Some("cut")
-    } else if inside(base - n * (eps * sign)) {
-        Some("join")
     } else {
-        Some("new")
+        // A profile can meet material along its side, or only around part of a
+        // screw boss. A single point behind its centre cannot establish contact.
+        // Default additions to Join and let the boolean merge the actual geometry.
+        Some("join")
     }
 }
 
@@ -318,7 +321,24 @@ pub(super) fn add_feature(s: &mut Session, p: &Value, kind: FeatureKind) -> Resu
     };
     let face_names = {
         let pts = kind.face_points();
-        if pts.is_empty() { Vec::new() } else { solvecraft_doc::naming::face_names_at(&s.model.state(), &pts) }
+        if let FeatureKind::Emboss { face: Some(face), .. } = &kind {
+            let state = s.model.state();
+            let body = state.body(&face.body).ok_or_else(|| EngineError::Other("selected cylinder body no longer exists".into()))?;
+            let frame = face.body_frame(&s.doc, body).map_err(|e| EngineError::Other(e.to_string()))?;
+            let inverse = solvecraft_doc::mat_inverse(&frame).ok_or_else(|| EngineError::Other("invalid cylinder placement".into()))?;
+            let at = solvecraft_doc::apply_point(&solvecraft_doc::mat_mul(&inverse, &s.active_component_frame()), face.at);
+            let mut scoped = solvecraft_doc::ModelState::default();
+            scoped.bodies.push(body.clone());
+            let names = solvecraft_doc::naming::face_names_at(&scoped, &[at]);
+            if names.len() != 1 || names.first().is_none_or(|name| name.is_empty()) {
+                return Err(EngineError::Other("selected cylinder face has no persistent identity".into()));
+            }
+            names
+        } else if pts.is_empty() {
+            Vec::new()
+        } else {
+            solvecraft_doc::naming::face_names_at(&s.model.state(), &pts)
+        }
     };
     let participants = string_list(p, "participants");
     if participants.len() > 10_000 || participants.iter().any(|b| b != "*" && s.model.state().body(b).is_none()) {
@@ -462,6 +482,10 @@ fn revolve(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let symmetric =
         matches!(str_(p, "direction").map(str::to_ascii_lowercase).as_deref(), Some("symmetric")) || bool_(p, "symmetric").unwrap_or(false);
+    let convention = match p.get("convention") {
+        None => solvecraft_doc::RevolveConvention::SketchNormal,
+        Some(value) => serde_json::from_value(value.clone()).map_err(|_| bad(cmd, "`convention` must be sketch_normal or legacy_axis_start"))?,
+    };
     let kind = FeatureKind::Revolve {
         sketch,
         profiles,
@@ -471,6 +495,7 @@ fn revolve(s: &mut Session, p: &Value) -> Result<Value> {
         targets: string_list(p, "targets"),
         angle2,
         symmetric,
+        convention,
         to,
     };
     add_feature(s, p, kind)
@@ -484,19 +509,59 @@ fn radius_expr(p: &Value, cmd: &str) -> Result<String> {
     }
 }
 
+/// A placement point: `[x, y, z]` (or `{x, y, z}`) of numbers (mm) or length expressions;
+/// the origin when it is not given. Anything else is refused (never read as the origin).
+pub(super) fn point_param(s: &Session, p: &Value, key: &str, cmd: &str) -> Result<Option<PointExpr>> {
+    let Some(v) = p.get(key) else { return Ok(None) };
+    let want = || bad(cmd, format!("`{key}` must be a point [x, y, z] of numbers or length expressions"));
+    let coords: Vec<&Value> = match v {
+        Value::Array(a) if a.len() == 3 => a.iter().collect(),
+        Value::Object(o) => ["x", "y", "z"].iter().map(|k| o.get(*k)).collect::<Option<Vec<_>>>().ok_or_else(want)?,
+        _ => return Err(want()),
+    };
+    let mut out = PointExpr::default();
+    for (slot, (c, axis)) in out.iter_mut().zip(coords.into_iter().zip(["x", "y", "z"])) {
+        let e = expr(&json!({ "v": c }), "v").ok_or_else(want)?;
+        let x = s.doc.eval(&e, Kind::Length).map_err(|err| bad(cmd, format!("{key} {axis}: {err}")))?;
+        if !(x.is_finite() && x.abs() < 1e9) {
+            return Err(bad(cmd, format!("{key} {axis} is out of range")));
+        }
+        *slot = e;
+    }
+    Ok(Some(out))
+}
+
+/// An axis direction: X|Y|Z or a non-zero `[x, y, z]`; `Z` when it is not given.
+pub(super) fn axis_dir_param(p: &Value, cmd: &str) -> Result<Vec3> {
+    match p.get("axis") {
+        None => Ok(Vec3::Z),
+        Some(Value::String(a)) => match a.trim().to_ascii_uppercase().as_str() {
+            "X" => Ok(Vec3::X),
+            "Y" => Ok(Vec3::Y),
+            "Z" => Ok(Vec3::Z),
+            _ => Err(bad(cmd, "`axis` must be X, Y, Z or [x, y, z]")),
+        },
+        Some(v) => vec3(v).and_then(|a| a.normalized()).ok_or_else(|| bad(cmd, "`axis` must be X, Y, Z or a non-zero [x, y, z]")),
+    }
+}
+
 fn prim_box(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.box";
     let (l, w, h) = (req_expr(cmd, p, "length")?, req_expr(cmd, p, "width")?, req_expr(cmd, p, "height")?);
     for (e, n) in [(&l, "length"), (&w, "width"), (&h, "height")] {
         check_expr(s, e, Kind::Length, cmd, n)?;
     }
-    let corner = match (p.get("corner").and_then(vec3), p.get("center").and_then(vec3)) {
+    let corner = match (point_param(s, p, "corner", cmd)?, point_param(s, p, "center", cmd)?) {
         (Some(c), _) => c,
-        (None, Some(c)) => {
-            let v = |e: &str| s.doc.eval(e, Kind::Length).unwrap_or(0.0);
-            c - Vec3::new(v(&l), v(&w), v(&h)) * 0.5
+        // The corner half a size back from the centre (numbers stay numbers).
+        (None, Some([cx, cy, cz])) => {
+            let back = |c: String, size: &String| match (c.parse::<f64>(), size.parse::<f64>()) {
+                (Ok(a), Ok(b)) => format!("{}", a - b / 2.0),
+                _ => format!("({c}) - ({size}) / 2"),
+            };
+            [back(cx, &l), back(cy, &w), back(cz, &h)]
         }
-        _ => Vec3::ZERO,
+        _ => point_expr(Vec3::ZERO),
     };
     add_feature(s, p, FeatureKind::Box { corner, length: l, width: w, height: h, operation: operation(p, cmd)? })
 }
@@ -507,8 +572,8 @@ fn prim_cylinder(s: &mut Session, p: &Value) -> Result<Value> {
     let height = req_expr(cmd, p, "height")?;
     check_expr(s, &radius, Kind::Length, cmd, "radius")?;
     check_expr(s, &height, Kind::Length, cmd, "height")?;
-    let base = p.get("base").and_then(vec3).unwrap_or(Vec3::ZERO);
-    let axis = p.get("axis").and_then(vec3).unwrap_or(Vec3::Z);
+    let base = point_param(s, p, "base", cmd)?.unwrap_or_else(|| point_expr(Vec3::ZERO));
+    let axis = axis_dir_param(p, cmd)?;
     add_feature(s, p, FeatureKind::Cylinder { base, axis, radius, height, operation: operation(p, cmd)? })
 }
 
@@ -516,7 +581,7 @@ fn prim_sphere(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.sphere";
     let radius = radius_expr(p, cmd)?;
     check_expr(s, &radius, Kind::Length, cmd, "radius")?;
-    let center = p.get("center").and_then(vec3).unwrap_or(Vec3::ZERO);
+    let center = point_param(s, p, "center", cmd)?.unwrap_or_else(|| point_expr(Vec3::ZERO));
     add_feature(s, p, FeatureKind::Sphere { center, radius, operation: operation(p, cmd)? })
 }
 
@@ -525,7 +590,7 @@ fn prim_torus(s: &mut Session, p: &Value) -> Result<Value> {
     let (major, minor) = (req_expr(cmd, p, "major")?, req_expr(cmd, p, "minor")?);
     check_expr(s, &major, Kind::Length, cmd, "major")?;
     check_expr(s, &minor, Kind::Length, cmd, "minor")?;
-    let center = p.get("center").and_then(vec3).unwrap_or(Vec3::ZERO);
+    let center = point_param(s, p, "center", cmd)?.unwrap_or_else(|| point_expr(Vec3::ZERO));
     add_feature(s, p, FeatureKind::Torus { center, major, minor, operation: operation(p, cmd)? })
 }
 
@@ -581,7 +646,7 @@ fn press_pull(s: &mut Session, p: &Value) -> Result<Value> {
             let new = format!("({old}) + ({distance})");
             let r = super::find_command("timeline.edit").ok_or_else(|| bad(cmd, "timeline.edit"))?;
             let out = (r.run)(s, &json!({"feature": f.id, "set": {key: new}}))?;
-            return Ok(json!({"feature": f.id, "edited": f.name, key: new, "recomputed": out.get("recomputed")}));
+            return Ok(json!({"feature": f.id, "edited": f.name, key: new, "recomputed": out.get("recomputed"), "restored": out.get("restored")}));
         }
         // Another curved face moves along its normal.
         let r = super::find_command("solid.offset_face").ok_or_else(|| bad(cmd, "solid.offset_face"))?;
@@ -667,7 +732,7 @@ fn combine(s: &mut Session, p: &Value) -> Result<Value> {
     if bool_(p, "new_component").unwrap_or(false) {
         let name = str_(p, "component_name").map(str::to_string).unwrap_or_else(|| format!("{target} Combined"));
         let c = s.execute("component.create", &json!({"name": name, "activate": false}))?;
-        s.execute("component.move_bodies", &json!({"bodies": [target], "component": c["component"]}))?;
+        super::component::transfer_constructor_result(s, &json!({"bodies": [target], "component": c["component"]}))?;
         out["component"] = c["component"].clone();
     }
     Ok(out)
@@ -829,35 +894,35 @@ fn mirror(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.mirror";
     let bodies = string_list(p, "bodies");
     let features = if bodies.is_empty() { source_features(s, p, cmd)? } else { Vec::new() };
-    let plane = match p.get("plane") {
-        Some(Value::String(n)) if solvecraft_geom::Plane::named(n).is_some() => solvecraft_doc::PlaneRef::Origin { name: n.to_ascii_uppercase() },
-        Some(o @ Value::Object(_)) => {
-            let origin = o.get("origin").and_then(vec3).unwrap_or(Vec3::ZERO);
-            let pl = match (o.get("x_dir").and_then(vec3), o.get("y_dir").and_then(vec3), o.get("normal").and_then(vec3)) {
-                (Some(x), Some(y), _) => solvecraft_geom::Plane::new(origin, x, y),
-                (_, _, Some(n)) => solvecraft_geom::Plane::from_normal(origin, n),
-                _ => None,
-            };
-            solvecraft_doc::PlaneRef::Custom { plane: pl.ok_or_else(|| bad(cmd, "plane needs x_dir and y_dir, or normal"))? }
-        }
-        _ => return Err(bad(cmd, "`plane` must be XY, XZ, YZ or {origin, normal}")),
-    };
+    let plane = plane_param(s, p.get("plane"), cmd)?;
     let combine = bool_(p, "combine").unwrap_or(false);
     add_feature(s, p, FeatureKind::Mirror { features, plane, bodies, combine })
 }
 
-/// A plane reference from a parameter: an origin plane, a construction plane name, or an
-/// explicit plane `{origin, x_dir, y_dir}` / `{origin, normal}`.
+/// A plane reference from a parameter: an origin plane, a construction plane (by name or
+/// feature id; kept by name, so the feature follows the plane when it changes), or an
+/// explicit plane `{origin, x_dir, y_dir}` / `{origin, normal}`. Every command that takes a
+/// plane reads it here.
 pub(super) fn plane_param(s: &Session, v: Option<&Value>, cmd: &str) -> Result<solvecraft_doc::PlaneRef> {
     use solvecraft_doc::PlaneRef;
+    const WANT: &str = "XY, XZ, YZ, a construction plane name or id, or {origin, normal}";
+    let construction = |r: &str| match s.doc.find_feature(r) {
+        Some(f) if matches!(f.kind, FeatureKind::ConstructionPlane { .. }) => Ok(PlaneRef::Construction { name: f.name.clone() }),
+        Some(f) => Err(bad(cmd, format!("`{}` is not a construction plane (a plane is {WANT})", f.name))),
+        None => Err(bad(cmd, format!("no plane `{r}` (a plane is {WANT})"))),
+    };
     match v {
-        Some(Value::String(n)) if solvecraft_geom::Plane::named(n).is_some() => Ok(PlaneRef::Origin { name: n.to_ascii_uppercase() }),
-        Some(Value::String(n)) => match s.doc.find_feature(n).map(|f| &f.kind) {
-            Some(FeatureKind::ConstructionPlane { .. }) => Ok(PlaneRef::Construction { name: n.clone() }),
-            _ => Err(bad(cmd, format!("no plane `{n}`"))),
+        Some(Value::String(n)) if solvecraft_geom::Plane::named(n.trim()).is_some() => Ok(PlaneRef::Origin { name: n.trim().to_ascii_uppercase() }),
+        Some(Value::String(n)) => construction(n.trim()),
+        Some(Value::Number(id)) => match id.as_u64() {
+            Some(id) => construction(&id.to_string()),
+            None => Err(bad(cmd, format!("`plane` must be {WANT}"))),
         },
         Some(o @ Value::Object(_)) => {
-            let origin = o.get("origin").and_then(vec3).unwrap_or(Vec3::ZERO);
+            let origin = match o.get("origin") {
+                None => Vec3::ZERO,
+                Some(x) => vec3(x).ok_or_else(|| bad(cmd, "the plane's `origin` must be a point [x, y, z]"))?,
+            };
             let pl = match (o.get("x_dir").and_then(vec3), o.get("y_dir").and_then(vec3), o.get("normal").and_then(vec3)) {
                 (Some(x), Some(y), _) => solvecraft_geom::Plane::new(origin, x, y),
                 (_, _, Some(n)) => solvecraft_geom::Plane::from_normal(origin, n),
@@ -865,7 +930,7 @@ pub(super) fn plane_param(s: &Session, v: Option<&Value>, cmd: &str) -> Result<s
             };
             Ok(PlaneRef::Custom { plane: pl.ok_or_else(|| bad(cmd, "plane needs x_dir and y_dir, or normal"))? })
         }
-        _ => Err(bad(cmd, "`plane` must be XY, XZ, YZ, a construction plane name or {origin, normal}")),
+        _ => Err(bad(cmd, format!("`plane` must be {WANT}"))),
     }
 }
 
@@ -1282,3 +1347,7 @@ fn offset_face(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 #[path = "patterns_tests.rs"]
 mod patterns_tests;
+
+#[cfg(test)]
+#[path = "revolve_convention_tests.rs"]
+mod revolve_convention_tests;

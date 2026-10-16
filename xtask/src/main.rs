@@ -5,6 +5,7 @@
 
 mod assets;
 mod book;
+mod cam;
 mod layers;
 mod licences;
 mod parity;
@@ -17,6 +18,9 @@ const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
+  cam-validate    run original analytic machining fixtures; reports under target/cam-validation
+  cam-oracle --dir DIR
+                  compare local Fusion reference packages; missing evidence never passes
   layers          enforce the crate dependency layering (plan/architecture.md §3)
   assets          check that every non-code asset file is attributed in ATTRIBUTION.md
   parity [--refresh]
@@ -46,6 +50,8 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
     let result = match args.first().map(String::as_str) {
+        Some("cam-validate") => cam::validate(&root()),
+        Some("cam-oracle") => cam::oracle(&root(), &rest),
         Some("layers") => cmd_layers(),
         Some("assets") => assets::run(&root()),
         Some("parity") => parity::run(&root(), rest.contains(&"--refresh")),
@@ -347,6 +353,7 @@ fn cmd_ci() -> Result<(), String> {
     run(c, "cargo clippy -D warnings")?;
     let (wasm, n) = wasm_check()?;
     test::run(&[], &[], vec![(format!("wasm32-unknown-unknown check ({n} crates)"), wasm), test::doc_tests(&[], &[])])?;
+    cam::validate(&root())?;
     eprintln!("ci: all gates passed");
     Ok(())
 }

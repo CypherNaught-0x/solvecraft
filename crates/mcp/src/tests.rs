@@ -213,6 +213,52 @@ fn batch_stops_at_first_error_and_rolls_back() {
     assert_eq!(tool(&mut s, "measure", json!({}))["body_count"], 2);
 }
 
+/// Regression: with a full undo history a failed batch reported `undone: 0` and left its
+/// sketches behind (an empty "Sketch1", two sketches named "TapHole").
+#[test]
+fn batch_rolls_back_with_a_full_undo_history() {
+    let mut s = server();
+    let fill: Vec<Value> =
+        (0..230).map(|i| json!({"command": "parameters.add", "params": {"name": format!("p{i}"), "expression": "1 mm"}})).collect();
+    tool(&mut s, "batch", json!({"commands": fill}));
+    let undo = tool(&mut s, "inspect_design", json!({"measure": false}))["undo"].clone();
+    for _ in 0..2 {
+        let r = raw_tool(
+            &mut s,
+            "batch",
+            json!({"commands": [
+                {"command": "sketch.create", "params": {"plane": "XY", "name": "TapHole"}},
+                {"command": "sketch.circle.center", "params": {"center": [0, 0], "radius": 2}},
+                {"command": "sketch.dimension", "params": {"entities": ["nope"], "value": 3}},
+            ]}),
+        );
+        let body: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["failed"]["index"], 2, "{body}");
+        assert_eq!(body["undone"], 2, "{body}");
+    }
+    let d = tool(&mut s, "inspect_design", json!({"measure": false, "sketches": false}));
+    assert_eq!(d["sketches"].as_array().map(Vec::len), Some(0), "{d}");
+    assert!(d["active_sketch"].is_null(), "{d}");
+    assert_eq!(d["undo"], undo);
+}
+
+#[test]
+fn helper_sketches_can_be_hidden() {
+    let mut s = server();
+    tool(&mut s, "execute", json!({"command": "solid.box", "params": {"length": 40, "width": 40, "height": 2}}));
+    let sk = tool(&mut s, "execute", json!({"command": "sketch.create", "params": {"plane": "XY"}}))["sketch"].clone();
+    tool(&mut s, "execute", json!({"command": "sketch.line", "params": {"points": [[0, 0], [40, 0]], "construction": true}}));
+    tool(&mut s, "execute", json!({"command": "sketch.finish"}));
+    let visible = |s: &mut Server| tool(s, "inspect_design", json!({"measure": false}))["sketches"][0]["visible"].clone();
+    assert_eq!(visible(&mut s), true);
+    tool(&mut s, "execute", json!({"command": "browser.visibility", "params": {"items": [sk], "visible": false}}));
+    assert_eq!(visible(&mut s), false);
+    let r = raw_tool(&mut s, "execute", json!({"command": "browser.visibility", "params": {"items": ["Nope"], "visible": false}}));
+    assert_eq!(r["result"]["isError"], true);
+    tool(&mut s, "execute", json!({"command": "browser.visibility", "params": {"folder": "sketches", "visible": true}}));
+    assert_eq!(visible(&mut s), true);
+}
+
 #[test]
 fn unknown_tools_and_bad_arguments_are_clean_errors() {
     let mut s = server();

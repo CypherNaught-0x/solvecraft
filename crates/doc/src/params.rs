@@ -65,6 +65,9 @@ impl FeatureKind {
                 if let Some(d) = &mut extent.taper {
                     v.push(("Taper angle", d, A));
                 }
+                if let Some(d) = &mut extent.to_offset {
+                    v.push(("To offset", d, L));
+                }
             }
             FeatureKind::Revolve { angle, angle2, .. } => {
                 v.push(("Angle", angle, A));
@@ -271,9 +274,36 @@ impl FeatureKind {
             | FeatureKind::Loft { .. }
             | FeatureKind::Sweep { .. }
             | FeatureKind::Import { .. }
-            | FeatureKind::MeshImport { .. } => {}
+            | FeatureKind::MeshImport { .. }
+            | FeatureKind::BodyTransfer { .. } => {}
         }
         v
+    }
+
+    /// A primitive's placement point (length expressions). Its coordinates are not inputs:
+    /// they get no parameter names and keep bare numbers in mm whatever the design's units, as
+    /// every other position does; renames and users still find them.
+    pub fn point_expr_mut(&mut self) -> Option<&mut crate::PointExpr> {
+        match self {
+            FeatureKind::Box { corner: p, .. }
+            | FeatureKind::Cylinder { base: p, .. }
+            | FeatureKind::Sphere { center: p, .. }
+            | FeatureKind::Torus { center: p, .. }
+            | FeatureKind::Coil { base: p, .. } => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Read-only view of [`FeatureKind::point_expr_mut`].
+    pub fn point_expr(&self) -> Option<&crate::PointExpr> {
+        match self {
+            FeatureKind::Box { corner: p, .. }
+            | FeatureKind::Cylinder { base: p, .. }
+            | FeatureKind::Sphere { center: p, .. }
+            | FeatureKind::Torus { center: p, .. }
+            | FeatureKind::Coil { base: p, .. } => Some(p),
+            _ => None,
+        }
     }
 
     /// Read-only view of [`FeatureKind::inputs_mut`]: (label, expression, kind).
@@ -372,6 +402,55 @@ impl Document {
         }
     }
 
+    /// Repair a loaded timeline in one pass. Reserve even later features' names, just as
+    /// `name_feature_inputs` does, without restarting a document scan for every `dN` candidate.
+    pub(crate) fn name_all_feature_inputs(&mut self) {
+        let mut taken: BTreeMap<String, usize> = BTreeMap::new();
+        for name in self.params.iter().map(|p| &p.name).chain(self.features.iter().flat_map(|f| &f.param_names)) {
+            *taken.entry(name.clone()).or_default() += 1;
+        }
+        let mut next = 1usize;
+        for f in &mut self.features {
+            let n = f.kind.inputs().len();
+            for k in 0..n {
+                if f.param_names.get(k).is_some_and(|name| !name.is_empty()) {
+                    continue;
+                }
+                let name = loop {
+                    let name = format!("d{next}");
+                    next += 1;
+                    if !taken.contains_key(&name) {
+                        break name;
+                    }
+                };
+                if f.param_names.len() <= k {
+                    f.param_names.resize(k + 1, String::new());
+                }
+                // Empty slots cannot collide with a generated name.
+                if let Some(slot) = f.param_names.get_mut(k) {
+                    *slot = name.clone();
+                }
+                taken.insert(name, 1);
+            }
+            // Match the single-feature repair: surplus names become available only after
+            // this feature has been repaired. Counts preserve names shared with parameters.
+            for name in f.param_names.drain(n..) {
+                if let Some(count) = taken.get_mut(&name) {
+                    *count -= 1;
+                    if *count == 0 {
+                        taken.remove(&name);
+                        if let Some(i) = name.strip_prefix('d').and_then(|s| s.parse::<usize>().ok())
+                            && name == format!("d{i}")
+                            && i > 0
+                        {
+                            next = next.min(i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Change a parameter: a stored one, or a feature input by its name.
     /// A typed length that is a bare number means the design's units: it gets that unit written
     /// in (feature inputs are stored in mm otherwise). Anything else is returned unchanged.
@@ -422,6 +501,53 @@ impl Document {
         let (_, errors) = next.param_values();
         if let Some(e) = errors.get(name) {
             return Err(DocError::Expr(e.clone()));
+        }
+        *self = next;
+        Ok(())
+    }
+
+    /// Change existing expressions against their final dependency graph, independent of
+    /// column order. Unlike `change_param`, this never creates a missing parameter.
+    pub fn change_params_atomic(&mut self, changes: &[(String, String)]) -> Result<()> {
+        if changes.len() > crate::config::MAX_COLUMNS {
+            return Err(DocError::Invalid("too many parameter changes".into()));
+        }
+        let mut names = BTreeSet::new();
+        let mut changed = BTreeSet::new();
+        let (_, before_errors) = self.param_values();
+        let mut next = self.clone();
+        for (name, expression) in changes {
+            if !names.insert(name.clone()) {
+                return Err(DocError::Invalid(format!("duplicate parameter `{name}`")));
+            }
+            if expression.len() > 4096 || expression.trim().is_empty() {
+                return Err(DocError::Expr("expression is empty or too long".into()));
+            }
+            if let Some(p) = next.params.iter_mut().find(|p| p.name == *name) {
+                if p.expr != expression.trim() {
+                    changed.insert(name.clone());
+                }
+                p.expr = expression.trim().to_string();
+                continue;
+            }
+            let hit = next.features.iter().enumerate().find_map(|(i, f)| f.param_names.iter().position(|n| n == name).map(|k| (i, k)));
+            let Some((i, k)) = hit else { return Err(DocError::Unknown(format!("parameter `{name}`"))) };
+            let kind = next.features.get(i).and_then(|f| f.kind.inputs().get(k).map(|x| x.2)).unwrap_or(Kind::Unitless);
+            let normalized = next.with_design_unit(expression, kind);
+            let Some(feature) = next.features.get_mut(i) else { return Err(DocError::Unknown(format!("parameter `{name}`"))) };
+            let Some((_, target, _)) = feature.kind.inputs_mut().into_iter().nth(k) else {
+                return Err(DocError::Unknown(format!("parameter `{name}`")));
+            };
+            if *target != normalized {
+                changed.insert(name.clone());
+            }
+            *target = normalized;
+        }
+        let (_, errors) = next.param_values();
+        for (name, error) in errors {
+            if changed.contains(&name) || !before_errors.contains_key(&name) {
+                return Err(DocError::Expr(format!("parameter `{name}`: {error}")));
+            }
         }
         *self = next;
         Ok(())
@@ -564,6 +690,8 @@ pub enum ParamUser {
     Feature { feature: u64, name: String, input: String },
     /// A sketch dimension (`constraint` is its id).
     Dimension { feature: u64, name: String, constraint: String },
+    /// A configured column or an expression saved in a configuration row.
+    Configuration { row: Option<String>, column: String },
 }
 
 impl ParamUser {
@@ -572,6 +700,10 @@ impl ParamUser {
             ParamUser::Parameter { name } => format!("parameter {name}"),
             ParamUser::Feature { name, input, .. } => format!("{name} ({input})"),
             ParamUser::Dimension { name, constraint, .. } => format!("{name} dimension {constraint}"),
+            ParamUser::Configuration { row, column } => match row {
+                Some(row) => format!("configuration `{row}` ({column})"),
+                None => format!("configuration column {column}"),
+            },
         }
     }
 }
@@ -641,6 +773,24 @@ impl Document {
     /// expressions refer to it, and the sketch dimensions it drives.
     pub fn param_users(&self, name: &str) -> Vec<ParamUser> {
         let mut out = Vec::new();
+        for rule in &self.configs.rules {
+            if rule.parameter_references().iter().any(|reference| reference == name) {
+                out.push(ParamUser::Configuration { row: None, column: format!("rule `{}`", rule.name) });
+            }
+        }
+        for (index, column) in self.configs.columns.iter().enumerate() {
+            if let crate::config::Column::Param(target) = column {
+                let key = self.config_key(column);
+                if target == name {
+                    out.push(ParamUser::Configuration { row: None, column: key.clone() });
+                }
+                for row in &self.configs.rows {
+                    if row.cells.get(index).is_some_and(|value| expr::references(value).iter().any(|reference| reference == name)) {
+                        out.push(ParamUser::Configuration { row: Some(row.name.clone()), column: key.clone() });
+                    }
+                }
+            }
+        }
         for p in &self.params {
             if p.name != name && expr::references(&p.expr).iter().any(|r| r == name) {
                 out.push(ParamUser::Parameter { name: p.name.clone() });
@@ -654,6 +804,9 @@ impl Document {
                         None => out.push(ParamUser::Feature { feature: f.id, name: f.name.clone(), input: label.to_string() }),
                     }
                 }
+            }
+            if f.kind.point_expr().is_some_and(|p| p.iter().any(|e| expr::references(e).iter().any(|r| r == name))) {
+                out.push(ParamUser::Feature { feature: f.id, name: f.name.clone(), input: "Position".into() });
             }
             if let FeatureKind::Sketch { sketch, .. } = &f.kind {
                 for c in &sketch.constraints {
@@ -718,6 +871,13 @@ impl Document {
                     *x = new.to_string();
                 }
             }
+            for e in f.kind.point_expr_mut().into_iter().flatten() {
+                let r = expr::rename_reference(e, old, new);
+                if r != *e {
+                    *e = r;
+                    n += 1;
+                }
+            }
             for (_, e, _) in f.kind.inputs_mut() {
                 let r = expr::rename_reference(e, old, new);
                 if r != *e {
@@ -743,9 +903,14 @@ impl Document {
             }
         }
         // Configuration cells refer to parameters too.
+        for rule in &mut self.configs.rules {
+            rule.rename_parameter(old, new);
+        }
         for r in &mut self.configs.rows {
-            for cell in &mut r.cells {
-                *cell = expr::rename_reference(cell, old, new);
+            for (column, cell) in self.configs.columns.iter().zip(&mut r.cells) {
+                if matches!(column, crate::config::Column::Param(_)) {
+                    *cell = expr::rename_reference(cell, old, new);
+                }
             }
         }
         if let Some(c) = self.param_comments.remove(old) {

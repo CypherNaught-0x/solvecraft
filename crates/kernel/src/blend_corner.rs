@@ -1,7 +1,7 @@
 //! Fillets with a radius per edge, and the corners where filleted edges meet.
 //!
 //! The edges are straight and convex, and every face at their end vertices is planar with three
-//! edges meeting at each such vertex (box-like corners). The faces there are rebuilt around the
+//! edges meeting at each such vertex, including reflex corners of pocket rims. The faces there are rebuilt around the
 //! blends, faces away from them are kept. At a vertex:
 //! - one filleted edge ends on the third face: the blend ends in that face's section of the
 //!   cylinder (an exact arc or ellipse);
@@ -10,7 +10,9 @@
 //!   smaller blend's contact line on the face that ends the larger one;
 //! - three filleted edges: each cylinder stops at a plane section through the points where its
 //!   contact lines meet the others', and a corner patch spans the three sections (a sphere for
-//!   equal radii, else a rational patch through the exact sections).
+//!   equal radii, else a rational patch through the exact sections). Orthogonal
+//!   corners with a unique smallest radius use a single trimmed setback surface,
+//!   with six sides, or four when one radius exceeds the other two combined.
 //!
 //! A fillet that ends on an earlier round (of any radius) takes the round off
 //! ([`crate::delete_faces`]) and blends both edges together.
@@ -23,6 +25,8 @@ use truck_modeling::{self as mt, builder};
 use crate::blend::{plane_normal, unsupported, vtx};
 use crate::body::{Body, Solid, p3, v3};
 use crate::{KernelError, Result, guard};
+
+pub(crate) mod setback;
 
 /// Fillet each edge nearest a point with its own radius.
 pub fn fillet_radii(body: &Body, edges: &[(Vec3, f64)]) -> Result<Body> {
@@ -38,7 +42,7 @@ pub fn fillet_radii(body: &Body, edges: &[(Vec3, f64)]) -> Result<Body> {
     let mut first: Option<KernelError> = None;
     // Earlier rounds at the edges' ends come off and are blended again with the new edges.
     for _ in 0..4 {
-        let err = match build(&cur, &sel) {
+        let err = match build(&cur, &sel, true) {
             Ok(b) => return Ok(b),
             Err(e) => e,
         };
@@ -47,11 +51,22 @@ pub fn fillet_radii(body: &Body, edges: &[(Vec3, f64)]) -> Result<Body> {
             return Err(first.unwrap_or(err));
         }
         first.get_or_insert(err);
+        if sel.len() + rounds.len() > 1000 {
+            return Err(unsupported("too many connected fillets to rebuild"));
+        }
         let idx: Vec<usize> = rounds.iter().map(|r| r.0).collect();
         cur = crate::delete_faces(&cur, &idx)?;
         sel.extend(rounds.iter().map(|r| (r.1, r.2)));
     }
     Err(first.unwrap_or_else(|| unsupported("these fillets")))
+}
+
+/// Local equal-distance chamfers, including pocket rims where adjacent walls have
+/// different slopes. The planar strips trim each other at each selected corner.
+pub(crate) fn chamfer(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
+    let cur = Body::new(crate::heal::heal_keep(body.deep_copy(), body.size(), body.split_keep()))?;
+    let selected: Vec<_> = edges.iter().map(|p| (*p, distance)).collect();
+    build(&cur, &selected, false)
 }
 
 /// A face of the shell being rebuilt, or a new face.
@@ -112,7 +127,7 @@ fn edge(a: &mt::Vertex, b: &mt::Vertex, c: mt::Curve) -> Result<mt::Edge> {
 /// along `u`.
 fn hit(v: Vec3, u: Vec3, t: Vec3, s: f64) -> Result<Vec3> {
     let k = u.dot(t);
-    if k < 1e-6 {
+    if k.abs() < 1e-6 {
         return Err(unsupported("a fillet that runs along its neighbouring edge"));
     }
     Ok(v + u * (s / k))
@@ -122,8 +137,8 @@ fn hit(v: Vec3, u: Vec3, t: Vec3, s: f64) -> Result<Vec3> {
 /// directions `t1`, `t2`, setbacks `s1`, `s2`) cross.
 fn meet(v: Vec3, (u1, t1, s1): (Vec3, Vec3, f64), (u2, t2, s2): (Vec3, Vec3, f64)) -> Result<Vec3> {
     let (k1, k2) = (u1.dot(t2), u2.dot(t1));
-    if k1 < 1e-6 || k2 < 1e-6 {
-        return Err(unsupported("fillets of edges that meet at a reflex corner"));
+    if k1.abs() < 1e-6 || k2.abs() < 1e-6 {
+        return Err(unsupported("fillets of nearly parallel edges at a corner"));
     }
     Ok(v + u1 * (s2 / k1) + u2 * (s1 / k2))
 }
@@ -174,7 +189,7 @@ fn connect(from: &mt::Vertex, to: &mt::Vertex, pool: &[(mt::Edge, Vec<Owner>)], 
     Err(KernelError::Failed("fillet corner: a boundary does not close".into()))
 }
 
-fn build(cur: &Body, sel_pts: &[(Vec3, f64)]) -> Result<Body> {
+fn build(cur: &Body, sel_pts: &[(Vec3, f64)], round: bool) -> Result<Body> {
     let size = cur.size();
     let tol = (size * 2e-3).max(1e-3);
     let solid = cur.deep_copy();
@@ -252,16 +267,23 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)]) -> Result<Body> {
             return Err(unsupported("the faces at the edge are tangent"));
         }
         let r = radius.get(id).copied().unwrap_or(1.0);
-        let s = r / (alpha / 2.0).tan();
+        let s = if round { r / (alpha / 2.0).tan() } else { r };
+        if !(s.is_finite() && s > 0.0 && s < size) {
+            return Err(unsupported("invalid or oversized fillet setback"));
+        }
         let w = (alpha / 2.0).sin();
         // The cylinder, well past both ends (sections on oblique end faces reach beyond them).
         let m = 4.0 * (s + r);
         let (q0, q1) = (p0 - d * m, p1 + d * m);
         let ctrl = vec![vec![h(q0 + ta * s, 1.0), h(q1 + ta * s, 1.0)], vec![h(q0, w), h(q1, w)], vec![h(q0 + tb * s, 1.0), h(q1 + tb * s, 1.0)]];
-        let surf = mt::Surface::NurbsSurface(mt::NurbsSurface::new(mt::BSplineSurface::new(
-            (mt::KnotVec::bezier_knot(2), mt::KnotVec::bezier_knot(1)),
-            ctrl,
-        )));
+        let surf = if round {
+            mt::Surface::NurbsSurface(mt::NurbsSurface::new(mt::BSplineSurface::new(
+                (mt::KnotVec::bezier_knot(2), mt::KnotVec::bezier_knot(1)),
+                ctrl,
+            )))
+        } else {
+            mt::Surface::Plane(mt::Plane::new(p3(q0 + ta * s), p3(q1 + ta * s), p3(q0 + tb * s)))
+        };
         let mid = (p0 + p1) * 0.5;
         let axis = mid + ta * s - na * r;
         let out = ((ta + tb) * -1.0).normalized().unwrap_or(na);
@@ -311,20 +333,33 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)]) -> Result<Body> {
             let rest: Vec<(mt::EdgeID, Vec3)> = ar.edges.iter().filter(|(id, _)| !sels.contains_key(id)).copied().collect();
             chosen.sort_by_key(|(id, _)| order.iter().position(|x| x == id));
             let sel = |id: mt::EdgeID| sels.get(&id).ok_or_else(|| KernelError::Failed("fillet".into()));
+            // At an inner rim a contact line can extend the next edge backwards.
+            // Its new endpoint must remain in the trimmed face, including its holes.
+            let check_extension = |q: Vec3, fi: usize| -> Result<Vec3> {
+                let face = faces.get(fi).ok_or_else(|| KernelError::Failed("face".into()))?;
+                if !crate::blend::extension_fits(face, v, q, size * 1e-7) {
+                    return Err(unsupported("a fillet larger than the faces next to it"));
+                }
+                Ok(q)
+            };
+            let hit = |u: Vec3, t: Vec3, s: f64, fi: usize| -> Result<Vec3> {
+                let q = hit(v, u, t, s)?;
+                if u.dot(t) < 0.0 { check_extension(q, fi) } else { Ok(q) }
+            };
             let list = pool.entry(*vid).or_default();
             match (&chosen[..], &rest[..]) {
                 ([(e1, _)], [(e2, u2), (e3, u3)]) => {
                     let s1 = sel(*e1)?;
                     let (f12, f31) = (face_with(*e1, *e2)?, face_with(*e1, *e3)?);
                     let f23 = face_with(*e2, *e3)?;
-                    let p2 = hit(v, *u2, s1.t(f12), s1.s)?;
-                    let p3_ = hit(v, *u3, s1.t(f31), s1.s)?;
+                    let p2 = hit(*u2, s1.t(f12), s1.s, f12)?;
+                    let p3_ = hit(*u3, s1.t(f31), s1.s, f31)?;
                     let (a, b) = (builder::vertex(p3(p2)), builder::vertex(p3(p3_)));
                     endpt.insert((*e2, *vid, None), a.clone());
                     endpt.insert((*e1, *vid, Some(f12)), a.clone());
                     endpt.insert((*e3, *vid, None), b.clone());
                     endpt.insert((*e1, *vid, Some(f31)), b.clone());
-                    let c = edge(&a, &b, mt::Curve::NurbsCurve(conic(p2, v, p3_, s1.w)))?;
+                    let c = if round { edge(&a, &b, mt::Curve::NurbsCurve(conic(p2, v, p3_, s1.w)))? } else { builder::line(&a, &b) };
                     list.push((c, vec![Owner::Face(f23), Owner::Cyl(*e1)]));
                 }
                 ([(ea, ua), (eb, ub)], [(e3, u3)]) => {
@@ -332,14 +367,19 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)]) -> Result<Body> {
                     let fab = face_with(*ea, *eb)?;
                     let (fb3, fa3) = (face_with(*eb, *e3)?, face_with(*ea, *e3)?);
                     let q = meet(v, (*ua, sa.t(fab), sa.s), (*ub, sb.t(fab), sb.s))?;
+                    if ua.dot(sb.t(fab)) < 0.0 || ub.dot(sa.t(fab)) < 0.0 {
+                        check_extension(q, fab)?;
+                    }
                     // Where each cylinder touches the third edge.
-                    let xb = hit(v, *u3, sb.t(fb3), sb.s)?;
-                    let xa = hit(v, *u3, sa.t(fa3), sa.s)?;
+                    let xb = hit(*u3, sb.t(fb3), sb.s, fb3)?;
+                    let xa = hit(*u3, sa.t(fa3), sa.s, fa3)?;
                     let qv = builder::vertex(p3(q));
                     endpt.insert((*ea, *vid, Some(fab)), qv.clone());
                     endpt.insert((*eb, *vid, Some(fab)), qv.clone());
                     let (la, lb) = ((xa - v).len(), (xb - v).len());
-                    let crease_to = |end: Vec3| -> Result<mt::Curve> { crease(sa, sb, q, end, size) };
+                    let crease_to = |end: Vec3| -> Result<mt::Curve> {
+                        if round { crease(sa, sb, q, end, size) } else { Ok(mt::Curve::Line(mt::Line(p3(q), p3(end)))) }
+                    };
                     if (la - lb).abs() <= size * 1e-9 {
                         let xv = builder::vertex(p3(xb));
                         endpt.insert((*e3, *vid, None), xv.clone());
@@ -354,16 +394,22 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)]) -> Result<Body> {
                             if lb > la { (sb, sa, *ua, fb3, fa3, *eb, *ea, xb) } else { (sa, sb, *ub, fa3, fb3, *ea, *eb, xa) };
                         // The big cylinder's section by the small one's end face: from the third
                         // edge to the small edge's line, where it crosses the small contact line.
-                        let z = hit(v, us, big.t(fab), big.s)?;
+                        let z = hit(us, big.t(fab), big.s, fab)?;
                         let mut sec = conic(x, v, z, big.w);
                         let tt = small.t(fsmall3);
                         let c0 = (x - v).dot(tt) - small.s;
                         let c1 = big.w * (0.0 - small.s);
                         let c2 = (z - v).dot(tt) - small.s;
-                        let t = bernstein_root(c0, c1, c2).ok_or_else(|| unsupported("fillets this different in size at one corner"))?;
-                        let y = {
+                        // A chamfer section is a line, not the cylinder's conic.
+                        // Where it meets the other strip's contact line is also
+                        // where the crease ends; the remainder trims that wall.
+                        let t = if round { bernstein_root(c0, c1, c2) } else { Some(c0 / (c0 - c2)).filter(|t| *t > 0.0 && *t < 1.0) }
+                            .ok_or_else(|| unsupported("blends this different in size at one corner"))?;
+                        let y = if round {
                             use mt::ParametricCurve;
                             crate::body::from_p3(sec.subs(t))
+                        } else {
+                            x + (z - x) * t
                         };
                         {
                             use mt::Cut;
@@ -374,15 +420,59 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)]) -> Result<Body> {
                         endpt.insert((*e3, *vid, None), xv.clone());
                         endpt.insert((eb_, *vid, Some(fbig3)), xv.clone());
                         endpt.insert((es, *vid, Some(fsmall3)), yv.clone());
-                        let piece = edge(&xv, &yv, mt::Curve::NurbsCurve(sec))?;
+                        let piece = if round { edge(&xv, &yv, mt::Curve::NurbsCurve(sec))? } else { builder::line(&xv, &yv) };
                         list.push((piece, vec![Owner::Face(fsmall3), Owner::Cyl(eb_)]));
                         let c = edge(&qv, &yv, crease_to(y)?)?;
                         list.push((c, vec![Owner::Cyl(*ea), Owner::Cyl(*eb)]));
                     }
                 }
                 ([(e1, u1), (e2, u2), (e3, u3)], []) => {
+                    if !round {
+                        return Err(unsupported("three chamfers at one corner in the local blend"));
+                    }
                     let (s1, s2, s3) = (sel(*e1)?, sel(*e2)?, sel(*e3)?);
                     let (f12, f23, f31) = (face_with(*e1, *e2)?, face_with(*e2, *e3)?, face_with(*e3, *e1)?);
+                    let mut radii = [s1.r, s2.r, s3.r];
+                    radii.sort_by(f64::total_cmp);
+                    if radii[1] - radii[0] > size * 1e-9 && u1.dot(*u2).abs().max(u2.dot(*u3).abs()).max(u3.dot(*u1).abs()) <= 1e-6 {
+                        let patch = setback_corner([s1, s2, s3], [*u1, *u2, *u3], [f12, f23, f31], v, size)?;
+                        let mut vv: Vec<mt::Vertex> = Vec::new();
+                        for p in patch.points {
+                            let vertex = vv.iter().find(|q| vtx(q).dist(p) < size * 1e-9).cloned().unwrap_or_else(|| builder::vertex(p3(p)));
+                            vv.push(vertex);
+                        }
+                        let point = |i| vv.get(i).ok_or_else(|| unsupported("setback vertex"));
+                        // Loop: A's section, plane 31, C's section, plane 23,
+                        // B's section, plane 12. A dominant round merges two pairs of contacts.
+                        for (e, f, i) in [(e1, f12, 0), (e1, f31, 1), (e3, f31, 2), (e3, f23, 3), (e2, f23, 4), (e2, f12, 5)] {
+                            endpt.insert((*e, *vid, Some(f)), point(i)?.clone());
+                        }
+                        let owners = [Owner::Cyl(*e1), Owner::Face(f31), Owner::Cyl(*e3), Owner::Face(f23), Owner::Cyl(*e2), Owner::Face(f12)];
+                        let mut wire = Vec::new();
+                        for (i, curve) in patch.curves.into_iter().enumerate() {
+                            let Some(curve) = curve else { continue };
+                            let c = edge(point(i)?, point((i + 1) % 6)?, curve)?;
+                            let owner = owners.get(i).copied().ok_or_else(|| unsupported("setback owner"))?;
+                            if let Owner::Face(fi) = owner {
+                                let f = faces.get(fi).ok_or_else(|| unsupported("setback side face"))?;
+                                use mt::{BoundedCurve, ParametricCurve};
+                                let curve = c.curve();
+                                let (a, b) = curve.range_tuple();
+                                for k in 0..=32 {
+                                    let p = crate::body::from_p3(curve.subs(a + (b - a) * k as f64 / 32.0));
+                                    if !crate::blend::extension_fits(f, v, p, size * 1e-8) {
+                                        return Err(unsupported("the setback patch crosses a side-face boundary"));
+                                    }
+                                }
+                            }
+                            list.push((c.clone(), vec![owner, Owner::Patch]));
+                            wire.push(c);
+                        }
+                        patches.push(
+                            mt::Face::try_new(vec![wire.into()], patch.surface).map_err(|e| KernelError::Failed(format!("setback patch: {e}")))?,
+                        );
+                        continue;
+                    }
                     let q12 = meet(v, (*u1, s1.t(f12), s1.s), (*u2, s2.t(f12), s2.s))?;
                     let q23 = meet(v, (*u2, s2.t(f23), s2.s), (*u3, s3.t(f23), s3.s))?;
                     let q31 = meet(v, (*u3, s3.t(f31), s3.s), (*u1, s1.t(f31), s1.s))?;
@@ -593,6 +683,37 @@ fn rounds_at(cur: &Body, sel: &[(Vec3, f64)]) -> Vec<(usize, Vec3, f64)> {
             out.push((fi, p, r));
         }
     }
+    // A larger round can hide the smaller one from the selected edge's endpoint.
+    // Remove the connected round group together: Delete Face cannot extend a
+    // surviving curved neighbor to fill the hole left by removing only one round.
+    let mut owners: HashMap<mt::EdgeID, Vec<usize>> = HashMap::new();
+    for (fi, f) in faces.iter().enumerate() {
+        for edge in f.edge_iter() {
+            owners.entry(edge.id()).or_default().push(fi);
+        }
+    }
+    let mut visited: HashSet<usize> = out.iter().map(|r| r.0).collect();
+    let mut cursor = 0;
+    while let Some((fi, _, _)) = out.get(cursor).copied() {
+        cursor += 1;
+        let Some(face) = faces.get(fi) else { continue };
+        for edge in face.edge_iter() {
+            for next in owners.get(&edge.id()).into_iter().flatten() {
+                if !visited.insert(*next) {
+                    continue;
+                }
+                let Some(face) = faces.get(*next) else { continue };
+                if plane_normal(face).is_none()
+                    && let Some((p, r)) = round_of(&faces, face, size)
+                {
+                    if out.len() >= 1000 {
+                        return Vec::new();
+                    }
+                    out.push((*next, p, r));
+                }
+            }
+        }
+    }
     out
 }
 
@@ -600,13 +721,17 @@ fn rounds_at(cur: &Body, sel: &[(Vec3, f64)]) -> Vec<(usize, Vec3, f64)> {
 /// surface a cylinder tangent to both. The sharp edge's midpoint and the radius.
 fn round_of(faces: &[&mt::Face], f: &mt::Face, size: f64) -> Option<(Vec3, f64)> {
     use mt::{ParametricSurface, SearchNearestParameter};
+    if !matches!(crate::offset::surf_of(f, size * 1e-6), Some(crate::offset::Surf::Cylinder { .. })) {
+        return None;
+    }
+
     let mut lines: Vec<(Vec3, Vec3, Vec3)> = Vec::new();
     for e in f.edge_iter() {
         if !matches!(e.curve(), mt::Curve::Line(_)) {
             continue;
         }
         let other = faces.iter().find(|g| !std::ptr::eq(**g, f) && g.edge_iter().any(|x| x.id() == e.id()))?;
-        let n = plane_normal(other)?;
+        let Some(n) = plane_normal(other) else { continue };
         lines.push((vtx(e.absolute_front()), vtx(e.absolute_back()), n));
     }
     for (i, (a0, a1, na)) in lines.iter().enumerate() {
@@ -642,6 +767,126 @@ struct CornerPatch {
     /// Sections of the first blend (q12 → q31), the second (q12 → q23), the third (q23 → q31).
     sections: [mt::NurbsCurve<mt::Vector4>; 3],
     surf: mt::Surface,
+}
+
+struct SetbackPatch {
+    points: [Vec3; 6],
+    curves: [Option<mt::Curve>; 6],
+    surface: mt::Surface,
+}
+
+fn setback_corner(s: [&Sel; 3], along: [Vec3; 3], f: [usize; 3], v: Vec3, size: f64) -> Result<SetbackPatch> {
+    let [a, b, c] = s;
+    let [ua, ub, uc] = along;
+    let [f12, f23, f31] = f;
+    if ua.dot(ub).abs().max(ub.dot(uc).abs()).max(uc.dot(ua).abs()) > 1e-6 {
+        return Err(unsupported("setback patches at non-orthogonal corners"));
+    }
+    let mut sorted = [(0, a.r), (1, b.r), (2, c.r)];
+    sorted.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let [(small, ra), (middle, rb), (large, rc)] = sorted;
+    let average = (ra + rb + rc) / 3.0;
+    // The linear, scale-invariant interpolation of the four published six-sided
+    // observations. Further oracle triples are needed to establish the rule.
+    let extra = ((rb - ra) + 2.0 * (rc - rb)) / 6.0;
+    let mut setbacks = [0.0; 3];
+    for (i, value) in [(small, rb + rc + extra), (middle, average + rc), (large, average + rb)] {
+        if !value.is_finite() || value <= 0.0 || value >= size {
+            return Err(unsupported("invalid corner setback"));
+        }
+        if let Some(slot) = setbacks.get_mut(i) {
+            *slot = value;
+        }
+    }
+    let dominant = rc > ra + rb + size * 1e-9;
+    if dominant {
+        for i in [small, middle] {
+            if let Some(value) = setbacks.get_mut(i) {
+                *value = rc;
+            }
+        }
+    }
+    let [da, db, dc] = setbacks;
+    let (ma, mb, mc) = (v + ua * da, v + ub * db, v + uc * dc);
+    let contact = |i: usize, s: &Sel, u: Vec3, m: Vec3, f, other: &Sel| {
+        let m = if dominant && i == large { v + u * other.r } else { m };
+        m + s.t(f) * s.s
+    };
+    let points = [
+        contact(0, a, ua, ma, f12, b),
+        contact(0, a, ua, ma, f31, c),
+        contact(2, c, uc, mc, f31, a),
+        contact(2, c, uc, mc, f23, b),
+        contact(1, b, ub, mb, f23, c),
+        contact(1, b, ub, mb, f12, a),
+    ];
+    let [a12, a31, c31, c23, b23, b12] = points;
+    let q12 = meet(v, (ua, a.t(f12), a.s), (ub, b.t(f12), b.s))?;
+    let q23 = meet(v, (ub, b.t(f23), b.s), (uc, c.t(f23), c.s))?;
+    let q31 = meet(v, (uc, c.t(f31), c.s), (ua, a.t(f31), a.s))?;
+    let plane_arc = |a: Vec3, q: Vec3, b: Vec3| -> Result<mt::Curve> {
+        let (Some(x), Some(y)) = ((a - q).normalized(), (b - q).normalized()) else {
+            return Err(unsupported("collapsed setback boundary"));
+        };
+        let w = ((1.0 - x.dot(y).clamp(-1.0, 1.0)) * 0.5).sqrt();
+        if w <= 1e-6 {
+            return Err(unsupported("degenerate setback boundary"));
+        }
+        Ok(mt::Curve::NurbsCurve(conic(a, q, b, w)))
+    };
+    let round = |i: usize, sel: &Sel, u: Vec3, p: Vec3, q: Vec3, m: Vec3| -> Result<Option<mt::Curve>> {
+        let curve = if dominant && i == large { variable_section(sel, u, v, p, q)? } else { mt::Curve::NurbsCurve(conic(p, m, q, sel.w)) };
+        Ok(Some(curve))
+    };
+    let flat = |i: usize, j: usize, p: Vec3, q: Vec3, r: Vec3| -> Result<Option<mt::Curve>> {
+        if dominant && (i == large || j == large) { Ok(None) } else { plane_arc(p, q, r).map(Some) }
+    };
+    let curves = [
+        round(0, a, ua, a12, a31, ma)?,
+        flat(0, 2, a31, q31, c31)?,
+        round(2, c, uc, c31, c23, mc)?,
+        flat(2, 1, c23, q23, b23)?,
+        round(1, b, ub, b23, b12, mb)?,
+        flat(1, 0, b12, q12, a12)?,
+    ];
+    let normal = |s: &Sel, fi| if s.fa == fi { s.na } else { s.nb };
+    let (n12, n23, n31) = (normal(a, f12), normal(b, f23), normal(c, f31));
+    let normals = [
+        setback::Normal::Cylinder { origin: a.axis_point(), axis: a.d },
+        setback::Normal::Plane(n31),
+        setback::Normal::Cylinder { origin: c.axis_point(), axis: c.d },
+        setback::Normal::Plane(n23),
+        setback::Normal::Cylinder { origin: b.axis_point(), axis: b.d },
+        setback::Normal::Plane(n12),
+    ];
+    let boundaries: Vec<_> =
+        curves.iter().cloned().zip(normals).filter_map(|(curve, normal)| curve.map(|curve| setback::Boundary { curve, normal })).collect();
+    let surface = setback::fit(&boundaries, n12 + n23 + n31, size, &[(n12, v), (n23, v), (n31, v)], [a.r, b.r, c.r])?;
+    Ok(SetbackPatch { points, curves, surface })
+}
+
+/// A curve on the dominant cylinder. A rational quadratic supplies its exact
+/// circular projection; cubic Hermite axial motion has zero slope at both ends
+/// so its tangent matches the two smaller rounds at their contact vertices.
+fn variable_section(sel: &Sel, axis: Vec3, vertex: Vec3, a: Vec3, b: Vec3) -> Result<mt::Curve> {
+    let ha = (a - vertex).dot(axis);
+    let hb = (b - vertex).dot(axis);
+    let base = [h(a - axis * ha, 1.0), h(vertex, sel.w), h(b - axis * hb, 1.0)];
+    let axial = [ha, ha, hb, hb];
+    let bin2 = [1.0, 2.0, 1.0];
+    let bin3 = [1.0, 3.0, 3.0, 1.0];
+    let bin5 = [1.0, 5.0, 10.0, 10.0, 5.0, 1.0];
+    let mut controls = Vec::new();
+    for (i, denominator) in bin5.iter().enumerate() {
+        let mut point = mt::Vector4::new(0.0, 0.0, 0.0, 0.0);
+        for (j, p) in base.iter().enumerate() {
+            let Some(k) = i.checked_sub(j) else { continue };
+            let (Some(z), Some(c2), Some(c3)) = (axial.get(k), bin2.get(j), bin3.get(k)) else { continue };
+            point += (*p + mt::Vector4::new(axis.x * z * p.w, axis.y * z * p.w, axis.z * z * p.w, 0.0)) * (c2 * c3 / denominator);
+        }
+        controls.push(point);
+    }
+    Ok(mt::Curve::NurbsCurve(mt::NurbsCurve::new(mt::BSplineCurve::new(mt::KnotVec::bezier_knot(5), controls))))
 }
 
 /// Plane section of a blend's cylinder from `a` to `b` (points on its contact lines): the plane
@@ -1058,16 +1303,126 @@ mod tests {
         assert_eq!(r.face_count(), 10);
         assert!((vol(&r) - sphere).abs() < 0.05, "{} vs {sphere}", vol(&r));
         assert!(kink(&r) < 0.01);
-        // Different radii: a smooth patch over the corner, slightly more than the strips take.
-        for (rs, sel) in [((2.0, 2.0, 3.0), fillet(&ab, &[c], 3.0)), ((2.0, 3.0, 4.0), fillet_radii(&bx, &[(a, 2.0), (b, 3.0), (c, 4.0)]))] {
-            let r = sel.unwrap();
-            assert_eq!(r.face_count(), 10);
-            assert_eq!(r.unmeshed_faces(), 0);
-            let k = kink(&r);
-            assert!(k < 0.05, "kink {k}°");
-            let (v, s) = (vol(&r), strips(rs.0, rs.1, rs.2));
-            assert!(v < s + 0.05 && v > s - 3.0, "{v} vs {s}");
+        // Two equal smaller radii retain the existing three-sided patch.
+        let r = fillet(&ab, &[c], 3.0).unwrap();
+        assert_eq!(r.face_count(), 10);
+        assert_eq!(r.unmeshed_faces(), 0);
+        assert!(kink(&r) < 0.05);
+        let (v, s) = (vol(&r), strips(2.0, 2.0, 3.0));
+        assert!(v < s + 0.05 && v > s - 3.0, "{v} vs {s}");
+    }
+
+    /// Tangency to every neighbor, including the three original planar faces.
+    fn setback_kink(body: &Body) -> f64 {
+        use mt::{BoundedCurve, InnerSpace, ParametricCurve, ParametricSurface3D, SearchNearestParameter};
+        let patch = body.solid.face_iter().last().unwrap();
+        let mut worst: f64 = 0.0;
+        for edge in patch.edge_iter() {
+            let neighbor = body.solid.face_iter().find(|face| face.id() != patch.id() && face.edge_iter().any(|e| e.id() == edge.id())).unwrap();
+            let curve = edge.curve();
+            let (a, b) = curve.range_tuple();
+            for i in 0..=32 {
+                let p = curve.subs(a + (b - a) * i as f64 / 32.0);
+                let normal = |surface: mt::Surface| {
+                    let (u, v) = surface.search_nearest_parameter(p, None, 100).unwrap();
+                    surface.normal(u, v)
+                };
+                let dot = normal(patch.oriented_surface()).dot(normal(neighbor.oriented_surface()));
+                worst = worst.max(dot.clamp(-1.0, 1.0).acos().to_degrees());
+            }
         }
+        worst
+    }
+
+    fn check_setback_reference(radii: [f64; 3], reference: f64, sides: usize) {
+        let (bx, a, b, c) = setup();
+        // Public measurements in issue #52. The interior is a bounded fair
+        // approximation; neither proprietary surfaces nor oracle files are used.
+        let body = fillet_radii(&bx, &[(a, radii[0]), (b, radii[1]), (c, radii[2])]).unwrap();
+        assert_eq!(body.face_count(), 10);
+        assert!(body.validity().is_empty());
+        assert_eq!(body.unmeshed_faces(), 0);
+        let patch = body.solid.face_iter().last().unwrap();
+        assert_eq!(patch.edge_iter().count(), sides, "{radii:?}");
+        let kink = setback_kink(&body);
+        assert!(kink < 0.02, "{radii:?}: kink {kink} degrees");
+        let measured = measure(&body).unwrap();
+        assert!((measured.volume - reference).abs() < reference * 0.001, "{radii:?}: {} vs {reference}", measured.volume);
+        let tol = bx.size() * 1e-6;
+        assert!(measured.bbox.min.x >= -tol && measured.bbox.min.y >= -tol && measured.bbox.min.z >= -tol);
+        assert!(measured.bbox.max.x <= 20.0 + tol && measured.bbox.max.y <= 20.0 + tol && measured.bbox.max.z <= 20.0 + tol);
+    }
+
+    #[test]
+    fn setback_reference_233() {
+        check_setback_reference([2.0, 3.0, 3.0], 7900.664, 6);
+    }
+    #[test]
+    fn setback_reference_234() {
+        check_setback_reference([2.0, 3.0, 4.0], 7867.820, 6);
+    }
+    #[test]
+    fn setback_reference_123() {
+        check_setback_reference([1.0, 2.0, 3.0], 7937.490, 6);
+    }
+    #[test]
+    fn setback_reference_331() {
+        check_setback_reference([3.0, 3.0, 1.0], 7914.849, 6);
+    }
+    #[test]
+    fn setback_reference_236() {
+        check_setback_reference([2.0, 3.0, 6.0], 7794.490, 4);
+    }
+
+    #[test]
+    fn setback_step_and_mesh_convergence() {
+        let (bx, a, b, c) = setup();
+        let body = fillet_radii(&bx, &[(a, 2.0), (b, 3.0), (c, 4.0)]).unwrap();
+        let coarse = body.tessellate_with(0.001, true).unwrap().measure().volume;
+        let fine = body.tessellate_with(0.0002, true).unwrap().measure().volume;
+        assert!((fine - coarse).abs() < 0.15, "{fine} vs {coarse}");
+        let step = crate::step_export(&[&body], "SolveCraft").unwrap();
+        let imported = crate::step_import(&step).unwrap();
+        assert_eq!(imported.bodies.len(), 1);
+        let restored = &imported.bodies[0].body;
+        assert_eq!(restored.face_count(), 10);
+        assert!(restored.validity().is_empty());
+        assert_eq!(restored.unmeshed_faces(), 0);
+        assert!((vol(restored) - vol(&body)).abs() < 0.15);
+    }
+
+    #[test]
+    fn setback_scales_and_selection_order_do_not_change_geometry() {
+        let scale = 0.1;
+        let body = box_solid(Vec3::ZERO, Vec3::new(20.0, 20.0, 20.0) * scale).unwrap();
+        let (_, a, b, c) = setup();
+        let first = fillet_radii(&body, &[(a * scale, 2.0 * scale), (b * scale, 3.0 * scale), (c * scale, 4.0 * scale)]).unwrap();
+        let second = fillet_radii(&body, &[(c * scale, 4.0 * scale), (a * scale, 2.0 * scale), (b * scale, 3.0 * scale)]).unwrap();
+        assert_eq!(first.face_count(), 10);
+        assert_eq!(second.face_count(), 10);
+        assert!((vol(&first) - 7.867820).abs() < 0.008);
+        assert!((vol(&first) - vol(&second)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn setback_sequential_features() {
+        let (bx, a, b, c) = setup();
+        let first = fillet(&bx, &[a], 2.0).unwrap();
+        let second = fillet(&first, &[b], 3.0).unwrap();
+        let result = fillet(&second, &[c], 4.0).unwrap();
+        assert_eq!(result.face_count(), 10);
+        assert!(result.validity().is_empty());
+        assert!((vol(&result) - 7867.820).abs() < 7.868);
+    }
+
+    #[test]
+    fn setback_refuses_to_cross_the_opposite_wall() {
+        let thin = box_solid(Vec3::ZERO, Vec3::new(20.0, 20.0, 5.0)).unwrap();
+        assert!(
+            fillet_radii(&thin, &[(Vec3::new(20.0, 10.0, 5.0), 2.0), (Vec3::new(10.0, 0.0, 5.0), 3.0), (Vec3::new(20.0, 0.0, 2.5), 4.0)]).is_err()
+        );
+        assert_eq!(thin.face_count(), 6);
+        assert!((vol(&thin) - 2000.0).abs() < 1e-6);
     }
 
     #[test]
@@ -1085,5 +1440,108 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(fillet_radii(&l, &[(Vec3::new(10.0, 10.0, 10.0), 1.0), (c, 2.0)]).is_err());
+    }
+
+    #[test]
+    fn sloped_basin_rim_fillets() {
+        use solvecraft_geom::{Loop2, Plane, Vec2};
+        let rectangle = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
+        let slab = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap();
+        let pocket =
+            crate::loft(&[(Plane::XY.offset(30.0), rectangle(20.0, 4.0, 80.0, 50.0)), (Plane::XY.offset(10.0), rectangle(30.0, 20.0, 70.0, 40.0))])
+                .unwrap();
+        let basin = crate::boolean(&slab, &pocket, crate::BoolOp::Cut).unwrap().unwrap();
+        let picks = [Vec3::new(50.0, 4.0, 30.0), Vec3::new(80.0, 27.0, 30.0), Vec3::new(50.0, 50.0, 30.0), Vec3::new(20.0, 27.0, 30.0)];
+        for count in 1..=4 {
+            let result = fillet(&basin, &picks[..count], 2.0).unwrap();
+            assert!(result.validity().is_empty());
+            assert_eq!(result.unmeshed_faces(), 0);
+            assert!(vol(&result) < vol(&basin));
+            let mesh = result.tessellate(0.01).unwrap();
+            assert!(mesh.contains(Vec3::new(50.0, 2.0, 27.0)));
+            assert!(!mesh.contains(Vec3::new(50.0, 3.9, 29.99)));
+            // The small blend removes only a strip at the rim, and never escapes
+            // the slab. Topology checks alone do not catch crossed faces.
+            assert!(vol(&basin) - vol(&result) < 2.0_f64.powi(2) * (60.0 + 46.0) * 2.0);
+            for v in result.solid.vertex_iter() {
+                let p = vtx(&v);
+                assert!(p.x >= 0.0 && p.x <= 100.0 && p.y >= 0.0 && p.y <= 60.0 && p.z >= 0.0 && p.z <= 30.0 + 1e-8);
+            }
+        }
+    }
+
+    #[test]
+    fn sloped_rim_fillets_cannot_extend_outside_the_material() {
+        use solvecraft_geom::{Loop2, Plane, Vec2};
+        for margin in [0.5, 1.0] {
+            let rectangle = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
+            let slab = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap();
+            let pocket = crate::loft(&[
+                (Plane::XY.offset(30.0), rectangle(20.0, margin, 80.0, 50.0)),
+                (Plane::XY.offset(10.0), rectangle(30.0, 20.0, 70.0, 40.0)),
+            ])
+            .unwrap();
+            let basin = crate::boolean(&slab, &pocket, crate::BoolOp::Cut).unwrap().unwrap();
+            let picks = [Vec3::new(50.0, margin, 30.0), Vec3::new(80.0, 27.0, 30.0), Vec3::new(50.0, 50.0, 30.0), Vec3::new(20.0, 27.0, 30.0)];
+            for count in [1, 2, 4] {
+                assert!(fillet(&basin, &picks[..count], 4.0).is_err());
+                assert!(fillet(&basin, &picks[..count], margin * 0.5).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn chamfers_meet_on_unequal_sloped_rim_walls() {
+        use solvecraft_geom::{Loop2, Plane, Vec2};
+        for margin in [1.0, 4.0] {
+            let rectangle = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
+            let slab = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap();
+            let pocket = crate::loft(&[
+                (Plane::XY.offset(30.0), rectangle(20.0, margin, 80.0, 50.0)),
+                (Plane::XY.offset(10.0), rectangle(30.0, 20.0, 70.0, 40.0)),
+            ])
+            .unwrap();
+            let basin = crate::boolean(&slab, &pocket, crate::BoolOp::Cut).unwrap().unwrap();
+            let picks = [Vec3::new(50.0, margin, 30.0), Vec3::new(80.0, 27.0, 30.0), Vec3::new(50.0, 50.0, 30.0), Vec3::new(20.0, 27.0, 30.0)];
+            for count in [2, 3, 4] {
+                if margin == 1.0 {
+                    assert!(crate::chamfer(&basin, &picks[..count], 2.0).is_err());
+                    assert!(crate::chamfer(&basin, &picks[..count], 1.0).is_err());
+                }
+                let distance = if margin == 1.0 { 0.5 } else { 2.0 };
+                let result = crate::chamfer(&basin, &picks[..count], distance).unwrap();
+                assert!(result.validity().is_empty());
+                assert_eq!(result.unmeshed_faces(), 0);
+                assert!(vol(&result) < vol(&basin));
+                assert!(vol(&basin) - vol(&result) < distance.powi(2) * (60.0 + 50.0 - margin));
+                let reverse: Vec<_> = picks[..count].iter().copied().rev().collect();
+                let reversed = crate::chamfer(&basin, &reverse, distance).unwrap();
+                assert!((vol(&result) - vol(&reversed)).abs() < 1e-6);
+                // These are exact planes, with every boundary on its owning face.
+                for f in result.solid.face_iter() {
+                    let Some(n) = plane_normal(f) else { continue };
+                    let origin = vtx(&f.vertex_iter().next().unwrap());
+                    for v in f.vertex_iter() {
+                        assert!((vtx(&v) - origin).dot(n).abs() < 1e-7);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn equal_slope_rim_loops_cannot_escape_the_face() {
+        use solvecraft_geom::{Loop2, Plane, Vec2};
+        let rectangle = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
+        let slab = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap();
+        let pocket =
+            crate::loft(&[(Plane::XY.offset(30.0), rectangle(20.0, 1.0, 80.0, 50.0)), (Plane::XY.offset(10.0), rectangle(30.0, 11.0, 70.0, 40.0))])
+                .unwrap();
+        let basin = crate::boolean(&slab, &pocket, crate::BoolOp::Cut).unwrap().unwrap();
+        let picks = [Vec3::new(50.0, 1.0, 30.0), Vec3::new(80.0, 27.0, 30.0), Vec3::new(50.0, 50.0, 30.0), Vec3::new(20.0, 27.0, 30.0)];
+        assert!(crate::chamfer(&basin, &picks, 2.0).is_err());
+        assert!(fillet(&basin, &picks, 4.0).is_err());
+        assert!(crate::chamfer(&basin, &picks, 0.5).is_ok());
+        assert!(fillet(&basin, &picks, 0.5).is_ok());
     }
 }

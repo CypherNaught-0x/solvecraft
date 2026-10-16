@@ -47,5 +47,29 @@ Changes:
   point that does not evaluate counts as flat instead of recursing). Surface grids refine only
   the direction that bends, and a ruling left undivided gets cells comparable to the other
   direction (long triangles from a trim loop to the grid's far ends cut through cylinders).
+- `tessellation/mod.rs`, `tessellation/triangulation.rs`: optional checked triangulation records
+  exhausted edge/surface refinement budgets and non-finite evaluations per call, across native
+  worker threads or sequential Wasm execution. Verification rejects these fallbacks; ordinary
+  display meshing retains its bounded approximation behavior. These checks do not constitute
+  an analytic error proof for arbitrary oscillatory surfaces.
+- `tessellation/boundary_index.rs`, `tessellation/triangulation.rs`: original conservative
+  line/AABB candidate index retains the existing winding predicate and all boundary segments;
+  uncertain/nonfinite pruning arithmetic falls back to visiting candidates. Empty triangulations
+  bulk-load rounded points through Spade (minimum 2.15.1), map duplicate positions to handles,
+  and retain the existing constraint insertion loop. Nonempty/failed loads retain sequential
+  insertion. Workspace kernel tests cover differential winding, concavity, holes and physical
+  chord/volume accuracy. No profiling instrumentation is included.
 - `lib.rs`: compiler warnings no longer fail the build. Example, test and bench targets are
   dropped (their sources are not vendored).
+
+## matext4cgmath 0.1.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/matext4cgmath)
+
+truck-geometry uses it for a matrix's operator norm (an intersection curve scales its tolerance
+by it whenever it is moved).
+
+Changes:
+- `solver.rs`: the Newton refinement of cubic and quartic roots stops after 100 steps. Near a
+  double root it could cycle forever: moving a body whose edges a boolean made (the retries
+  move both bodies and the result back) hung the app.
+- `lib.rs`: compiler warnings no longer fail the build. Test targets are dropped (their sources
+  are not vendored).

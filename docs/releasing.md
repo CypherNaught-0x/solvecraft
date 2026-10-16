@@ -6,6 +6,27 @@ GitHub Release. Publishing that verified draft is a separate operation. Pushing 
 pushing a tag does not start the release workflow. There is no automatic commit-message-based
 version bump and no patch release for every merge.
 
+## Nightly prereleases
+
+`release.yml` also runs at midnight in `America/New_York` (Eastern time, following daylight
+saving time). GitHub may start scheduled runs later when its runners are busy.
+Before building, it compares the exact scheduled `main` commit with the tag of the most
+recently published release, including prereleases. If the commits match, all packaging and
+publication jobs are skipped: no new version, tag, or release is created. Drafts do not count
+as published releases, so a failed build or publication can be retried the following night.
+
+Changed commits use the existing package build and validation jobs. Only after all jobs
+succeed, the workflow stages the assets in a draft and publishes a prerelease named
+`v<workspace-version>-nightly.<YYYYMMDD>.<run-number>.<run-attempt>` with checksums and generated
+notes. Any existing workspace prerelease suffix is replaced by the nightly suffix. Dates
+use Eastern time; package versions are overridden without changing Cargo.toml or Cargo.lock,
+so the binaries' embedded Cargo version remains the workspace version. Nightlies do not
+replace the latest stable release or advance the `release` branch. The normal deliberate
+release process below continues to create drafts for separate verification and publication.
+
+Nightly publication uses `GITHUB_TOKEN`, so it does not trigger the downstream Flatpak Pages
+deployment. The stable Flatpak repository is not automatically updated with nightly builds.
+
 ## Choose and prepare the version
 
 1. Fetch `origin` and its tags. Inspect the previous published release and the changes since
@@ -96,7 +117,11 @@ Keep that deployment separate from building the application. A publication made 
 Actions `GITHUB_TOKEN` does not trigger downstream `release: published` workflows; in that
 case explicitly dispatch the Flatpak workflow with the published tag, or use an appropriately
 authorized maintainer/App token for publication. Do not assume the repository updated: check
-the deployment run. Coordinate its GitHub Pages output with the existing docs website.
+the deployment run. The Flatpak workflow requests the shared Pages workflow with that tag;
+Pages assembles the documentation, browser app, and Flatpak repository together. Ordinary
+docs updates include the latest stable Flatpak release too. Verify the resulting Pages run,
+not only the dispatch job, so a release cannot erase the docs or app and docs updates cannot
+erase the package repository.
 
 ## Repository setup
 

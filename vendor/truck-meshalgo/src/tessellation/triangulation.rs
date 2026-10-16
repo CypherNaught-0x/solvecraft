@@ -6,6 +6,15 @@ use crate::Point2;
 use array_macro::array;
 use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// SolveCraft: optional per-call failure flag; ordinary display meshing retains its fallback.
+fn mark_unresolved(flag: Option<&AtomicBool>) {
+    if let Some(flag) = flag { flag.store(true, Ordering::Relaxed); }
+}
+fn unresolved(flag: Option<&AtomicBool>) -> bool {
+    flag.is_some_and(|flag| flag.load(Ordering::Relaxed))
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
@@ -14,6 +23,123 @@ type SPoint2 = spade::Point2<f64>;
 type Cdt = ConstrainedDelaunayTriangulation<SPoint2>;
 type MeshedShell = Shell<Point3, PolylineCurve, Option<PolygonMesh>>;
 type MeshedCShell = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
+
+/// Retriangulate a single-boundary mesh in a caller-checked forward-facing projection.
+/// Keeps the sampled positions and normals, but avoids folds caused by connecting
+/// a highly distorted parameter grid. Returns `None` for unsupported boundaries.
+pub fn retriangulate_projected(mesh: &PolygonMesh, direction: Vector3) -> Option<PolygonMesh> {
+    let positions = mesh.positions();
+    if positions.len() > MAX_GRID || positions.len() < 3 || mesh.normals().len() != positions.len() || mesh.uv_coords().len() != positions.len() {
+        return None;
+    }
+    let origin = *positions.first()?;
+    let length = direction.magnitude();
+    if !length.is_finite() || length <= 0.0 {
+        return None;
+    }
+    let z = direction / length;
+    if mesh.normals().iter().any(|n| !n.magnitude2().is_finite() || n.dot(z) <= 0.0) {
+        return None;
+    }
+    let x = z.cross(if z.z.abs() < 0.9 { Vector3::unit_z() } else { Vector3::unit_x() }).normalize();
+    let y = z.cross(x);
+    let scale = positions.iter().map(|p| p.distance(origin)).fold(0.0_f64, f64::max);
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let project = |p: Point3| {
+        let d = (p - origin) / scale;
+        Point2::new((d.dot(x) * 1e12).round() / 1e12, (d.dot(y) * 1e12).round() / 1e12)
+    };
+    let mut uses = HashMap::<(usize, usize), usize>::default();
+    let mut triangles = 0usize;
+    for t in mesh.faces().triangle_iter() {
+        triangles += 1;
+        if triangles > 2 * MAX_GRID {
+            return None;
+        }
+        for (a, b) in [(t[0].pos, t[1].pos), (t[1].pos, t[2].pos), (t[2].pos, t[0].pos)] {
+            if a >= positions.len() || b >= positions.len() {
+                return None;
+            }
+            *uses.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    let mut neighbors = HashMap::<usize, Vec<usize>>::default();
+    for ((a, b), count) in uses {
+        if count > 2 {
+            return None;
+        }
+        if count == 1 {
+            neighbors.entry(a).or_default().push(b);
+            neighbors.entry(b).or_default().push(a);
+        }
+    }
+    if neighbors.values().any(|n| n.len() != 2) {
+        return None;
+    }
+    let start = *neighbors.keys().min()?;
+    let mut boundary_indices = Vec::new();
+    let (mut previous, mut current) = (usize::MAX, start);
+    loop {
+        boundary_indices.push(current);
+        let next = *neighbors.get(&current)?.iter().find(|i| **i != previous)?;
+        (previous, current) = (current, next);
+        if current == start {
+            break;
+        }
+        if boundary_indices.len() >= neighbors.len() {
+            return None;
+        }
+    }
+    if boundary_indices.len() != neighbors.len() {
+        return None; // holes or disconnected loops
+    }
+    let mut polygon: Vec<_> = boundary_indices.iter().map(|i| project(positions[*i])).collect();
+    if !loop_orientation(&polygon) {
+        polygon.reverse();
+    }
+    let boundary = PolyBoundary::from_loops(vec![polygon]);
+    let mut cdt = Cdt::new();
+    let mut handles = Vec::with_capacity(positions.len());
+    let mut original = HashMap::default();
+    for (i, p) in positions.iter().enumerate() {
+        let q = project(*p);
+        if !q.x.is_finite() || !q.y.is_finite() {
+            return None;
+        }
+        let handle = cdt.insert(SPoint2::new(q.x, q.y)).ok()?;
+        handles.push(handle);
+        original.entry(handle).or_insert(i);
+    }
+    for (a, b) in boundary_indices.iter().circular_tuple_windows() {
+        let (a, b) = (*handles.as_slice().get(*a)?, *handles.as_slice().get(*b)?);
+        if a == b {
+            continue;
+        }
+        if !cdt.can_add_constraint(a, b) {
+            return None;
+        }
+        cdt.add_constraint(a, b);
+    }
+    let mut faces = Vec::new();
+    for triangle in cdt.inner_faces() {
+        let v = triangle.vertices();
+        let p = v.map(|v| Point2::new(v.position().x, v.position().y));
+        if !boundary.include(p[0] + ((p[1] - p[0]) + (p[2] - p[0])) / 3.0) {
+            continue;
+        }
+        let indices = [*original.get(&v[0].fix())?, *original.get(&v[1].fix())?, *original.get(&v[2].fix())?];
+        faces.push(indices.map(|i| [i, i, i].into()));
+    }
+    if faces.is_empty() {
+        return None;
+    }
+    Some(PolygonMesh::debug_new(
+        StandardAttributes { positions: positions.clone(), uv_coords: mesh.uv_coords().clone(), normals: mesh.normals().clone() },
+        Faces::from_tri_and_quad_faces(faces, Vec::new()),
+    ))
+}
 
 pub(super) trait SP<S>:
     Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> + Parallelizable {
@@ -93,6 +219,7 @@ pub(super) fn shell_tessellation<'a, C, S>(
     shell: &Shell<Point3, C, S>,
     tol: f64,
     sp: impl SP<S>,
+    unresolved_tolerance: Option<&AtomicBool>,
 ) -> MeshedShell
 where
     C: PolylineableCurve + 'a,
@@ -110,7 +237,7 @@ where
             let v0 = vmap.get(&edge.absolute_front().id()).unwrap();
             let v1 = vmap.get(&edge.absolute_back().id()).unwrap();
             let curve = edge.curve();
-            let poly = bounded_polyline(&curve, curve.range_tuple(), tol);
+            let poly = bounded_polyline(&curve, curve.range_tuple(), tol, unresolved_tolerance);
             (id, Edge::new_unchecked(v0, v1, poly))
         })
         .collect();
@@ -129,7 +256,7 @@ where
             .iter()
             .map(create_boundary)
             .collect();
-        shell_create_polygon(&face.surface(), wires, face.orientation(), tol, &sp, cap)
+        shell_create_polygon(&face.surface(), wires, face.orientation(), tol, &sp, cap, unresolved_tolerance)
     };
     shell.face_par_iter().map(create_face).collect()
 }
@@ -140,6 +267,7 @@ pub(super) fn shell_tessellation_single_thread<'a, C, S>(
     shell: &'a Shell<Point3, C, S>,
     tol: f64,
     sp: impl SP<S>,
+    unresolved_tolerance: Option<&AtomicBool>,
 ) -> MeshedShell
 where
     C: PolylineableCurve + 'a,
@@ -160,7 +288,7 @@ where
             let vb = edge.absolute_back();
             let v1 = vmap.entry_or_insert(vb).clone();
             let curve = edge.curve();
-            let poly = bounded_polyline(&curve, curve.range_tuple(), tol);
+            let poly = bounded_polyline(&curve, curve.range_tuple(), tol, unresolved_tolerance);
             Edge::new_unchecked(&v0, &v1, poly)
         },
     );
@@ -180,7 +308,7 @@ where
             .iter()
             .map(&mut create_boundary)
             .collect();
-        shell_create_polygon(&face.surface(), wires, face.orientation(), tol, &sp, cap)
+        shell_create_polygon(&face.surface(), wires, face.orientation(), tol, &sp, cap, unresolved_tolerance)
     };
     shell.face_iter().map(create_face).collect()
 }
@@ -201,7 +329,7 @@ where
         let curve = &edge.curve;
         CompressedEdge {
             vertices: edge.vertices,
-            curve: bounded_polyline(curve, curve.range_tuple(), tol),
+            curve: bounded_polyline(curve, curve.range_tuple(), tol, None),
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -222,7 +350,7 @@ where
         let preboundary: Option<Vec<_>> = boundaries.iter().map(create_boundary).collect();
         let polygon: Option<PolygonMesh> = (|| {
             let boundary = PolyBoundary::new(preboundary?, &surface, tol);
-            Some(trimming_tessellation(&surface, &boundary, tol, cap))
+            Some(trimming_tessellation(&surface, &boundary, tol, cap, None))
         })();
         CompressedFace {
             boundaries,
@@ -248,6 +376,7 @@ fn shell_create_polygon<S: PreMeshableSurface>(
     tol: f64,
     sp: impl SP<S>,
     cap: usize,
+    unresolved_tolerance: Option<&AtomicBool>,
 ) -> Face<Point3, PolylineCurve, Option<PolygonMesh>> {
     let preboundary = wires
         .iter()
@@ -257,8 +386,9 @@ fn shell_create_polygon<S: PreMeshableSurface>(
         })
         .collect::<Option<Vec<_>>>();
     let polygon: Option<PolygonMesh> = (|| {
+        if unresolved(unresolved_tolerance) { return None; }
         let boundary = PolyBoundary::new(preboundary?, &surface, tol);
-        Some(trimming_tessellation(surface, &boundary, tol, cap))
+        Some(trimming_tessellation(surface, &boundary, tol, cap, unresolved_tolerance))
     })();
     // SolveCraft: faces with seam edges (a loop running along an edge both ways, as STEP
     // writes cylinders) are valid here; `debug_new` asserts simple loops in debug builds.
@@ -345,7 +475,7 @@ fn get_mindiff(u: f64, u0: f64, up: f64) -> f64 {
 }
 
 #[derive(Debug, Default, Clone)]
-struct PolyBoundary(Vec<Vec<Point2>>);
+struct PolyBoundary(Vec<Vec<Point2>>, boundary_index::BoundaryIndex);
 
 fn normalize_range(curve: &mut Vec<Point2>, compidx: usize, (u0, u1): (f64, f64)) {
     let p = curve[0];
@@ -380,6 +510,13 @@ fn loop_orientation(curve: &[Point2]) -> bool {
 }
 
 impl PolyBoundary {
+    fn from_loops(loops: Vec<Vec<Point2>>) -> Self {
+        let index = boundary_index::BoundaryIndex::new(
+            loops.iter().flat_map(|ring| ring.iter().circular_tuple_windows())
+                .map(|(a, b)| ([a.x, a.y], [b.x, b.y])),
+        );
+        Self(loops, index)
+    }
     fn new(pieces: Vec<PolyBoundaryPiece>, surface: &impl PreMeshableSurface, tol: f64) -> Self {
         let (mut closed, mut open) = (Vec::new(), Vec::new());
         pieces.into_iter().for_each(|PolyBoundaryPiece(mut vec)| {
@@ -485,48 +622,44 @@ impl PolyBoundary {
                 closed.push(connect_edges([vec0, vec1, vec2, vec3]));
             }
         }
-        Self(closed)
+        Self::from_loops(closed)
     }
 
     /// whether `c` is included in the domain with boundary = `self`.
     fn include(&self, c: Point2) -> bool {
         let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
         let r = Vector2::new(f64::cos(t), f64::sin(t));
-        self.0
-            .iter()
-            .flat_map(|vec| vec.iter().circular_tuple_windows())
-            .try_fold(0_i32, move |counter, (p0, p1)| {
-                let a = p0 - c;
-                let b = p1 - c;
-                let s0 = r.x * a.y - r.y * a.x; // v times a
-                let s1 = r.x * b.y - r.y * b.x; // v times b
-                let s2 = a.x * b.y - a.y * b.x; // a times b
-                let x = s2 / (s1 - s0);
-                if x.so_small() && s0 * s1 < 0.0 {
-                    None
-                } else if x > 0.0 && s0 <= 0.0 && s1 > 0.0 {
-                    Some(counter + 1)
-                } else if x > 0.0 && s0 >= 0.0 && s1 < 0.0 {
-                    Some(counter - 1)
-                } else {
-                    Some(counter)
-                }
-            })
-            .map(|counter| counter > 0)
-            .unwrap_or(false)
+        let mut counter = 0_i32;
+        let complete = self.1.visit([c.x, c.y], [r.x, r.y], |p0, p1| {
+            let a = Point2::new(p0[0], p0[1]) - c;
+            let b = Point2::new(p1[0], p1[1]) - c;
+            let s0 = r.x * a.y - r.y * a.x;
+            let s1 = r.x * b.y - r.y * b.x;
+            let s2 = a.x * b.y - a.y * b.x;
+            let x = s2 / (s1 - s0);
+            if x.so_small() && s0 * s1 < 0.0 { return false; }
+            if x > 0.0 && s0 <= 0.0 && s1 > 0.0 { counter += 1; }
+            else if x > 0.0 && s0 >= 0.0 && s1 < 0.0 { counter -= 1; }
+            true
+        });
+        complete && counter > 0
     }
 
     /// Inserts points and adds constraint into triangulation.
     fn insert_to(&self, triangulation: &mut Cdt) {
-        let poly2tri: Vec<_> = self
-            .0
-            .iter()
-            .flatten()
-            .map(|pt| {
-                let p = [spade_round(pt.x), spade_round(pt.y)];
-                triangulation.insert(SPoint2::from(p)).ok()
-            })
-            .collect();
+        let points: Vec<_> = self.0.iter().flatten().map(|p| SPoint2::new(spade_round(p.x), spade_round(p.y))).collect();
+        let key = |p: SPoint2| (if p.x == 0. { 0 } else { p.x.to_bits() }, if p.y == 0. { 0 } else { p.y.to_bits() });
+        // SolveCraft: bulk insertion avoids quadratic location walks on ordered boundaries.
+        // Keep the original constraint loop and map duplicate/rounded points by position.
+        // No constraints are passed to bulk loading, so edge conflicts cannot panic.
+        let bulk = if triangulation.num_vertices() == 0 { Cdt::bulk_load_cdt(points.clone(), Vec::new()).ok() } else { None };
+        let poly2tri: Vec<_> = if let Some(bulk) = bulk {
+            *triangulation = bulk;
+            let handles: HashMap<_, _> = triangulation.vertices().map(|v| (key(v.position()), v.fix())).collect();
+            points.iter().map(|p| handles.get(&key(*p)).copied()).collect()
+        } else {
+            points.into_iter().map(|p| triangulation.insert(p).ok()).collect()
+        };
         let mut prev: Option<usize> = None;
         let mut counter = 0;
         self.0
@@ -565,11 +698,12 @@ fn spade_round(x: f64) -> f64 {
 }
 
 /// Tessellates one surface trimmed by polyline.
-fn trimming_tessellation<S>(surface: &S, polyboundary: &PolyBoundary, tol: f64, cap: usize) -> PolygonMesh
+fn trimming_tessellation<S>(surface: &S, polyboundary: &PolyBoundary, tol: f64, cap: usize, unresolved_tolerance: Option<&AtomicBool>) -> PolygonMesh
 where S: PreMeshableSurface {
     let mut triangulation = Cdt::new();
     polyboundary.insert_to(&mut triangulation);
-    insert_surface(&mut triangulation, surface, polyboundary, tol, cap);
+    insert_surface(&mut triangulation, surface, polyboundary, tol, cap, unresolved_tolerance);
+    if unresolved(unresolved_tolerance) { return PolygonMesh::default(); }
     let mut mesh = triangulation_into_polymesh(
         triangulation.vertices(),
         triangulation.inner_faces(),
@@ -587,14 +721,17 @@ fn insert_surface(
     polyline: &PolyBoundary,
     tol: f64,
     cap: usize,
+    unresolved_tolerance: Option<&AtomicBool>,
 ) {
     let bdb: BoundingBox<Point2> = polyline.0.iter().flatten().collect();
     let range = ((bdb.min()[0], bdb.max()[0]), (bdb.min()[1], bdb.max()[1]));
     if !(range.0 .0.is_finite() && range.0 .1.is_finite() && range.1 .0.is_finite() && range.1 .1.is_finite()) {
+        mark_unresolved(unresolved_tolerance);
         return;
     }
-    let (udiv, vdiv) = bounded_surface_division(&surface, range, tol, cap);
-    let (udiv, vdiv) = balanced_grid(&surface, udiv, vdiv, cap);
+    let (udiv, vdiv) = bounded_surface_division(&surface, range, tol, cap, unresolved_tolerance);
+    let (udiv, vdiv) = balanced_grid(&surface, udiv, vdiv, cap, unresolved_tolerance);
+    if unresolved(unresolved_tolerance) { return; }
     let insert_res: Vec<Vec<Option<_>>> = udiv
         .into_iter()
         .map(|u| {
@@ -645,7 +782,7 @@ pub(super) fn face_cap(faces: usize) -> usize {
 /// SolveCraft: truck's curve division, bounded: at most `MAX_EDGE_POINTS` points and a
 /// bisection depth of 24; a midpoint that does not evaluate (NaN) counts as flat (truck's
 /// version recursed on it 100 levels deep, which never finishes).
-fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64, f64), tol: f64) -> PolylineCurve {
+fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64, f64), tol: f64, unresolved_tolerance: Option<&AtomicBool>) -> PolylineCurve {
     let mut out = vec![curve.subs(range.0)];
     let mut stack: Vec<(f64, f64, usize)> = vec![(range.0, range.1, 0)];
     while let Some((a, b, depth)) = stack.pop() {
@@ -655,8 +792,10 @@ fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64, f64), tol: f64
         let d2 = curve.subs(t).distance2(chord);
         let tm = 0.5 * (a + b);
         let dm = curve.subs(tm).distance2(pa.midpoint(pb));
+        if !d2.is_finite() || !dm.is_finite() { mark_unresolved(unresolved_tolerance); }
         let flat = !(d2 >= tol * tol || dm >= tol * tol);
         if flat || depth >= 24 || out.len() + stack.len() >= MAX_EDGE_POINTS {
+            if !flat { mark_unresolved(unresolved_tolerance); }
             out.push(pb);
         } else {
             // Right half after the left one (stack order).
@@ -669,9 +808,9 @@ fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64, f64), tol: f64
 
 /// SolveCraft: truck's surface division, bounded: stops refining when the grid would exceed
 /// `cap` points or after 24 rounds; cells that do not evaluate (NaN) are not refined.
-fn bounded_surface_division<S: PreMeshableSurface>(surface: &S, (ur, vr): ((f64, f64), (f64, f64)), tol: f64, cap: usize) -> (Vec<f64>, Vec<f64>) {
+fn bounded_surface_division<S: PreMeshableSurface>(surface: &S, (ur, vr): ((f64, f64), (f64, f64)), tol: f64, cap: usize, unresolved_tolerance: Option<&AtomicBool>) -> (Vec<f64>, Vec<f64>) {
     let (mut udiv, mut vdiv) = (vec![ur.0, ur.1], vec![vr.0, vr.1]);
-    for _ in 0..24 {
+    for iteration in 0..24 {
         let mut fu = vec![false; udiv.len() - 1];
         let mut fv = vec![false; vdiv.len() - 1];
         for (i, u) in udiv.windows(2).enumerate() {
@@ -687,13 +826,18 @@ fn bounded_surface_division<S: PreMeshableSurface>(surface: &S, (ur, vr): ((f64,
                 let pt10 = surface.subs(u[1], v[0]).to_vec();
                 let pt11 = surface.subs(u[1], v[1]).to_vec();
                 let pt = Point3::from_vec(pt00 * (1.0 - p) * (1.0 - q) + pt01 * (1.0 - p) * q + pt10 * p * (1.0 - q) + pt11 * p * q);
-                let far = p0.distance2(pt) > tol * tol;
+                let deviation = p0.distance2(pt);
+                if !deviation.is_finite() { mark_unresolved(unresolved_tolerance); }
+                let far = deviation > tol * tol;
                 // Which direction bends: refine only that one (a cylinder needs no division
                 // along its rulings).
                 let alu = surface.subs(u[0], v0).to_vec() * (1.0 - p) + surface.subs(u[1], v0).to_vec() * p;
                 let alv = surface.subs(u0, v[0]).to_vec() * (1.0 - q) + surface.subs(u0, v[1]).to_vec() * q;
-                let bend_u = p0.distance2(Point3::from_vec(alu)) > tol * tol;
-                let bend_v = p0.distance2(Point3::from_vec(alv)) > tol * tol;
+                let du = p0.distance2(Point3::from_vec(alu));
+                let dv = p0.distance2(Point3::from_vec(alv));
+                if !du.is_finite() || !dv.is_finite() { mark_unresolved(unresolved_tolerance); }
+                let bend_u = du > tol * tol;
+                let bend_v = dv > tol * tol;
                 if bend_u || bend_v {
                     fu[i] |= bend_u;
                     fv[j] |= bend_v;
@@ -708,7 +852,8 @@ fn bounded_surface_division<S: PreMeshableSurface>(surface: &S, (ur, vr): ((f64,
         if nu == udiv.len() && nv == vdiv.len() {
             break;
         }
-        if nu.saturating_mul(nv) > cap {
+        if nu.saturating_mul(nv) > cap || (iteration == 23 && unresolved_tolerance.is_some()) {
+            mark_unresolved(unresolved_tolerance);
             break;
         }
         let refine = |d: &[f64], f: &[bool]| {
@@ -731,7 +876,7 @@ fn bounded_surface_division<S: PreMeshableSurface>(surface: &S, (ur, vr): ((f64,
 /// the other. A ruled surface (cylinder, cone) needs no division along its rulings, and the
 /// triangles that then join a trimming loop to the far ends of the grid cut through the
 /// surface (a cylinder with a hole lost volume this way).
-fn balanced_grid(surface: &impl PreMeshableSurface, udiv: Vec<f64>, vdiv: Vec<f64>, cap: usize) -> (Vec<f64>, Vec<f64>) {
+fn balanced_grid(surface: &impl PreMeshableSurface, udiv: Vec<f64>, vdiv: Vec<f64>, cap: usize, unresolved_tolerance: Option<&AtomicBool>) -> (Vec<f64>, Vec<f64>) {
     let mid = |d: &[f64]| if d.is_empty() { 0.0 } else { d[d.len() / 2] };
     let (um, vm) = (mid(&udiv), mid(&vdiv));
     let step = |d: &[f64], along_u: bool| -> Vec<f64> {
@@ -775,6 +920,7 @@ fn balanced_grid(surface: &impl PreMeshableSurface, udiv: Vec<f64>, vdiv: Vec<f6
     if total <= cap {
         return (u2, v2);
     }
+    mark_unresolved(unresolved_tolerance);
     let f = (total as f64 / cap.max(4) as f64).sqrt();
     let thin = |d: Vec<f64>| -> Vec<f64> {
         let n = ((d.len() as f64 / f).ceil() as usize).max(2);
@@ -860,13 +1006,13 @@ fn par_bench() {
 
     let instant = Instant::now();
     (0..100).for_each(|_| {
-        let _shell = shell_tessellation(&shell, 0.01, by_search_parameter);
+        let _shell = shell_tessellation(&shell, 0.01, by_search_parameter, None);
     });
     println!("{}ms", instant.elapsed().as_millis());
 
     let instant = Instant::now();
     (0..100).for_each(|_| {
-        let _shell = shell_tessellation_single_thread(&shell, 0.01, by_search_parameter);
+        let _shell = shell_tessellation_single_thread(&shell, 0.01, by_search_parameter, None);
     });
     println!("{}ms", instant.elapsed().as_millis());
 }

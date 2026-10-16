@@ -5,7 +5,7 @@ members = ["crates/*", "apps/*", "xtask"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.1.3"
+version = "0.1.6"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.90"
@@ -14,6 +14,7 @@ repository = "https://github.com/bherbruck/solvecraft"
 
 [workspace.dependencies]
 # internal
+solvecraft-cam = { path = "crates/cam" }
 solvecraft-geom = { path = "crates/geom" }
 solvecraft-sketch = { path = "crates/sketch" }
 solvecraft-kernel = { path = "crates/kernel" }
@@ -29,6 +30,7 @@ thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
+sha2 = "0.10"
 
 # geometry kernel (Apache-2.0; see plan/adr/0001-geometry-kernel.md). Only crates/kernel uses it.
 truck-modeling = "0.6"
@@ -98,3 +100,4 @@ debug = 0
 truck-shapeops = { path = "vendor/truck-shapeops" }
 truck-stepio = { path = "vendor/truck-stepio" }
 truck-meshalgo = { path = "vendor/truck-meshalgo" }
+matext4cgmath = { path = "vendor/matext4cgmath" }

@@ -3,8 +3,11 @@
 //! Design workspace layout. Ids used before the rename still resolve (`legacy_ids`).
 
 mod browser;
+mod cam;
 mod clipboard;
 mod component;
+mod component_clone;
+mod component_clone_assembly;
 mod construct;
 mod delete;
 mod edit;
@@ -27,6 +30,7 @@ mod parameters;
 mod plastic;
 mod sheet;
 mod sketch;
+pub(crate) use sketch::author_path_for_rebind;
 mod sketch_3d;
 mod sketch_canvas;
 mod sketch_constraints;
@@ -152,6 +156,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(component::COMMANDS.iter());
     v.extend(joints::COMMANDS.iter());
     v.extend(motion::COMMANDS.iter());
+    v.extend(cam::COMMANDS.iter());
     v.extend(config::COMMANDS.iter());
     v.extend(parts::COMMANDS.iter());
     v.extend(browser::COMMANDS.iter());

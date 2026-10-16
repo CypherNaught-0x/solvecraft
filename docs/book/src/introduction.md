@@ -19,7 +19,7 @@ the CLI, the control channel and MCP all run the same commands, so anything you 
 also script, test or hand to an agent.
 
 SolveCraft is early. Sketching, solid modelling, parameters, components with joints, sheet metal
-and a plastic-enclosure subset work; surfaces, drawings, CAM and simulation are deferred. The
+and a plastic-enclosure subset work; CAM milling is in progress; surfaces, drawings and structural simulation are deferred. The
 [roadmap](https://github.com/bherbruck/solvecraft/blob/main/ROADMAP.md) has the details, and
 [command parity](dev/parity.md) and the [Fusion oracle](dev/oracle.md) measure how far along it
 is.

@@ -1,13 +1,19 @@
 //! Sketch commands: create/edit/finish sketches, draw curves, constraints and dimensions.
 
 use serde_json::{Value, json};
-use solvecraft_doc::{FeatureKind, PlaneRef};
+use solvecraft_doc::{FeatureKind, PlaneRef, expr::Kind};
 use solvecraft_geom::{Plane, Vec2, Vec3};
 use solvecraft_sketch::{ConstraintKind, CurveKind, Hold, Sketch, SolveReport, solve, solve_holding};
 
 use super::{CommandSpec, in_sketch};
 use crate::params::{bad, bool_, expr, num, req_vec2, str_, string_list, vec2, vec3};
 use crate::{EngineError, Result, Session};
+
+#[path = "sketch_dimensioned.rs"]
+mod dimensioned;
+#[path = "sketch_face.rs"]
+pub(super) mod face;
+use dimensioned::draw as draw_dimensioned;
 
 /// The `connect` parameter every drawing command takes (see `connect_points`).
 macro_rules! connect_doc {
@@ -20,8 +26,8 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("sketch.create", "Create Sketch", create_sketch)
         .at("SOLID", "CREATE")
         .icon("sketch")
-        .params("plane: XY|XZ|YZ | {origin, x_dir, y_dir} | {face: [x,y,z]} (planar face at point), offset?: expr, name?"),
-    CommandSpec::new("sketch.edit", "Edit Sketch", edit_sketch).icon("sketch").params("sketch: id or name"),
+        .params("plane: XY|XZ|YZ | construction plane name or id | {origin, x_dir, y_dir} | {face: [world x,y,z], body?: exact world body, index?: face index, path?: complete occurrence ids, fixed?: bool}; new face attachments require a unique certified source, fixed:true explicitly freezes the selected plane; offset?: expr, project_edges?: bool, name?"),
+    CommandSpec::new("sketch.edit", "Edit Sketch", edit_sketch).noundo().icon("sketch").params("sketch: id or name"),
     CommandSpec::new("sketch.finish", "Finish Sketch", finish_sketch).at("SKETCH", "FINISH SKETCH").icon("finish").enabled(in_sketch).noundo(),
     CommandSpec::new("sketch.line", "Line", draw_line)
         .at("SKETCH", "CREATE")
@@ -29,6 +35,9 @@ pub static COMMANDS: &[CommandSpec] = &[
         .key("L")
         .enabled(in_sketch)
         .params(concat!("points: [[x,y] | \"l1.end\" | {at, ref}…], closed?: bool, construction?: bool, ids?: [..], infer?: bool (add horizontal/vertical)", connect_doc!())),
+    CommandSpec::new("sketch.draw.dimensioned", "Draw Dimensioned Sketch Geometry", draw_dimensioned)
+        .enabled(in_sketch)
+        .params("command: sketch creation command, params: object, dimensions: object of role to numeric or expression value; creates geometry and all driving dimensions atomically in one undo step"),
     CommandSpec::new("sketch.rectangle.two_point", "2-Point Rectangle", rect_two_point)
         .at("SKETCH", "CREATE")
         .icon("rect")
@@ -94,7 +103,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params(concat!("p0, p1: overall ends, width", connect_doc!())),
     CommandSpec::new("sketch.point", "Point", draw_point).at("SKETCH", "CREATE").icon("point").enabled(in_sketch).params(concat!("point: [x,y], id?", connect_doc!())),
     CommandSpec::new("sketch.dimension", "Sketch Dimension", dimension).at("SKETCH", "CREATE").icon("dimension").key("D").enabled(in_sketch).params(
-        "entities: [refs], type?: auto|distance|horizontal|vertical|length|radius|diameter|angle, value?: number or expression (default: current)",
+        "entities: [refs], type?: auto|distance|horizontal|vertical|length|radius|diameter|angle, value?: number or expression (default: current); text_at?: [x, y]. Two lines: the angle between them (acute, or 180° − it when the value is nearer that) unless text_at picks a sector. Returns measured in unit (mm or deg)",
     ),
     CommandSpec::new("sketch.constraint.horizontal_vertical", "Horizontal/Vertical", c_horizontal_vertical)
         .at("SKETCH", "CONSTRAINTS")
@@ -216,10 +225,16 @@ pub(super) fn edit<T>(
     let out = f(&mut sk, &mut doc)?;
     let (vals, _) = doc.param_values();
     doc.apply_dimension_values(&vals, &mut sk)?;
-    let rep = solve(&mut sk);
+    sk.refresh_offsets()?;
+    let mut rep = solve(&mut sk);
+    if !sk.offsets.is_empty() || !sk.freeform_offsets.is_empty() {
+        sk.refresh_offsets()?;
+        rep = solve(&mut sk);
+    }
     if strict && !rep.ok() {
         return Err(EngineError::Other(format!("that would over-constrain the sketch (conflicts with {})", rep.failing.join(", "))));
     }
+    sk.validate_periodic_splines()?;
     *doc.sketch_mut(id)? = sk;
     *s.doc_mut() = doc;
     Ok((out, json!({"solved": rep.ok(), "dof": rep.dof})))
@@ -345,40 +360,56 @@ pub(super) fn result(sk_out: (Vec<String>, Vec<String>), info: Value) -> Value {
 // ---------------------------------------------------------------------------------------------
 // Sketch lifecycle
 
+pub(crate) fn author_path_for_rebind(s: &Session, feature: &solvecraft_doc::Feature, p: &Value, cmd: &str) -> Result<Vec<u64>> {
+    let mut saved = None;
+    if let FeatureKind::Sketch { plane, .. } = &feature.kind {
+        let mut plane = plane;
+        loop {
+            match plane {
+                PlaneRef::Offset { base, .. } | PlaneRef::AtAngle { base, .. } => plane = base,
+                PlaneRef::Face { anchor: Some(anchor), .. } => {
+                    saved = Some(anchor.author_path.clone());
+                    break;
+                }
+                _ => break,
+            }
+        }
+    }
+    let path = if let Some(value) = p.get("author_path") {
+        value
+            .as_array()
+            .filter(|path| path.len() <= 64)
+            .ok_or_else(|| bad(cmd, "author_path must contain at most64 ids"))?
+            .iter()
+            .map(|id| id.as_u64().filter(|id| *id != 0).ok_or_else(|| bad(cmd, "invalid author_path id")))
+            .collect::<Result<Vec<_>>>()?
+    } else if let Some(path) = saved {
+        path
+    } else if feature.component == s.active_component && s.active_occurrence_path.is_some() {
+        s.active_occurrence_path.clone().unwrap_or_default()
+    } else {
+        let placements = super::component::properties::placements(&s.placed_document(), cmd)?;
+        let paths: Vec<_> = placements.into_iter().filter(|(component, _, _)| *component == feature.component).map(|(_, path, _)| path).collect();
+        if paths.len() != 1 {
+            return Err(bad(cmd, "sketch author placement is ambiguous; provide exact author_path or activate the intended occurrence"));
+        }
+        paths.into_iter().next().ok_or_else(|| bad(cmd, "sketch author placement is missing"))?
+    };
+    if feature.component != 0 && path.is_empty() {
+        return Err(bad(cmd, "a component sketch needs an explicit complete author_path"));
+    }
+    solvecraft_doc::EmbossFace::component_frame(&s.placed_document(), feature.component, &path)?;
+    Ok(path)
+}
+
 pub(super) fn plane_ref(s: &Session, p: &Value, cmd: &str) -> Result<PlaneRef> {
     let base = match p.get("plane") {
         None => PlaneRef::Origin { name: "XY".into() },
-        Some(Value::String(n)) => {
-            if Plane::named(n).is_some() {
-                PlaneRef::Origin { name: n.to_ascii_uppercase() }
-            } else if matches!(s.doc.find_feature(n).map(|f| &f.kind), Some(FeatureKind::ConstructionPlane { .. })) {
-                PlaneRef::Construction { name: n.clone() }
-            } else {
-                return Err(bad(cmd, format!("unknown plane `{n}` (XY, XZ, YZ or a construction plane)")));
-            }
-        }
+        // An origin plane, or a construction plane by name or id.
+        Some(v @ (Value::String(_) | Value::Number(_))) => super::features::plane_param(s, Some(v), cmd)?,
         Some(v @ Value::Object(o)) => {
-            if let Some(fp) = o.get("face").and_then(vec3) {
-                // A planar face of a body at this point.
-                let st = s.model.state();
-                let mut found = None;
-                let mut face_name = None;
-                for b in &st.bodies {
-                    let tol = (b.body.size() * 1e-3).max(1e-3);
-                    for f in b.body.faces(tol).unwrap_or_default() {
-                        if let Some(n) = f.plane_normal
-                            && (fp - f.centroid).dot(n).abs() < tol * 10.0
-                            && b.body.tessellate(tol).map(|m| face_contains(&m, f.index, fp, tol * 10.0)).unwrap_or(false)
-                        {
-                            // Sketch origin: the model origin projected onto the face plane.
-                            let d = (f.centroid + n * (fp - f.centroid).dot(n)).dot(n);
-                            found = Plane::from_normal(n * d, n);
-                            face_name = solvecraft_doc::naming::face_names(b).get(f.index).cloned();
-                        }
-                    }
-                }
-                let pl = found.ok_or_else(|| bad(cmd, "no planar face at that point"))?;
-                PlaneRef::Face { plane: pl, at: fp, name: face_name }
+            if o.contains_key("face") {
+                face::capture(s, v, cmd)?
             } else {
                 let origin = v.get("origin").and_then(vec3).unwrap_or(Vec3::ZERO);
                 let x = v.get("x_dir").and_then(vec3).ok_or_else(|| bad(cmd, "plane needs x_dir"))?;
@@ -386,7 +417,7 @@ pub(super) fn plane_ref(s: &Session, p: &Value, cmd: &str) -> Result<PlaneRef> {
                 PlaneRef::Custom { plane: Plane::new(origin, x, y).ok_or_else(|| bad(cmd, "degenerate plane"))? }
             }
         }
-        _ => return Err(bad(cmd, "`plane` must be XY, XZ, YZ or an object")),
+        _ => return Err(bad(cmd, "`plane` must be XY, XZ, YZ, a construction plane name or id, or an object")),
     };
     Ok(match expr(p, "offset") {
         Some(d) => PlaneRef::Offset { base: Box::new(base), distance: d },
@@ -395,7 +426,7 @@ pub(super) fn plane_ref(s: &Session, p: &Value, cmd: &str) -> Result<PlaneRef> {
 }
 
 /// Does triangle set of face `fi` contain point `p` (within `tol` of the face plane)?
-fn face_contains(m: &solvecraft_geom::Mesh, fi: usize, p: Vec3, tol: f64) -> bool {
+pub(super) fn face_contains(m: &solvecraft_geom::Mesh, fi: usize, p: Vec3, tol: f64) -> bool {
     m.triangles.iter().zip(&m.tri_face).filter(|(_, f)| **f as usize == fi).any(|(t, _)| {
         let Some([a, b, c]) = m.tri(t) else { return false };
         let n = (b - a).cross(c - a);
@@ -406,19 +437,37 @@ fn face_contains(m: &solvecraft_geom::Mesh, fi: usize, p: Vec3, tol: f64) -> boo
         let s1 = (b - a).cross(p - a).dot(n);
         let s2 = (c - b).cross(p - b).dot(n);
         let s3 = (a - c).cross(p - c).dot(n);
-        (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0)
+        (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0)
+            || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0)
+            // Exact curved boundaries can sit just outside their tessellated chords.
+            || p.dist_to_segment(a, b).min(p.dist_to_segment(b, c)).min(p.dist_to_segment(c, a)) <= tol * 0.1
     })
 }
 
 fn create_sketch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "sketch.create";
-    let plane = plane_ref(s, p, cmd)?;
+    create_sketch_with_plane(s, p, plane_ref(s, p, cmd)?, None)
+}
+
+/// Used only by face Extrude/Revolve/PressPull, preserving pre-certificate linked profiles.
+pub(super) fn create_face_profile(s: &mut Session, p: &Value, body: &str, index: usize) -> Result<Value> {
+    let value = p.get("plane").ok_or_else(|| bad("face profile", "missing picked face plane"))?;
+    let plane = face::capture_internal(s, value, "face profile")?;
+    create_sketch_with_plane(s, p, plane, Some((body, index)))
+}
+
+fn create_sketch_with_plane(s: &mut Session, p: &Value, plane: PlaneRef, internal_body: Option<(&str, usize)>) -> Result<Value> {
+    if face::is_face(p) {
+        face::capture_positions(s, &plane)?;
+    }
     // Validate the plane resolves.
     let (vals, _) = s.doc.param_values();
     s.doc.resolve_plane_in(&vals, &plane, 0, Some(&s.model.state()))?;
     let name = str_(p, "name");
     let mut kind = FeatureKind::Sketch { plane, sketch: Sketch::new() };
-    super::component::to_active_frame(s, &mut kind);
+    if !face::is_face(p) {
+        super::component::to_active_frame(s, &mut kind);
+    }
     let id = s.doc_mut().add_feature(kind, name)?;
     let comp = s.active_component;
     if let Some(f) = s.doc_mut().feature_mut(id) {
@@ -433,8 +482,23 @@ fn create_sketch(s: &mut Session, p: &Value) -> Result<Value> {
         && bool_(p, "project_edges").unwrap_or(s.auto_project)
     {
         link = super::sketch_project::auto_project_face(s, id, at)?;
+        if link.is_none()
+            && let Some((body, index)) = internal_body
+        {
+            link = Some(super::sketch_project::project_internal_face(s, id, body, index)?);
+        }
     }
-    Ok(json!({"sketch": id, "name": name, "projected": link}))
+    let attachment = s.doc.feature(id).and_then(|feature| match &feature.kind {
+        FeatureKind::Sketch { plane, .. } => Some(if face::anchor(plane).is_some() {
+            "exact_face"
+        } else if internal_body.is_some() {
+            "internal_legacy_face"
+        } else {
+            "fixed"
+        }),
+        _ => None,
+    });
+    Ok(json!({"sketch": id, "name": name, "projected": link,"attachment":attachment}))
 }
 
 fn edit_sketch(s: &mut Session, p: &Value) -> Result<Value> {
@@ -447,7 +511,17 @@ fn edit_sketch(s: &mut Session, p: &Value) -> Result<Value> {
     if !matches!(f.kind, FeatureKind::Sketch { .. }) {
         return Err(bad("sketch.edit", format!("`{key}` is not a sketch")));
     }
-    let (id, name) = (f.id, f.name.clone());
+    let (id, name, component) = (f.id, f.name.clone(), f.component);
+    let authored_path = match &f.kind {
+        FeatureKind::Sketch { plane, .. } => face::anchor(plane).map(|anchor| anchor.author_path.clone()),
+        _ => None,
+    };
+    if let Some(path) = authored_path {
+        solvecraft_doc::EmbossFace::component_frame(&s.placed_document(), component, &path)
+            .map_err(|error| bad("sketch.edit", format!("{error}; explicitly rebind the author placement before editing")))?;
+        s.active_component = component;
+        s.active_occurrence_path = (!path.is_empty()).then_some(path);
+    }
     s.active_sketch = Some(id);
     s.revision += 1;
     Ok(json!({"sketch": id, "name": name}))
@@ -794,6 +868,7 @@ fn arc_center(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn polygon(s: &mut Session, p: &Value, cmd: &str, center: Vec2, r_vertex: f64, start: f64, n: usize, inscribed: bool) -> Result<Value> {
+    let mut support_circle = String::new();
     let (out, info) = draw(s, p, cmd, |sk, _| {
         let corners: Vec<Vec2> = (0..n).map(|i| center + Vec2::from_angle(start + std::f64::consts::TAU * i as f64 / n as f64) * r_vertex).collect();
         let (l, pts) = polygon_lines(sk, &corners)?;
@@ -806,6 +881,7 @@ fn polygon(s: &mut Session, p: &Value, cmd: &str, center: Vec2, r_vertex: f64, s
         // Construction circle tying the polygon to its centre.
         let rc = if inscribed { r_vertex } else { r_vertex * (std::f64::consts::PI / n as f64).cos() };
         let circ = sk.add_circle(center, rc, None, None)?;
+        support_circle = sk.curves.get(circ).map(|c| c.id.clone()).unwrap_or_default();
         if let Some(cu) = sk.curves.get_mut(circ) {
             cu.construction = true;
         }
@@ -820,13 +896,15 @@ fn polygon(s: &mut Session, p: &Value, cmd: &str, center: Vec2, r_vertex: f64, s
         }
         Ok((ids_of(sk, &l), cons))
     })?;
-    Ok(result(out, info))
+    let mut value = result(out, info);
+    value["support_circle"] = json!(support_circle);
+    Ok(value)
 }
 
 fn sides(p: &Value, cmd: &str) -> Result<usize> {
     let n = num(p, "sides").unwrap_or(6.0);
-    if !(3.0..=200.0).contains(&n) {
-        return Err(bad(cmd, "sides must be 3…200"));
+    if !(3.0..=200.0).contains(&n) || n.fract() != 0.0 {
+        return Err(bad(cmd, "sides must be an integer from 3 to 200"));
     }
     Ok(n as usize)
 }
@@ -1332,10 +1410,21 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let is_line = |c: usize| matches!(sk.curves.get(c).map(|c| &c.kind), Some(CurveKind::Line { .. }));
         let is_circle = |c: usize| matches!(sk.curves.get(c).map(|c| &c.kind), Some(CurveKind::Circle { .. }));
-        let (k, cur): (ConstraintKind, f64) = match (e0, e1) {
+        // The other reading of an angle between two lines (see below).
+        let mut alt: Option<(ConstraintKind, f64)> = None;
+        let (mut k, mut cur): (ConstraintKind, f64) = match (e0, e1) {
+            ((None, Some(c)), None) if ty == "sweep" => {
+                let angle = arc_len(sk, c).zip(sk.radius(c)).map(|(len, r)| len / r).ok_or_else(|| bad(cmd, "sweep needs an arc"))?;
+                let angle = if sk.curves.get(c).is_some_and(|c| c.reversed) { -angle } else { angle };
+                (ConstraintKind::ArcSweep { c, value: angle }, angle)
+            }
             ((None, Some(c)), None) if is_line(c) => {
                 let (a, b) = line_pts(sk, c).unwrap_or_default();
                 match ty.as_str() {
+                    "angle" => {
+                        let angle = (b - a).angle();
+                        (ConstraintKind::LineAngle { l: c, value: angle }, angle)
+                    }
                     "horizontal" => {
                         (ConstraintKind::DistanceX { p: line_ends(sk, c).0, q: line_ends(sk, c).1, value: (b.x - a.x).abs() }, (b.x - a.x).abs())
                     }
@@ -1384,6 +1473,15 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
                     (ConstraintKind::PointLineDistance { p: q, l, value: d }, d)
                 }
             }
+            ((None, Some(a)), Some((None, Some(b)))) if ty == "overall_length" => {
+                let current = sk
+                    .center(a)
+                    .zip(sk.center(b))
+                    .zip(sk.radius(a).zip(sk.radius(b)))
+                    .map(|((ca, cb), (ra, rb))| ca.dist(cb) + ra + rb)
+                    .ok_or_else(|| bad(cmd, "overall slot length needs two arc caps"))?;
+                (ConstraintKind::SlotOverallLength { a, b, value: current }, current)
+            }
             ((None, Some(a)), Some((None, Some(b)))) if is_line(a) && is_line(b) => {
                 let (a0, a1) = line_pts(sk, a).unwrap_or_default();
                 let (b0, b1) = line_pts(sk, b).unwrap_or_default();
@@ -1409,7 +1507,14 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
                                 ang = -ang;
                                 std::mem::swap(&mut ka, &mut kb);
                             }
-                            (ConstraintKind::Angle { a: ka, b: kb, value: ang, flip: false }, ang)
+                            // Two lines make two angles, θ and 180° − θ, whichever way they were
+                            // drawn: the acute one unless the value asks for the other.
+                            let direct = (ConstraintKind::Angle { a: ka, b: kb, value: ang, flip: false }, ang);
+                            let supplement =
+                                (ConstraintKind::Angle { a: kb, b: ka, value: std::f64::consts::PI - ang, flip: true }, std::f64::consts::PI - ang);
+                            let (acute, obtuse) = if ang <= std::f64::consts::FRAC_PI_2 { (direct, supplement) } else { (supplement, direct) };
+                            alt = Some(obtuse);
+                            acute
                         }
                     }
                 }
@@ -1426,7 +1531,7 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
                 c.driven = true;
             }
             before = None;
-            return Ok((String::new(), name, cur));
+            return Ok((String::new(), name, measured(is_angle, cur)));
         }
         let (unit, default_expr) =
             if is_angle { ("deg", format!("{} deg", round6(cur.to_degrees()))) } else { ("mm", format!("{} mm", round6(cur))) };
@@ -1437,20 +1542,39 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(err) = errs.get(&pname) {
             return Err(bad(cmd, format!("value: {err}")));
         }
-        let _ = vals;
+        // An angle between two lines dimensions whichever of its two readings is nearer the value.
+        if let (Some((ka, ca)), Some(want)) = (alt, vals.get(&pname).and_then(|v| v.to_kind(Kind::Angle).ok()))
+            && (want - ca).abs() < (want - cur).abs()
+        {
+            (k, cur) = (ka, ca);
+        }
         let name = k.name();
         let id = sk.add_constraint(k, Some(pname.clone()))?;
         place_text(sk, &id, text_at);
-        Ok((pname, name, cur))
+        Ok((pname, name, measured(is_angle, cur)))
     })?;
+    // Report what the dimension measures once the sketch is solved, not the geometry before.
+    let current = solved_measure(s, p, cmd).unwrap_or(current);
     if driven {
-        return Ok(json!({"param": Value::Null, "driven": true, "type": kind_name, "measured": current, "sketch": info}));
+        return Ok(json!({"param": Value::Null, "driven": true, "type": kind_name, "measured": current.0, "unit": current.1, "sketch": info}));
     }
     if reject_redundant(before, &info, cmd).is_err() {
         return Err(bad(cmd, "that dimension would over-constrain the sketch; add it as a driven (reference) dimension with driven: true"));
     }
     let v = s.doc.param(&param).map(|p| p.expr.clone()).unwrap_or_default();
-    Ok(json!({"param": param, "type": kind_name, "expression": v, "measured": current, "sketch": info}))
+    Ok(json!({"param": param, "type": kind_name, "expression": v, "measured": current.0, "unit": current.1, "sketch": info}))
+}
+
+/// A dimension's measured value as reported, in the unit its expression is written in.
+fn measured(is_angle: bool, v: f64) -> (f64, &'static str) {
+    if is_angle { (round6(v.to_degrees()), "deg") } else { (round6(v), "mm") }
+}
+
+/// What the dimension just added (the sketch's last constraint) measures on the solved sketch.
+fn solved_measure(s: &Session, p: &Value, cmd: &str) -> Option<(f64, &'static str)> {
+    let sk = s.doc.sketch(target_sketch(s, p, cmd).ok()?).ok()?;
+    let k = &sk.constraints.last()?.kind;
+    Some(measured(k.is_angle(), solvecraft_sketch::measure_dimension(sk, k)?))
 }
 
 /// Keep a dimension's text where it was placed (`at`, sketch coordinates), relative to the
@@ -1698,7 +1822,7 @@ fn drag_entity(sk: &mut Sketch, e: Ent, from: Vec2, to: Vec2) {
                 }
                 k => {
                     // Lines, splines and conics slide with the cursor.
-                    for q in k.point_ids() {
+                    for q in k.point_ids().into_iter().collect::<std::collections::BTreeSet<_>>() {
                         if let Some(at) = sk.point(q) {
                             set(sk, q, at + d);
                         }

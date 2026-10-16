@@ -119,20 +119,44 @@ pub fn handle(app: &mut SolveApp, ctx: &egui::Context, req: &ControlRequest) -> 
         "document.inspect" => wrap(app.session.execute("document.inspect", p).map_err(|e| e.to_string())),
         "ui.inspect" => ok(json!({
             "ui": serde_json::to_value(&app.ui).unwrap_or_default(),
+            "visibility": app.session.visibility,
             "viewport": app.viewport.rect.map(|r| json!([r.left(), r.top(), r.width(), r.height()])),
             "camera": app.cam,
             "tool": app.tool.as_ref().map(|t| t.cmd),
+            "manufacturing": {
+                "program": app.manufacturing.program,
+                "job": app.manufacturing.job,
+                "completed_motions": app.manufacturing.playback,
+                "finding": app.manufacturing.finding,
+                "playing": app.manufacturing.playing,
+                "workpiece": format!("{:?}", app.manufacturing.view.workpiece),
+                "fixtures": app.manufacturing.view.fixtures,
+                "paths": app.manufacturing.view.paths,
+                "stock_boundary": app.manufacturing.view.boundary,
+                "events_per_second": app.manufacturing.view.speed,
+            },
             "dialog": app.dialog.as_ref().map(|d| format!("{d:?}")),
             "hover": app.viewport.hover.as_ref().map(|h| format!("{h:?}")),
             "renderer": if app.viewport.gpu.is_some() { "gpu" } else { "cpu" },
             "frame_ms": app.frame_ms,
+            "file_busy": app.file_load.busy(),
             "build_ms": app.viewport.build_ms,
             "preview": {"active": app.preview.active, "busy": app.preview.busy, "error": app.preview.error, "ms": app.preview.ms, "replaced": app.preview.replaced},
             "home": app.home.open,
+            "recent_thumbnails_ready": app.home.ready_recents(),
             "documents": app.docs.count(),
             "quit_requested": app.quit_requested,
             "quitting": app.docs.quitting.is_some(),
         })),
+        "ui.file" => {
+            let Some(path) = s("path") else { return err("path is required") };
+            if p.get("insert").and_then(Value::as_bool).unwrap_or(false) {
+                app.insert_path_async(path);
+            } else {
+                app.open_path_async(path);
+            }
+            ok(json!({"busy": app.file_load.busy()}))
+        }
         "ui.documents" => ok(crate::documents::control(app, p)),
         "ui.home" => {
             match p.get("open").and_then(Value::as_bool) {
@@ -149,18 +173,30 @@ pub fn handle(app: &mut SolveApp, ctx: &egui::Context, req: &ControlRequest) -> 
             ok(json!({"open": app.home.open, "recent": app.home.recent}))
         }
         "ui.set" => {
+            // What is hidden lives in the session (`browser.visibility`); `ui.set` still sets it.
+            const VIS: [(&str, &str); 4] = [
+                ("hiddenBodies", "hidden_bodies"),
+                ("hiddenOrigin", "hidden_origin"),
+                ("hiddenSketches", "hidden_sketches"),
+                ("shownSketches", "shown_sketches"),
+            ];
             let mut cur = serde_json::to_value(&app.ui).unwrap_or(json!({}));
-            if let (Some(o), Some(src)) = (cur.as_object_mut(), p.as_object()) {
+            let mut vis = serde_json::to_value(&app.session.visibility).unwrap_or(json!({}));
+            if let (Some(o), Some(vo), Some(src)) = (cur.as_object_mut(), vis.as_object_mut(), p.as_object()) {
                 for (k, v) in src {
-                    o.insert(k.clone(), v.clone());
+                    match VIS.iter().find(|(camel, _)| camel == k) {
+                        Some((_, snake)) => vo.insert(snake.to_string(), v.clone()),
+                        None => o.insert(k.clone(), v.clone()),
+                    };
                 }
             }
-            match serde_json::from_value::<crate::UiState>(cur) {
-                Ok(u) => {
+            match (serde_json::from_value::<crate::UiState>(cur), serde_json::from_value::<solvecraft_engine::Visibility>(vis)) {
+                (Ok(u), Ok(v)) => {
                     app.ui = u;
+                    app.session.visibility = v;
                     ok(serde_json::to_value(&app.ui).unwrap_or_default())
                 }
-                Err(e) => err(e),
+                (Err(e), _) | (_, Err(e)) => err(e),
             }
         }
         "ui.view" => {
@@ -279,6 +315,16 @@ pub fn handle(app: &mut SolveApp, ctx: &egui::Context, req: &ControlRequest) -> 
             ok(json!(list.into_iter().map(|(n, p)| json!({"name": n, "x": p.x, "y": p.y})).collect::<Vec<_>>()))
         }
         "ui.at" => {
+            if let Some(path) = p.get("occurrence").and_then(Value::as_array) {
+                let ids: Option<Vec<u64>> = path.iter().map(Value::as_u64).collect();
+                let Some(ids) = ids else { return err("occurrence path must contain integer ids") };
+                let key = ids.iter().map(u64::to_string).collect::<Vec<_>>().join("/");
+                let control = s("control").unwrap_or("row");
+                return match crate::scenario::handle_at(&format!("{control}:occurrence:{key}")) {
+                    Some(q) => ok(json!([q.x, q.y])),
+                    None => err("occurrence row or control is not shown"),
+                };
+            }
             // A scenario point: {world: [x,y,z]} | {sketch: [x,y]} | {plane: "XY"} (the middle of an
             // origin plane's square) → screen point.
             if let Some(h) = p.get("handle").and_then(Value::as_str) {
@@ -441,6 +487,7 @@ pub fn handle(app: &mut SolveApp, ctx: &egui::Context, req: &ControlRequest) -> 
             }
         }
         "ui.browser" => ok(json!({
+            "occurrences": crate::browser::drawn_occurrences().iter().map(|(path, label, r, open)| json!({"path": path, "label": label, "y": r.center().y, "open": open})).collect::<Vec<_>>(),
             "rows": crate::browser::drawn_rows().iter().map(|(label, r, _, open)| json!({"label": label, "y": r.center().y, "open": open})).collect::<Vec<_>>(),
             "selection": app.session.selection,
             "picked_components": app.tree.picked_components,
@@ -488,7 +535,9 @@ pub fn handle(app: &mut SolveApp, ctx: &egui::Context, req: &ControlRequest) -> 
         "ui.render" => {
             let w = f("width").unwrap_or(1280.0).clamp(16.0, 8192.0) as usize;
             let h = f("height").unwrap_or(800.0).clamp(16.0, 8192.0) as usize;
-            let scene = solvecraft_engine::view::scene(&app.session, &app.cam);
+            let mut scene = solvecraft_engine::view::scene(&app.session, &app.cam);
+            crate::manufacturing::view::cpu(app, &mut scene);
+            crate::manufacturing::view::cpu_overlays(app, &mut scene);
             let Some(png) = render_png(&scene, &app.cam, w, h) else { return err("render failed") };
             match s("path") {
                 Some(path) => match std::fs::write(path, &png) {

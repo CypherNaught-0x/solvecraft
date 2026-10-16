@@ -51,16 +51,21 @@ Claude Desktop (`claude_desktop_config.json`), bridged to a running app:
 | `list_commands` | `filter?` | The command catalog: id, label, tab/panel, shortcut, parameter docs, enabled now. |
 | `execute` | `command`, `params?` | Run any command with JSON parameters (`list_commands` shows them). Failures leave the design unchanged. |
 | `batch` | `commands: [{command, params}]`, `rollback?` (default true) | Run steps in order, stop at the first error and undo the completed steps. The reply names the failing step (`failed.index`, `failed.command`, `failed.error`) and every result before it. |
-| `inspect_design` | `measure?` (default true), `sketches?` (default true) | Parameters, timeline (type, suppressed, rolled back, error, warning, timing), bodies (volume, area, centre of mass, bbox, face/edge/vertex counts), sketches (curves, points, constraints, profiles, DOF, solve status), selection, undo depth. |
+| `inspect_design` | `measure?` (default true), `sketches?` (default true) | Parameters, timeline (type, suppressed, rolled back, error, warning, timing), bodies (volume, area, centre of mass, bbox, face/edge/vertex counts, visible), sketches (curves, points, constraints, profiles, DOF, solve status, visible), selection, undo depth. Hide helper sketches, bodies or construction planes with `execute` `browser.visibility` (`{items, visible}` or `{folder, visible}`). |
 | `measure` | `body?` | Volume (mm³), area (mm²), centre of mass, bbox and topology counts per body, with totals. |
 | `body_topology` | `body` | Edges (index, midpoint, length, ends) and faces (index, area, centroid, normal). An edge midpoint is the `[x,y,z]` that picks that edge for fillet and chamfer. |
-| `set_parameter` | `name`, `value` (number or expression), `unit?`, `comment?` | Create or change a user parameter and recompute; reports features that now fail. |
+| `set_parameter` | `name`, `value` (number or expression), `unit?`, `comment?` | Create or change a user parameter and recompute; reports `recomputed` (features rebuilt), `restored` (features whose earlier result for the same inputs was reused, e.g. a value set back) and features that now fail. |
 | `screenshot` | `view?` (iso, top, front, back, bottom, left, right, home, fit), `path?`, `width?`, `height?`, `source?` (window, model) | A PNG image content block. Headless: CPU render fitted to the model. Bridged: the app window (default) or a model render with the app's camera. |
 | `export` | `path`, `format?` (step, 3mf, stl, stla, obj), `bodies?` | STEP, 3MF or mesh export. |
 | `undo`, `redo` | — | Undo / redo one change. |
 | `new_design` | `name?` | Start an empty design. |
 | `open` | `path` | Open a `.solvecraft` design, a STEP file (`.step`/`.stp`) as a new design holding its bodies (an Import base feature), or a 3MF/STL file as mesh bodies. |
 | `save` | `path?` | Save the design (to its current file without `path`). |
+
+To change a feature after it is made, read its definition with `execute` `timeline.inspect`
+(`{feature}`: id or name) and change fields with `timeline.edit` (`{feature, set}`; e.g.
+`{"extent": {"distance": "30"}}`). The fields per feature type are listed in the book's
+*Solid features* chapter.
 
 Resources: `solvecraft://design` (inspect JSON with measurements) and `solvecraft://commands`
 (the catalog).
@@ -69,8 +74,11 @@ Errors: an unknown tool or arguments that don't match the tool's schema are JSON
 `-32602` errors; an engine failure (bad command parameters, a feature that fails) is a tool
 result with `isError: true` and the engine's message, which the model can read and correct.
 
-`batch` rollback undoes as many steps as the batch added to the undo history; batches that
-themselves call `edit.undo`, `file.new` or `doc.open` are not rolled back exactly.
+`batch` rollback goes back to an engine checkpoint (`edit.checkpoint`) taken before the first
+step: the design, the active sketch and the undo history are restored exactly as they were,
+however long the history is. Batches that call `file.new` or `doc.open` get the design back,
+not its file path. (An older app without checkpoints falls back to undoing as many steps as
+the batch added to the undo history.)
 
 ## Demo: an enclosure built over MCP
 

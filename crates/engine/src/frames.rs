@@ -10,7 +10,7 @@
 //! without moved components).
 
 use serde_json::{Map, Value};
-use solvecraft_doc::{Mat, apply_point, apply_vector, is_identity, mat_inverse};
+use solvecraft_doc::{Mat, apply_point, apply_vector, is_identity, map_point_expr, mat_inverse};
 use solvecraft_geom::Vec3;
 
 use crate::Session;
@@ -26,10 +26,18 @@ enum K {
     Make,
     /// A direction: turned with the command's frame.
     Dir,
+    /// An arbitrary axis object in the authoring frame: {origin, dir}.
+    Axis,
     /// A plane object (`{face}`, `{origin, normal}`, `{origin, x_dir, y_dir}`) or a plane name.
     Plane,
     /// A body name, or a list of them.
     Body,
+    /// A point (or a list of picks) for the sketch being made or edited: into that sketch's
+    /// component frame, whichever component the geometry under it belongs to (a sketch in the
+    /// root on a moved component's face finds the face where it is shown).
+    Here,
+    /// A plane object for a new sketch or canvas: into the active component's frame.
+    HerePlane,
 }
 
 use K::*;
@@ -37,7 +45,8 @@ use K::*;
 /// The parameters each command takes in world coordinates.
 fn table(id: &str) -> &'static [(&'static str, K)] {
     match id {
-        "solid.extrude" | "solid.revolve" => &[("face", Pick), ("targets", Body), ("participants", Body)],
+        "solid.extrude" => &[("face", Pick), ("from", Make), ("to", Make), ("targets", Body), ("participants", Body)],
+        "solid.revolve" => &[("face", Pick), ("axis", Axis), ("to", Make), ("targets", Body), ("participants", Body)],
         "solid.box" | "solid.sphere" => &[("corner", Make), ("center", Make)],
         "solid.cylinder" | "solid.coil" | "solid.torus" => &[("base", Make), ("center", Make), ("axis", Dir)],
         "solid.fillet" | "solid.chamfer" => &[("edges", Picks), ("body", Body)],
@@ -45,6 +54,7 @@ fn table(id: &str) -> &'static [(&'static str, K)] {
         "solid.scale" => &[("origin", Make), ("bodies", Body)],
         "solid.offset_face" | "solid.shell" => &[("faces", Picks), ("body", Body)],
         "solid.thread" => &[("face", Pick)],
+        "solid.emboss" => &[("face", Make)],
         "solid.draft" => &[("faces", Picks), ("neutral", Plane), ("pull", Dir), ("body", Body)],
         "solid.press_pull" => &[("face", Pick), ("edges", Picks)],
         "solid.replace_face" => &[("faces", Picks), ("target_face", Pick), ("target", Plane), ("body", Body)],
@@ -56,11 +66,12 @@ fn table(id: &str) -> &'static [(&'static str, K)] {
         "plastic.lip" | "sheet.convert" => &[("face", Pick), ("body", Body)],
         "sheet.flange" | "sheet.hem" => &[("edges", Picks), ("body", Body)],
         "sheet.fold" => &[("points", Picks), ("fixed", Pick), ("body", Body)],
-        "sketch.create" | "sketch.redefine" => &[("plane", Plane)],
-        "canvas.decal" => &[("face", Pick)],
-        "sketch.intersect" => &[("refs", Picks)],
-        "sketch.project_to_surface" | "sketch.isoparametric_curve" => &[("face", Pick), ("body", Body)],
-        "sketch.intersection_curve" => &[("a", Picks), ("b", Picks)],
+        "sketch.create" | "sketch.redefine" => &[("plane", HerePlane)],
+        "canvas.decal" => &[("face", Here)],
+        "canvas.insert" => &[("plane", HerePlane), ("at", Here)],
+        "sketch.project" | "sketch.intersect" | "sketch.include_3d" => &[("refs", Here), ("ref", Here)],
+        "sketch.project_to_surface" | "sketch.isoparametric_curve" => &[("face", Here)],
+        "sketch.intersection_curve" => &[("a", Here), ("b", Here)],
         "inspect.curvature_comb" | "inspect.minimum_radius" | "inspect.isocurve" => &[("edges", Picks), ("faces", Picks)],
         "parts.insert" | "parts.fastener" => &[("at", Pick), ("point", Make), ("direction", Dir)],
         "appearance.assign" => &[("faces", Picks), ("bodies", Body), ("body", Body)],
@@ -75,41 +86,26 @@ fn table(id: &str) -> &'static [(&'static str, K)] {
 struct Frames {
     bodies: Vec<(String, String, Mat)>,
     active: Mat,
+    /// The frame of the sketch being edited (its component), else the active component's.
+    sketch: Mat,
 }
 
 fn frames(s: &Session) -> Frames {
     let st = s.model.state();
-    let doc: std::borrow::Cow<solvecraft_doc::Document> = if s.pending_moves.is_empty() {
-        std::borrow::Cow::Borrowed(&*s.doc)
-    } else {
-        let mut d = (*s.doc).clone();
-        for o in &mut d.occurrences {
-            if let Some(m) = s.pending_moves.get(&o.id) {
-                o.transform = *m;
-            }
-        }
-        std::borrow::Cow::Owned(d)
-    };
+    let doc = s.placed_document();
     // World name, the component's own body name, and its frame.
-    let bodies = doc
-        .body_frames(&st)
-        .into_iter()
-        .map(|(world, _, _, m)| {
-            let own = st
-                .bodies
-                .iter()
-                .find(|b| world == b.name || world.starts_with(&format!("{} (", b.name)))
-                .map(|b| b.name.clone())
-                .unwrap_or_else(|| world.clone());
-            (world, own, m)
-        })
-        .collect();
-    Frames { bodies, active: doc.component_transform(s.active_component) }
+    let bodies = doc.body_frames_with_source(&st).into_iter().map(|(world, own, _, _, m)| (world, own, m)).collect();
+    let sketch_comp = s.active_sketch.and_then(|id| doc.feature(id)).map(|f| f.component).unwrap_or(s.active_component);
+    let active = s.active_component_frame();
+    Frames { bodies, active, sketch: if sketch_comp == s.active_component { active } else { doc.component_transform(sketch_comp) } }
 }
 
-/// Does any placement move anything (so the world differs from the components' frames)?
+/// Does world geometry or its instance naming differ from source components?
 pub fn placed(s: &Session) -> bool {
-    !s.pending_moves.is_empty() || !s.doc.body_offsets.is_empty() || s.doc.placements().iter().any(|(_, _, m)| !is_identity(m))
+    let mut components = std::collections::BTreeSet::new();
+    !s.pending_moves.is_empty()
+        || !s.doc.body_offsets.is_empty()
+        || s.doc.occurrences.iter().any(|o| !is_identity(&o.transform) || !components.insert(o.component))
 }
 
 fn vec3(v: &Value) -> Option<Vec3> {
@@ -128,7 +124,7 @@ fn pt(p: Vec3) -> Value {
 /// The frame of the body a world point lies on (the nearest), or of the named body.
 fn frame_at(s: &Session, f: &Frames, p: Vec3, body: Option<&str>) -> Option<Mat> {
     if let Some(b) = body
-        && let Some((_, _, m)) = f.bodies.iter().find(|(w, own, _)| w == b || (own == b && !w.contains(" (")))
+        && let Some((_, _, m)) = f.bodies.iter().find(|(w, _, _)| w == b)
     {
         return Some(*m);
     }
@@ -171,12 +167,14 @@ struct Mapper<'a> {
     /// The frame of the command's first pick (its directions turn with it).
     first: Option<Mat>,
     changed: bool,
+    /// Picks go into the sketch's frame (`Here`), not the frame of the body under them.
+    here: bool,
 }
 
 impl Mapper<'_> {
     fn pick(&mut self, v: &Value, body: Option<&str>) -> Option<Value> {
         let p = vec3(v)?;
-        let m = frame_at(self.s, &self.f, p, body).unwrap_or(self.f.active);
+        let m = if self.here { self.f.sketch } else { frame_at(self.s, &self.f, p, body).unwrap_or(self.f.active) };
         self.first.get_or_insert(m);
         self.local_point(&m, p)
     }
@@ -191,9 +189,27 @@ impl Mapper<'_> {
     }
 
     fn make(&mut self, v: &Value) -> Option<Value> {
-        let p = vec3(v)?;
         let m = self.f.active;
+        let Some(p) = vec3(v) else { return self.make_expr(&m, v) };
         self.local_point(&m, p)
+    }
+
+    /// A point with expression coordinates (`["w / 2", 0, 0]`): mapped as expressions.
+    fn make_expr(&mut self, m: &Mat, v: &Value) -> Option<Value> {
+        let a = v.as_array().filter(|a| a.len() == 3)?;
+        let c = |i: usize| match a.get(i)? {
+            Value::Number(n) => n.as_f64().filter(|x| x.is_finite()).map(|x| format!("{x}")),
+            Value::String(e) => Some(e.clone()),
+            _ => None,
+        };
+        let mut p = [c(0)?, c(1)?, c(2)?];
+        if is_identity(m) {
+            return None;
+        }
+        let inv = mat_inverse(m)?;
+        map_point_expr(&inv, &mut p);
+        self.changed = true;
+        Some(serde_json::json!(p))
     }
 
     fn dir(&mut self, v: &Value) -> Option<Value> {
@@ -315,24 +331,70 @@ impl Drop for Nested {
 pub fn to_local(s: &Session, id: &str, params: &Value) -> Option<Value> {
     if id == "timeline.redefine" {
         let cmd = params.get("command")?.as_str()?;
-        let inner = to_local(s, cmd, params.get("params")?)?;
+        let key = params.get("feature").and_then(|v| v.as_str().map(str::to_string).or_else(|| v.as_u64().map(|id| id.to_string())))?;
+        let feature = s.doc.find_feature(&key)?;
+        // Edit Feature authors in the existing feature's frame, even when another
+        // component is active. Body-relative picks still use the picked body's frame.
+        let mut context = s.scratch();
+        context.active_component = feature.component;
+        if let solvecraft_doc::FeatureKind::Emboss { face: Some(face), .. } = &feature.kind {
+            context.active_occurrence_path = (!face.author_path.is_empty()).then(|| face.author_path.clone());
+        }
+        let mut inner = to_local(&context, cmd, params.get("params")?)?;
+        // An untouched explicit axis is displayed in world coordinates by Edit
+        // Feature. Keep its exact saved values instead of an affine round trip.
+        if cmd == "solid.revolve"
+            && let solvecraft_doc::FeatureKind::Revolve { axis: solvecraft_doc::AxisRef::Line { origin, dir }, .. } = &feature.kind
+        {
+            let frame = context.active_component_frame();
+            let displayed = serde_json::json!({"origin":pt(apply_point(&frame,*origin)),"dir":pt(apply_vector(&frame,*dir))});
+            if params.get("params").and_then(|p| p.get("axis")) == Some(&displayed) {
+                inner["axis"] = serde_json::json!({"origin":pt(*origin),"dir":pt(*dir)});
+            }
+        }
+        let points = match (&feature.kind, cmd) {
+            (solvecraft_doc::FeatureKind::Revolve { to, .. }, "solid.revolve") => [("to", *to), ("from", None)],
+            (solvecraft_doc::FeatureKind::Extrude { extent, .. }, "solid.extrude") => [("to", extent.to), ("from", extent.from)],
+            _ => [("to", None), ("from", None)],
+        };
+        for (key, point) in points {
+            if let Some(point) = point {
+                let displayed = pt(apply_point(&context.active_component_frame(), point));
+                if params.get("params").and_then(|p| p.get(key)) == Some(&displayed) {
+                    inner[key] = pt(point);
+                }
+            }
+        }
         let mut out = params.clone();
         out["params"] = inner;
         return Some(out);
+    }
+    // Exact face capture retains the original world pick and occurrence identity.
+    if matches!(id, "sketch.create" | "sketch.redefine") && params.get("plane").and_then(|plane| plane.get("face")).is_some() {
+        return None;
     }
     let keys = table(id);
     if keys.is_empty() || !placed(s) {
         return None;
     }
     let obj = params.as_object()?;
-    let mut m = Mapper { s, f: frames(s), first: None, changed: false };
+    let mut command_frames = frames(s);
+    if id == "sketch.redefine" {
+        let key = params.get("sketch").and_then(|value| value.as_str().map(str::to_string).or_else(|| value.as_u64().map(|id| id.to_string())))?;
+        let feature = s.doc.find_feature(&key)?;
+        let path = crate::cmd::author_path_for_rebind(s, feature, params, id).ok()?;
+        let frame = solvecraft_doc::EmbossFace::component_frame(&s.placed_document(), feature.component, &path).ok()?;
+        command_frames.active = frame;
+        command_frames.sketch = frame;
+    }
+    let mut m = Mapper { s, f: command_frames, first: None, changed: false, here: false };
     let body = obj.get("body").and_then(Value::as_str).map(str::to_string);
     let mut out: Map<String, Value> = obj.clone();
     // Picks first: their frame turns the directions.
     for pass in [true, false] {
         for (k, kind) in keys {
             let Some(v) = obj.get(*k) else { continue };
-            let is_pick = matches!(kind, Pick | Picks | Plane);
+            let is_pick = matches!(kind, Pick | Picks | Plane | Here | HerePlane);
             if is_pick != pass {
                 continue;
             }
@@ -341,8 +403,39 @@ pub fn to_local(s: &Session, id: &str, params: &Value) -> Option<Value> {
                 Picks => m.picks(v, body.as_deref()),
                 Make => m.make(v),
                 Dir => m.dir(v),
+                Axis => {
+                    if let Some(axis) = v.as_object() {
+                        let mut axis = axis.clone();
+                        if let Some(origin) = axis.get("origin").and_then(|o| m.make(o)) {
+                            axis.insert("origin".into(), origin);
+                        }
+                        if let Some(dir) = axis.get("dir").and_then(vec3)
+                            && !is_identity(&m.f.active)
+                            && let Some(inv) = mat_inverse(&m.f.active)
+                        {
+                            axis.insert("dir".into(), pt(apply_vector(&inv, dir)));
+                            m.changed = true;
+                        }
+                        Some(Value::Object(axis))
+                    } else {
+                        None
+                    }
+                }
                 Plane => m.plane(v),
                 Body => m.body(v),
+                Here | HerePlane => {
+                    // A new sketch or canvas goes into the active component.
+                    let keep = m.f.sketch;
+                    if *kind == HerePlane {
+                        m.f.sketch = m.f.active;
+                    }
+                    m.here = true;
+                    // Body names stay: the sketch's view of the model keeps them.
+                    let r = if *kind == HerePlane { m.plane(v) } else { m.picks(v, None) };
+                    m.here = false;
+                    m.f.sketch = keep;
+                    r
+                }
             };
             if let Some(n) = new {
                 out.insert((*k).to_string(), n);

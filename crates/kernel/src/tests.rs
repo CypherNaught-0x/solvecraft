@@ -40,8 +40,8 @@ fn extrude_on_other_planes_and_offsets() {
     let b = extrude(&Plane::XZ, &[rect(10.0, 5.0)], -2.0, 3.0).unwrap().pop().unwrap();
     let m = measure(&b).unwrap();
     assert!(rel(m.volume, 250.0) < 1e-9);
-    // XZ normal is -Y: the body spans y in [-3, 2].
-    assert!((m.bbox.min.y + 3.0).abs() < 1e-6 && (m.bbox.max.y - 2.0).abs() < 1e-6, "{:?}", m.bbox);
+    // XZ normal is +Y: the body spans y in [-2, 3].
+    assert!((m.bbox.min.y + 2.0).abs() < 1e-6 && (m.bbox.max.y - 3.0).abs() < 1e-6, "{:?}", m.bbox);
 }
 
 #[test]
@@ -50,6 +50,39 @@ fn region_with_hole() {
     let b = extrude(&Plane::XY, &[r], 0.0, 10.0).unwrap().pop().unwrap();
     let m = measure(&b).unwrap();
     assert!(rel(m.volume, (1200.0 - PI * 25.0) * 10.0) < 5e-4, "{}", m.volume);
+}
+
+#[test]
+fn through_cut_preserves_a_larger_blind_pocket() {
+    let plate = box_solid(Vec3::new(-30.0, -28.0, 0.0), Vec3::new(60.0, 22.0, 8.0)).unwrap();
+    let pocket = cylinder(Vec3::ZERO, Vec3::Z, 11.0, 6.0).unwrap();
+    let through = cylinder(Vec3::new(0.0, 0.0, -1.0), Vec3::Z, 9.5, 10.0).unwrap();
+    let expected = 90.0 * 50.0 * 8.0 - PI * 11.0_f64.powi(2) * 6.0 - PI * 9.5_f64.powi(2) * 2.0;
+    for reverse in [false, true] {
+        let (first, second) = if reverse { (&through, &pocket) } else { (&pocket, &through) };
+        let cut = boolean(&plate, first, BoolOp::Cut).unwrap().unwrap();
+        let result = boolean(&cut, second, BoolOp::Cut).unwrap().unwrap();
+        let m = measure(&result).unwrap();
+        assert!(rel(m.volume, expected) < 5e-4, "reverse={reverse}: {} vs {expected}", m.volume);
+        assert_eq!(m.merged.faces, 9);
+        assert!(!result.tessellate(0.01).unwrap().contains(Vec3::new(10.0, 0.0, 3.0)));
+    }
+}
+
+#[test]
+fn join_a_cylinder_on_its_chamfered_top() {
+    for seam in [0.0, crate::build::SEAM_ANGLE] {
+        let region = Region2 { outer: Loop2::circle_from(Vec2::ZERO, 10.0, seam), holes: vec![] };
+        let base = extrude(&Plane::XY, &[region], 0.0, 20.0).unwrap().pop().unwrap();
+        let base = chamfer(&base, &[Vec3::new(10.0, 0.0, 20.0)], 2.0).unwrap();
+        let region = Region2 { outer: Loop2::circle_from(Vec2::new(0.0, -3.774758283725534e-15), 8.0, seam), holes: vec![] };
+        let plane = Plane { origin: Vec3::new(0.0, 0.0, 20.000000000000007), ..Plane::XY };
+        let tool = extrude(&plane, &[region], 0.0, 5.0).unwrap().pop().unwrap();
+        let expected = measure(&base).unwrap().volume + PI * 64.0 * 5.0;
+        let joined = boolean(&base, &tool, BoolOp::Union).unwrap().unwrap();
+        assert!(rel(measure(&joined).unwrap().volume, expected) < 5e-4);
+        assert_eq!(joined.lumps().unwrap().len(), 1);
+    }
 }
 
 #[test]
@@ -226,6 +259,97 @@ fn loft_and_sweep() {
 }
 
 #[test]
+fn sweep_round_a_sharp_corner_is_mitred() {
+    // A 2 × 2 square centred on an L of two 10 mm lines: lines alone would slide the profile
+    // along the second leg within its own plane (an empty, inside-out body). Mitred, the
+    // volume is the area times the path length.
+    let sq =
+        Region2 { outer: Loop2::polygon(&[Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0), Vec2::new(-1.0, 1.0)]), holes: vec![] };
+    let path = [
+        PathSeg::Line { a: Vec3::ZERO, b: Vec3::new(0.0, 0.0, 10.0) },
+        PathSeg::Line { a: Vec3::new(0.0, 0.0, 10.0), b: Vec3::new(10.0, 0.0, 10.0) },
+    ];
+    let b = sweep(&Plane::XY, &sq, &path).unwrap();
+    let m = measure(&b).unwrap();
+    assert!(rel(m.volume, 80.0) < 1e-9, "{}", m.volume);
+}
+
+#[test]
+fn moving_a_body_with_an_intersection_curve_edge_ends() {
+    // A cylinder cut by a tilted box keeps an elliptical intersection curve as an edge. Moving
+    // such a body scales the curve's tolerance by the matrix norm, whose root refinement cycled
+    // forever for about one translation in eight (this one included): the app hung.
+    let cyl = cylinder(Vec3::ZERO, Vec3::Z, 5.0, 40.0).unwrap();
+    let block = box_solid(Vec3::new(-20.0, -20.0, 20.0), Vec3::new(20.0, 20.0, 60.0)).unwrap();
+    let block = crate::ops::transform(&block, Vec3::ZERO, Vec3::new(0.0, 0.0, 20.0), Vec3::X, 0.4).unwrap();
+    let cut = boolean(&cyl, &block, BoolOp::Cut).unwrap().unwrap();
+    assert!(cut.solid.edge_iter().any(|e| matches!(e.curve(), truck_modeling::Curve::IntersectionCurve(_))));
+    let t = Vec3::new(0.6911, -0.3337, -0.6127) * 2.334;
+    let moved = crate::ops::transform(&cut, t, Vec3::ZERO, Vec3::Z, 0.0).unwrap();
+    let (v0, v1) = (measure(&cut).unwrap().volume, measure(&moved).unwrap().volume);
+    assert!(rel(v0, v1) < 1e-6, "{v0} vs {v1}");
+}
+
+/// A trough whose floor falls 1° (or 2° toward a drain, in four faces), and short round pads
+/// and bosses crossing the fall. The B-rep results were right, but the plausibility check meshed
+/// them without refinement: on a round side trimmed to a thin band by the shallow cut, the plain
+/// mesh spans the band with triangles cutting through the cylinder, so the check saw missing
+/// material, rejected the result, and the planar fallback refused the round pad.
+#[test]
+fn round_pads_crossing_a_shallow_fall() {
+    let hs = |n: Vec3, p: Vec3| {
+        let n = n.normalized().unwrap();
+        HalfSpace { n, d: n.dot(p) }
+    };
+    let walls = |floor: &[HalfSpace]| {
+        let mut h = vec![
+            hs(Vec3::X, Vec3::new(290.0, 0.0, 0.0)),
+            hs(-Vec3::X, Vec3::new(10.0, 0.0, 0.0)),
+            hs(Vec3::Y, Vec3::new(0.0, 140.0, 0.0)),
+            hs(-Vec3::Y, Vec3::new(0.0, 10.0, 0.0)),
+            hs(Vec3::Z, Vec3::new(0.0, 0.0, 90.0)),
+        ];
+        h.extend_from_slice(floor);
+        convex_polyhedron(&h).unwrap()
+    };
+    let block = box_solid(Vec3::ZERO, Vec3::new(300.0, 150.0, 80.0)).unwrap();
+    // One fall along x at 1°: floor z = 8 + t (x − 10).
+    let t = 1f64.to_radians().tan();
+    let fall = boolean(&block, &walls(&[hs(Vec3::new(t, 0.0, -1.0), Vec3::new(10.0, 0.0, 8.0))]), BoolOp::Cut).unwrap().unwrap();
+    let v0 = measure(&fall).unwrap().volume;
+    for x in [60.0, 100.0] {
+        // A pad from z = 9 to 12 (its bottom just under the floor, its top 2–3 mm above).
+        let pad = cylinder(Vec3::new(x, 75.0, 9.0), Vec3::Z, 15.0, 3.0).unwrap();
+        let u = boolean(&fall, &pad, BoolOp::Union).unwrap().unwrap();
+        // The part of the pad above the floor: the floor under the disc is planar, so its mean
+        // height is the height at the centre (where the floor is below z = 9 everywhere).
+        let floor = |x: f64| 8.0 + t * (x - 10.0);
+        let above = if floor(x - 15.0) >= 9.0 { PI * 225.0 * (12.0 - floor(x)) } else { f64::NAN };
+        let v = measure(&u).unwrap().volume;
+        if above.is_finite() {
+            assert!(rel(v, v0 + above) < 1e-5, "pad at x {x}: {v} vs {}", v0 + above);
+        } else {
+            assert!(v > v0 && v < v0 + PI * 225.0 * 3.0, "pad at x {x}: {v}");
+        }
+    }
+    // Four faces falling 2° toward a drain point, and a pad over a valley edge and a wall.
+    let t2 = 2f64.to_radians().tan();
+    let d = Vec3::new(240.0, 110.0, 8.0);
+    let hopper = walls(&[
+        hs(Vec3::new(t2, 0.0, -1.0), d),
+        hs(Vec3::new(-t2, 0.0, -1.0), d),
+        hs(Vec3::new(0.0, t2, -1.0), d),
+        hs(Vec3::new(0.0, -t2, -1.0), d),
+    ]);
+    let trough = boolean(&block, &hopper, BoolOp::Cut).unwrap().unwrap();
+    let pad = cylinder(Vec3::new(270.0, 70.0, 8.0), Vec3::Z, 25.0, 5.0).unwrap();
+    let u = boolean(&trough, &pad, BoolOp::Union).unwrap().unwrap();
+    // Integrated over the disc (outside the wall at x = 290): about 6517 mm³ above the floor.
+    let gain = measure(&u).unwrap().volume - measure(&trough).unwrap().volume;
+    assert!((gain - 6517.0).abs() < 10.0, "{gain}");
+}
+
+#[test]
 fn planar_booleans_with_coincident_faces() {
     // L-bracket: a wall flush with three sides of its base.
     let base = box_solid(Vec3::ZERO, Vec3::new(80.0, 50.0, 8.0)).unwrap();
@@ -237,6 +361,8 @@ fn planar_booleans_with_coincident_faces() {
     // Through the public boolean (B-rep first, polygon fallback).
     let u2 = boolean(&base, &wall, BoolOp::Union).unwrap().unwrap();
     assert!(rel(measure(&u2).unwrap().volume, m.volume) < 1e-9);
+    assert_eq!(u2.face_count(), 8, "coplanar wall and base faces must merge in the B-rep");
+    assert!(u2.validity().is_empty());
     // Two boxes sharing a face, and a cut flush with a side.
     let a = box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0)).unwrap();
     let b = box_solid(Vec3::new(10.0, 0.0, 0.0), Vec3::new(20.0, 10.0, 10.0)).unwrap();
@@ -248,6 +374,76 @@ fn planar_booleans_with_coincident_faces() {
     assert!(rel(measure(&c).unwrap().volume, 1000.0 - 250.0) < 1e-9);
     let i = boolean(&a, &notch, BoolOp::Intersect).unwrap().unwrap();
     assert!(rel(measure(&i).unwrap().volume, 250.0) < 1e-9);
+}
+
+#[test]
+fn connected_logo_join_preserves_exact_faces_at_edge_contact() {
+    let mut body = box_solid(Vec3::ZERO, Vec3::new(10.0, 20.0, 10.0)).unwrap();
+    for (i, (lo, hi)) in
+        [(Vec3::new(0.0, 0.0, 10.0), Vec3::new(10.0, 10.0, 20.0)), (Vec3::new(-10.0, 0.0, 10.0), Vec3::new(0.0, 10.0, 20.0))].into_iter().enumerate()
+    {
+        let tool = box_solid(lo, hi).unwrap();
+        body = boolean(&body, &tool, BoolOp::Union).unwrap().unwrap();
+        assert!(body.validity().is_empty());
+        let m = measure(&body).unwrap();
+        assert!((m.volume - (3000.0 + i as f64 * 1000.0)).abs() < 1e-6, "join {i}: {}", m.volume);
+        assert!((m.bbox.max.z - 20.0).abs() < 1e-9, "join {i}: {}", m.bbox.max.z);
+        let tops =
+            body.faces(0.01).unwrap().iter().filter(|f| f.plane_normal.is_some_and(|n| n.z > 0.999999) && (f.centroid.z - 20.0).abs() < 1e-9).count();
+        assert_eq!(tops, 1, "join {i}: the top must be a single selectable face");
+        assert!(m.bbox.min.dist(Vec3::new(if i == 0 { 0.0 } else { -10.0 }, 0.0, 0.0)) < 1e-9);
+        assert!(m.bbox.max.dist(Vec3::new(10.0, 20.0, 20.0)) < 1e-9);
+    }
+    let tool = box_solid(Vec3::new(-10.0, 10.0, 10.0), Vec3::new(0.0, 20.0, 20.0)).unwrap();
+    let logo = boolean(&body, &tool, BoolOp::Union).unwrap().unwrap();
+    assert!(logo.validity().is_empty());
+    let m = measure(&logo).unwrap();
+    assert!((m.volume - 5000.0).abs() < 1e-6);
+    assert!(m.bbox.min.dist(Vec3::new(-10.0, 0.0, 0.0)) < 1e-9);
+    assert!(m.bbox.max.dist(Vec3::new(10.0, 20.0, 20.0)) < 1e-9);
+    let tops =
+        logo.faces(0.01).unwrap().iter().filter(|f| f.plane_normal.is_some_and(|n| n.z > 0.999999) && (f.centroid.z - 20.0).abs() < 1e-9).count();
+    assert_eq!(tops, 1);
+    let text = step_export(&[&logo], "SolveCraft").unwrap();
+    let imported = step_import(&text).unwrap();
+    assert_eq!(imported.bodies.len(), 1);
+    let roundtrip = &imported.bodies.first().unwrap().body;
+    assert!(roundtrip.validity().is_empty());
+    assert!((measure(roundtrip).unwrap().volume - 5000.0).abs() < 1e-6);
+    // An intentional overlap removes the pinch without any automatic displacement.
+    let overlap = box_solid(Vec3::new(-10.0, 10.0, 10.0), Vec3::new(0.1, 20.0, 20.0)).unwrap();
+    let joined = boolean(&body, &overlap, BoolOp::Union).unwrap().unwrap();
+    assert!(joined.validity().is_empty());
+    let m = measure(&joined).unwrap();
+    assert!((m.volume - 5010.0).abs() < 1e-6);
+    assert!(m.bbox.min.dist(Vec3::new(-10.0, 0.0, 0.0)) < 1e-9);
+    assert!(m.bbox.max.dist(Vec3::new(10.0, 20.0, 20.0)) < 1e-9);
+}
+
+#[test]
+fn corner_boss_on_stepped_case_has_one_exact_top_face() {
+    let outer = box_solid(Vec3::new(-50.0, -25.0, 0.0), Vec3::new(50.0, 25.0, 25.0)).unwrap();
+    let cavity = box_solid(Vec3::new(-48.0, -23.0, 2.0), Vec3::new(48.0, 23.0, 26.0)).unwrap();
+    let case = boolean(&outer, &cavity, BoolOp::Cut).unwrap().unwrap();
+    let boss = cylinder(Vec3::new(-45.0, 20.0, 2.0), Vec3::Z, 5.0, 23.0).unwrap();
+    let joined = boolean(&case, &boss, BoolOp::Union).unwrap().unwrap();
+    let common = boolean(&case, &boss, BoolOp::Intersect).unwrap().unwrap();
+    let cut = boolean(&case, &boss, BoolOp::Cut).unwrap().unwrap();
+    let (a, b, u, i, c) =
+        (measure(&case).unwrap(), measure(&boss).unwrap(), measure(&joined).unwrap(), measure(&common).unwrap(), measure(&cut).unwrap());
+    assert!(rel(u.volume + i.volume, a.volume + b.volume) < 1e-4);
+    assert!(rel(c.volume + i.volume, a.volume) < 1e-4);
+    for body in [&joined, &common, &cut] {
+        assert!(body.validity().is_empty());
+    }
+    assert!((u.bbox.max.z - 25.0).abs() < 1e-9, "the boss must not be nudged above the rim");
+    let top_faces = |body: &Body| {
+        body.faces(0.01).unwrap().iter().filter(|f| f.plane_normal.is_some_and(|n| n.z > 0.999999) && (f.centroid.z - 25.0).abs() < 1e-9).count()
+    };
+    assert_eq!(top_faces(&joined), 1, "the boss and both walls share one top face");
+    let rounded = fillet(&joined, &[Vec3::new(-50.0, 25.0, 12.5)], 5.0).unwrap();
+    assert!(rounded.validity().is_empty());
+    assert_eq!(top_faces(&rounded), 1, "rounding the outside corner must retain the merged top");
 }
 
 #[test]
@@ -368,6 +564,50 @@ fn chamfer_top_loop_mitres() {
     let m = measure(&c).unwrap();
     assert!(rel(m.volume, 23730.666667) < 1e-6, "{}", m.volume);
     assert_eq!(m.merged.faces, 10);
+}
+
+#[test]
+fn chamfer_sloped_basin_rim() {
+    let slab = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap();
+    let rectangle = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
+    let pocket =
+        loft(&[(Plane::XY.offset(30.0), rectangle(20.0, 4.0, 80.0, 50.0)), (Plane::XY.offset(10.0), rectangle(30.0, 20.0, 70.0, 40.0))]).unwrap();
+    let basin = boolean(&slab, &pocket, BoolOp::Cut).unwrap().unwrap();
+    let result = chamfer(&basin, &[Vec3::new(50.0, 4.0, 30.0)], 2.0).unwrap();
+    // The removed triangular section has area s² sin(phi)/2. Its length varies
+    // linearly between the sloped end walls, so its centroid gives the mean length.
+    let wall_slope: f64 = (20.0 - 4.0) / (30.0 - 10.0); // horizontal run / vertical drop
+    let drop = 2.0 / (1.0 + wall_slope.powi(2)).sqrt();
+    let removed = drop * (60.0 - drop / 3.0);
+    let before = measure(&basin).unwrap();
+    let after = measure(&result).unwrap();
+    assert!(rel(after.volume, before.volume - removed) < 1e-8, "{} vs {}", after.volume, before.volume - removed);
+    assert_eq!(after.merged.faces, before.merged.faces + 1);
+    assert_eq!(result.lumps().unwrap().len(), 1);
+    assert!(result.validity().is_empty());
+    let mesh = result.tessellate(0.01).unwrap();
+    assert!(!mesh.contains(Vec3::new(50.0, 3.5, 29.9)));
+    assert!(mesh.contains(Vec3::new(50.0, 3.5, 28.0)));
+}
+
+#[test]
+fn chamfer_wider_than_sloped_basin_rim_is_refused() {
+    for (margin, distance) in [(1.0, 2.0), (1.0, 3.0), (0.5, 4.0), (1.0, 1.0)] {
+        let slab = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap();
+        let rectangle = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
+        let pocket =
+            loft(&[(Plane::XY.offset(30.0), rectangle(20.0, margin, 80.0, 50.0)), (Plane::XY.offset(10.0), rectangle(30.0, 20.0, 70.0, 40.0))])
+                .unwrap();
+        let basin = boolean(&slab, &pocket, BoolOp::Cut).unwrap().unwrap();
+        let before = measure(&basin).unwrap();
+        let error = chamfer(&basin, &[Vec3::new(50.0, margin, 30.0)], distance).unwrap_err();
+        assert!(error.to_string().contains("larger than the neighbouring faces"), "{margin}, {distance}: {error}");
+        assert_eq!(measure(&basin).unwrap().volume, before.volume);
+        // A smaller chamfer on the same thin rim is still supported.
+        let smaller = chamfer(&basin, &[Vec3::new(50.0, margin, 30.0)], margin * 0.5).unwrap();
+        assert!(smaller.validity().is_empty());
+        assert!(measure(&smaller).unwrap().volume < before.volume);
+    }
 }
 
 #[test]
@@ -1344,7 +1584,8 @@ fn boolean_identity_survey() {
 fn partial_revolve_on_the_axis() {
     let sq =
         Region2 { outer: Loop2::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(20.0, 0.0), Vec2::new(20.0, 7.5), Vec2::new(0.0, 7.5)]), holes: vec![] };
-    let pie = revolve(&Plane::XZ, &[sq], Vec2::ZERO, Vec2::Y, std::f64::consts::FRAC_PI_2).unwrap().pop().unwrap();
+    let plane = Plane { y: Vec3::Z, ..Plane::XZ }; // This fixture's rectangle is above z = 0.
+    let pie = revolve(&plane, &[sq], Vec2::ZERO, Vec2::Y, std::f64::consts::FRAC_PI_2).unwrap().pop().unwrap();
     assert!(pie.validity().is_empty(), "{:?}", pie.validity());
     let v = measure(&pie).unwrap().volume;
     assert!((v - PI * 400.0 / 4.0 * 7.5).abs() < 1e-3 * v, "{v}");
@@ -1438,4 +1679,122 @@ fn raise_band_on_a_rounded_rim() {
         let v = measure(&lip).unwrap().volume;
         assert!((v - (v0 + band * 1.5)).abs() < 1e-5 * v, "outside {outside}: {v} vs {}", v0 + band * 1.5);
     }
+}
+
+#[test]
+fn orientation_mesh_reuses_missing_face_check_at_matching_tolerance() {
+    for scale in [0.001, 1.0, 1000.0] {
+        let body = box_solid(Vec3::ZERO, Vec3::new(10., 20., 30.) * scale).unwrap();
+        let tol = (body.size() * 0.01).max(1e-3);
+        let mesh = body.tessellate(tol).unwrap();
+        let mut present = vec![false; body.face_count()];
+        for face in mesh.tri_face {
+            present[face as usize] = true;
+        }
+        assert_eq!(body.unmeshed_faces(), present.iter().filter(|p| !**p).count());
+        if scale == 1.0 {
+            assert_eq!(body.coarse_missing, Some((tol, 0)));
+        }
+    }
+}
+
+/// A trough whose floor falls about 1° toward a central drain, the fall starting right at the
+/// trough edges: four faces meet at each bottom corner (two walls, two fall facets) and at the
+/// drain (four facets). A tab on one end makes the body non-convex. The moved planes of four
+/// faces don't meet at one point, so each such corner of the cavity becomes two corners joined
+/// by a short edge. Checked against the volume integrated by hand.
+#[test]
+fn shell_where_four_faces_meet_at_a_corner() {
+    let (w, l, ht, t) = (100.0, 60.0, 40.0, 2.0);
+    // Drain depth: the long facets fall 1°.
+    let h = 30.0 * 1f64.to_radians().tan();
+    let facet = |n: Vec3, p: Vec3| {
+        let n = n.normalized().unwrap();
+        HalfSpace { n, d: n.dot(p) }
+    };
+    let facets = [
+        facet(Vec3::new(0.0, -h, -30.0), Vec3::ZERO),
+        facet(Vec3::new(0.0, h, -30.0), Vec3::new(0.0, l, 0.0)),
+        facet(Vec3::new(-h, 0.0, -50.0), Vec3::ZERO),
+        facet(Vec3::new(h, 0.0, -50.0), Vec3::new(w, 0.0, 0.0)),
+    ];
+    let mut hs = vec![
+        HalfSpace { n: -Vec3::X, d: 0.0 },
+        HalfSpace { n: Vec3::X, d: w },
+        HalfSpace { n: -Vec3::Y, d: 0.0 },
+        HalfSpace { n: Vec3::Y, d: l },
+        HalfSpace { n: Vec3::Z, d: ht },
+    ];
+    hs.extend(facets);
+    let trough = convex_polyhedron(&hs).unwrap();
+    let pyramid = w * l * h / 3.0;
+    assert!(rel(measure(&trough).unwrap().volume, w * l * ht + pyramid) < 1e-9);
+    let tab = box_solid(Vec3::new(w, 20.0, 20.0), Vec3::new(w + 20.0, 40.0, ht)).unwrap();
+    let body = boolean(&trough, &tab, BoolOp::Union).unwrap().unwrap();
+    let s = shell(&body, &[Vec3::new(50.0, 30.0, ht)], t).unwrap();
+    // The cavity: the walls in by t, above the floor facets moved in by t (midpoint rule; the
+    // floor is linear between its creases).
+    let floor = |x: f64, y: f64| facets.iter().map(|f| (f.d - t - f.n.x * x - f.n.y * y) / f.n.z).fold(f64::NEG_INFINITY, f64::max);
+    let (nx, ny) = (960, 560);
+    let (dx, dy) = ((w - 2.0 * t) / nx as f64, (l - 2.0 * t) / ny as f64);
+    let mut cavity = 0.0;
+    for i in 0..nx {
+        for j in 0..ny {
+            cavity += (ht - floor(t + (i as f64 + 0.5) * dx, t + (j as f64 + 0.5) * dy)) * dx * dy;
+        }
+    }
+    let tab_cavity = 20.0 * (20.0 - 2.0 * t) * (20.0 - t);
+    let want = w * l * ht + pyramid + 8000.0 - cavity - tab_cavity;
+    let m = measure(&s).unwrap();
+    assert!(rel(m.volume, want) < 1e-5, "{} vs {want}", m.volume);
+}
+
+/// The same trough cut as a pocket into a slab (four faces meet at each concave corner of the
+/// pocket floor), shelled with its top open.
+#[test]
+fn shell_of_a_pocket_whose_floor_falls_to_a_drain() {
+    let (px, py, pw, pl, top, depth, t) = (20.0, 15.0, 100.0, 60.0, 50.0, 30.0, 3.0);
+    let h = 30.0 * 1f64.to_radians().tan();
+    let z0 = top - depth;
+    let facet = |n: Vec3, p: Vec3| {
+        let n = n.normalized().unwrap();
+        HalfSpace { n, d: n.dot(p) }
+    };
+    let facets = [
+        facet(Vec3::new(0.0, -h, -30.0), Vec3::new(px, py, z0)),
+        facet(Vec3::new(0.0, h, -30.0), Vec3::new(px, py + pl, z0)),
+        facet(Vec3::new(-h, 0.0, -50.0), Vec3::new(px, py, z0)),
+        facet(Vec3::new(h, 0.0, -50.0), Vec3::new(px + pw, py, z0)),
+    ];
+    let mut hs = vec![
+        HalfSpace { n: -Vec3::X, d: -px },
+        HalfSpace { n: Vec3::X, d: px + pw },
+        HalfSpace { n: -Vec3::Y, d: -py },
+        HalfSpace { n: Vec3::Y, d: py + pl },
+        HalfSpace { n: Vec3::Z, d: top + 10.0 },
+    ];
+    hs.extend(facets);
+    let pocket = convex_polyhedron(&hs).unwrap();
+    let slab = box_solid(Vec3::ZERO, Vec3::new(140.0, 90.0, top)).unwrap();
+    let basin = boolean(&slab, &pocket, BoolOp::Cut).unwrap().unwrap();
+    let pocket_vol = pw * pl * depth + pw * pl * h / 3.0;
+    assert!(rel(measure(&basin).unwrap().volume, 140.0 * 90.0 * top - pocket_vol) < 1e-9);
+    let s = shell(&basin, &[Vec3::new(5.0, 5.0, top)], t).unwrap();
+    // The cavity's columns: from t up to the top, or up to the pocket floor moved down by t
+    // inside the pocket's walls moved out by t.
+    let floor = |x: f64, y: f64| facets.iter().map(|f| (f.d + t - f.n.x * x - f.n.y * y) / f.n.z).fold(f64::NEG_INFINITY, f64::max);
+    let (nx, ny) = (1340, 840);
+    let (dx, dy) = ((140.0 - 2.0 * t) / nx as f64, (90.0 - 2.0 * t) / ny as f64);
+    let mut cavity = 0.0;
+    for i in 0..nx {
+        for j in 0..ny {
+            let (x, y) = (t + (i as f64 + 0.5) * dx, t + (j as f64 + 0.5) * dy);
+            let inside = x > px - t && x < px + pw + t && y > py - t && y < py + pl + t;
+            let roof = if inside { floor(x, y) } else { top };
+            cavity += (roof - t) * dx * dy;
+        }
+    }
+    let want = 140.0 * 90.0 * top - pocket_vol - cavity;
+    let m = measure(&s).unwrap();
+    assert!(rel(m.volume, want) < 1e-4, "{} vs {want}", m.volume);
 }

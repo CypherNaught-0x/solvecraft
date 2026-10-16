@@ -877,7 +877,18 @@ pub(crate) fn split_any(body: &Body, faces: &[usize], tool: &SplitTool) -> Resul
         }
         let shells = std::mem::take(&mut imp.shells);
         let solid = mt::Solid::new_unchecked(shells.into_iter().map(mt::Shell::from).collect());
-        Ok((Body { solid: std::sync::Arc::new(solid), mesh: None, color: body.color, paint: None, splits: body.splits.clone() }, imp))
+        Ok((
+            Body {
+                solid: std::sync::Arc::new(solid),
+                coarse_missing: None,
+                mesh: None,
+                color: body.color,
+                paint: None,
+                splits: body.splits.clone(),
+                face_sources: None,
+            },
+            imp,
+        ))
     })
 }
 
@@ -1208,7 +1219,7 @@ mod tests {
         let m0 = measure(&c).unwrap();
         let side = c.faces(0.01).unwrap().iter().position(|f| f.plane_normal.is_none()).unwrap();
         // A horizontal line seen from the front (XZ sketch) at z = 5, swept along y.
-        let xz = Plane::XZ;
+        let xz = Plane { y: Vec3::Z, ..Plane::XZ };
         let tool = SplitTool::Curves { plane: xz, curves: vec![vec![Seg2::Line { a: Vec2::new(-20.0, 5.0), b: Vec2::new(20.0, 5.0) }]] };
         let s = split_faces(&c, &[side], &tool).unwrap();
         let m = measure(&s).unwrap();

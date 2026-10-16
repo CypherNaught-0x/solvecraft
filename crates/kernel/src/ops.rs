@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use solvecraft_geom::Vec3;
 use truck_modeling as mt;
 
-use crate::body::{Body, Solid, from_p3, p3, v3};
+use crate::body::{Body, Solid, from_p3};
 use crate::{KernelError, Result, guard};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,6 +13,12 @@ pub enum BoolOp {
     Union,
     Cut,
     Intersect,
+}
+
+/// Whether a union can sew two matching planar faces without intersecting them.
+/// Callers can retain the exact touching tool instead of extending it into material.
+pub fn can_join_touching_faces(a: &Body, b: &Body) -> bool {
+    a.solid.boundaries().len() == 1 && b.solid.boundaries().len() == 1 && crate::coplanar::glue(a, b).is_some_and(|r| r.is_ok())
 }
 
 /// Shifts applied to both operands on retries. The boolean classifies some faces by casting a
@@ -46,7 +52,10 @@ fn mismatch(a: &solvecraft_geom::Mesh, b: &solvecraft_geom::Mesh, result: &solve
     let hi = ba.max.min(bb.max);
     let all = ba.union(&bb);
     let mut boxes = vec![(all, 300usize)];
-    if lo.x < hi.x && lo.y < hi.y && lo.z < hi.z {
+    // A touching seam can overlap by round-off only. Samples there sit on the
+    // operands' boundaries, where ray parity cannot classify membership reliably.
+    let gap = all.diagonal().max(1.0) * 1e-9;
+    if hi.x - lo.x > gap && hi.y - lo.y > gap && hi.z - lo.z > gap {
         boxes.push((solvecraft_geom::Aabb3 { min: lo, max: hi }, 900));
     }
     let (ia_idx, ib_idx, ir_idx) = (a.inside_index(), b.inside_index(), result.inside_index());
@@ -105,6 +114,13 @@ fn trivial(a: &Body, b: &Body, op: BoolOp, ma: &solvecraft_geom::Mesh, mb: &solv
     const ALL: f64 = 0.997;
     let disjoint = b_in_a < NONE && a_in_b < NONE;
     match op {
+        // Sampling only selects this candidate. Validate every shell boundary and the
+        // complete material/void nesting before preserving a disconnected union.
+        BoolOp::Union if disjoint => {
+            let joined = join_pieces(vec![a.clone(), b.clone()]).ok().flatten()?;
+            joined.separated_lumps().ok()?;
+            Some(Some(joined))
+        }
         BoolOp::Cut if disjoint => Some(Some(a.clone())),
         BoolOp::Cut if a_in_b > ALL => Some(None),
         BoolOp::Intersect if disjoint => Some(None),
@@ -113,31 +129,34 @@ fn trivial(a: &Body, b: &Body, op: BoolOp, ma: &solvecraft_geom::Mesh, mb: &solv
         BoolOp::Union if b_in_a > ALL => Some(Some(a.clone())),
         BoolOp::Union if a_in_b > ALL => Some(Some(b.clone())),
         // The tool wholly inside, clear of the outside: a void.
-        BoolOp::Cut if b_in_a > ALL && clear_inside(ma, mb, a.size().max(b.size()) * 1e-6) => void(a, b).ok(),
+        BoolOp::Cut if b_in_a > ALL => {
+            let candidate = void(a, b).ok().flatten()?;
+            candidate.separated_lumps().ok()?;
+            Some(Some(candidate))
+        }
         _ => None,
     }
 }
 
-/// Does every vertex of `inner` lie inside `outer` and farther than `gap` from its surface?
-fn clear_inside(outer: &solvecraft_geom::Mesh, inner: &solvecraft_geom::Mesh, gap: f64) -> bool {
-    if outer.triangles.len() * inner.positions.len() > 40_000_000 {
-        return false;
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+
+    #[test]
+    fn curved_near_contact_never_uses_a_shell_only_boolean_candidate() {
+        let direction = Vec3::new(1.0, 2.0, 3.0).normalized().unwrap();
+        let outer = crate::sphere(Vec3::ZERO, 10.0).unwrap();
+        let mesh = outer.tessellate(0.03).unwrap();
+        for distance in [19.999, 20.001] {
+            let other = crate::sphere(direction * distance, 10.0).unwrap();
+            let other_mesh = other.tessellate(0.03).unwrap();
+            assert!(trivial(&outer, &other, BoolOp::Union, &mesh, &other_mesh).is_none());
+            assert!(trivial(&other, &outer, BoolOp::Union, &other_mesh, &mesh).is_none());
+        }
+        let protruding = crate::sphere(direction * 9.001, 1.0).unwrap();
+        let protruding_mesh = protruding.tessellate(0.03).unwrap();
+        assert!(trivial(&outer, &protruding, BoolOp::Cut, &mesh, &protruding_mesh).is_none());
     }
-    let tris: Vec<[Vec3; 3]> = outer.triangles.iter().filter_map(|t| outer.tri(t)).collect();
-    inner.positions.iter().all(|p| {
-        outer.contains(*p)
-            && tris.iter().all(|[a, b, c]| {
-                // Distance to the triangle's plane bounds the distance to the triangle from below.
-                let n = (*b - *a).cross(*c - *a);
-                let Some(nn) = n.normalized() else { return true };
-                let h = (*p - *a).dot(nn).abs();
-                h > gap || {
-                    let q = *p - nn * (*p - *a).dot(nn);
-                    let inside = [(*a, *b), (*b, *c), (*c, *a)].iter().all(|(u, v)| (*v - *u).cross(q - *u).dot(n) >= 0.0);
-                    !inside && [(*a, *b), (*b, *c), (*c, *a)].iter().all(|(u, v)| p.dist_to_segment(*u, *v) > gap)
-                }
-            })
-    })
 }
 
 /// `a` with the inside of `b` (wholly within it) taken out: a second, inward-facing shell.
@@ -162,7 +181,7 @@ thread_local! {
 /// everything or an intersection of disjoint bodies. Results are checked against volume bounds
 /// and retried with shifted copies and other tolerances when they fail or look wrong.
 pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
-    let r = boolean_whole(a, b, op);
+    let mut r = boolean_whole(a, b, op);
     // Bodies in several pieces: when the whole failed (or came out empty), a piece at a time.
     let retry = match &r {
         Err(_) => true,
@@ -174,18 +193,78 @@ pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         if (la.len() > 1 || lb.len() > 1)
             && let Ok(Some(x)) = by_lumps(la, lb, op)
         {
-            return Ok(Some(x));
+            r = Ok(Some(x));
         }
     }
+    if op == BoolOp::Union
+        && let Ok(Some(body)) = &r
+        && !preserves_planar_surfaces(a, b, body)
+    {
+        // Numerical retries must not quietly alter a planar design's dimensions.
+        // Prefer the exact polygon result; reject an edge-only pinch if it cannot
+        // form a closed solid without displacing either operand.
+        r = match crate::polybool::planar_boolean(a, b, op) {
+            Ok(Some(exact)) if preserves_planar_surfaces(a, b, &exact) => Ok(Some(exact)),
+            _ => Err(KernelError::Invalid(
+                "join cannot preserve the original faces; check for zero-thickness edge contact or add intentional overlap".into(),
+            )),
+        };
+    }
     r
+}
+
+/// Every face of an all-planar union must remain on an operand's original plane.
+/// Curved operands keep their existing surface-specific boolean handling.
+fn preserves_planar_surfaces(a: &Body, b: &Body, result: &Body) -> bool {
+    guard("validate planar union", || Ok(planar_surfaces_match(a, b, result))).unwrap_or(false)
+}
+
+fn planar_surfaces_match(a: &Body, b: &Body, result: &Body) -> bool {
+    let planes: Option<Vec<(Vec3, f64)>> = a
+        .solid
+        .face_iter()
+        .chain(b.solid.face_iter())
+        .map(|f| {
+            let mt::Surface::Plane(p) = f.oriented_surface() else { return None };
+            let n = p.normal();
+            let n = Vec3::new(n.x, n.y, n.z).normalized()?;
+            Some((n, n.dot(from_p3(p.origin()))))
+        })
+        .collect();
+    let Some(planes) = planes else { return true };
+    let tol = (a.size().max(b.size()) * 1e-9).max(1e-9);
+    result.solid.face_iter().all(|f| {
+        matches!(f.oriented_surface(), mt::Surface::Plane(_))
+            && planes.iter().any(|(n, d)| f.vertex_iter().all(|v| (n.dot(from_p3(v.point())) - d).abs() <= tol))
+    })
+}
+
+/// Smallest side of the box where the bodies' vertex boxes overlap (infinite when they don't).
+fn meeting_size(a: &Body, b: &Body) -> f64 {
+    let bbox = |x: &Body| {
+        let mut bb = solvecraft_geom::Aabb3::EMPTY;
+        for v in x.solid.vertex_iter() {
+            bb.add(from_p3(v.point()));
+        }
+        bb
+    };
+    let (ba, bb) = (bbox(a), bbox(b));
+    let s = solvecraft_geom::Aabb3 { min: ba.min.max(bb.min), max: ba.max.min(bb.max) }.size();
+    if s.x > 0.0 && s.y > 0.0 && s.z > 0.0 { s.x.min(s.y).min(s.z) } else { f64::INFINITY }
 }
 
 fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     a.require_brep("a boolean")?;
     b.require_brep("a boolean")?;
     let size = a.size().max(b.size());
-    let tol_m = size * 5e-4;
-    let meshes = (a.tessellate(tol_m).ok(), b.tessellate(tol_m).ok());
+    // The checks mesh both bodies; where they meet in a region much thinner than they are (a
+    // thin part trimmed by a long one), a step from their size would facet the small faces
+    // there coarsely enough to fail the membership test on a correct result. The meshes are
+    // refined: a round side trimmed to a thin band (a short boss crossing a gently sloping
+    // floor) is otherwise spanned by triangles cutting through it, which reads as missing
+    // material.
+    let tol_m = (size * 5e-4).min(meeting_size(a, b) * 2e-3).max(size * 1e-5);
+    let meshes = (a.tessellate_with(tol_m, true).ok(), b.tessellate_with(tol_m, true).ok());
     let (va, vb) = match &meshes {
         (Some(ma), Some(mb)) => (ma.measure().volume, mb.measure().volume),
         _ => (volume(a), volume(b)),
@@ -194,7 +273,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     // Volume bounds, then membership against the operands (catches misclassified pieces), on
     // one mesh of the result. Returns (plausible, volume).
     let check = |r: &Body| -> (bool, f64) {
-        let Ok(mr) = r.tessellate(tol_m) else { return (false, f64::NAN) };
+        let Ok(mr) = r.tessellate_with(tol_m, true) else { return (false, f64::NAN) };
         let v = mr.measure().volume;
         let bounds = v > 0.0
             && match op {
@@ -222,6 +301,15 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     // Prisms along one direction (plates with holes): exact, in 2D (so only the volume
     // bounds are checked).
     if let Some(Ok(r)) = crate::prism::prism_boolean(a, b, op) {
+        // Slab-by-slab prism joins sew a closed solid, but leave cap and wall
+        // pieces along slab boundaries. Merge those coplanar faces just as the
+        // general B-rep boolean does, retaining intentional Split Face lines.
+        let keep: Vec<Vec<Vec3>> = a.split_keep().iter().chain(b.split_keep()).cloned().collect();
+        let r = if op == BoolOp::Union {
+            r.map(|body| guard("heal prism boolean", || Body::new(crate::heal::heal_keep((*body.solid).clone(), size, &keep))).unwrap_or(body))
+        } else {
+            r
+        };
         match &r {
             Some(body) => {
                 let v = volume(body);
@@ -287,7 +375,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
                     empty_votes += 1;
                     last = "empty result".into();
                 }
-                Ok(s) => match Body::new(crate::heal::heal_keep(s, size, &keep)) {
+                Ok(s) => match guard("boolean result", || Body::new(crate::heal::heal_keep(s, size, &keep))) {
                     Ok(body) => {
                         let (ok, v) = check(&body);
                         if ok {
@@ -445,8 +533,87 @@ pub fn transform_matrix(body: &Body, m: [[f64; 4]; 4]) -> Result<Body> {
             m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0], m[2][1], m[2][2], m[2][3], m[3][0], m[3][1], m[3][2],
             m[3][3],
         );
-        Body::new(mt::builder::transformed(&body.deep_copy(), mat))
+        // An affine placement retains face order and appearance metadata.
+        let sources = body.transformed_sources(m)?;
+        Body::new(placed_topology(&body.solid, mat)?)
+            .map(|placed| placed.with_color(body.color()).with_paint(body.paint().cloned()).with_face_sources(sources))
     })
+}
+
+// A STEP periodic face may traverse a seam edge twice. Generic topology builders
+// reject that wire while cloning, even though placement preserves its topology.
+pub(crate) fn placed_topology(source: &Solid, matrix: mt::Matrix4) -> Result<Solid> {
+    use mt::{Transform, Transformed};
+    use std::collections::HashMap;
+    let mut vertices = HashMap::new();
+    let mut edges = HashMap::new();
+    let mut shells = Vec::new();
+    let mut face_count = 0usize;
+    let mut edge_visits = 0usize;
+    for shell in source.boundaries() {
+        let mut faces = Vec::new();
+        for face in shell {
+            face_count = face_count.saturating_add(1);
+            if face_count > 500_000 {
+                return Err(KernelError::Invalid("placement exceeds face work limit".into()));
+            }
+            let mut wires = Vec::new();
+            for wire in face.absolute_boundaries() {
+                let mut mapped = Vec::new();
+                for edge in wire {
+                    edge_visits = edge_visits.saturating_add(1);
+                    if edge_visits > 4_000_000 {
+                        return Err(KernelError::Invalid("placement exceeds edge work limit".into()));
+                    }
+                    if let std::collections::hash_map::Entry::Vacant(entry) = edges.entry(edge.id()) {
+                        for vertex in [edge.absolute_front(), edge.absolute_back()] {
+                            if let std::collections::hash_map::Entry::Vacant(entry) = vertices.entry(vertex.id()) {
+                                let point = matrix.transform_point(vertex.point());
+                                if !from_p3(point).is_finite() {
+                                    return Err(KernelError::Invalid("placement produced nonfinite geometry".into()));
+                                }
+                                entry.insert(mt::Vertex::new(point));
+                            }
+                        }
+                        let front =
+                            vertices.get(&edge.absolute_front().id()).ok_or_else(|| KernelError::Failed("placement vertex missing".into()))?;
+                        let back = vertices.get(&edge.absolute_back().id()).ok_or_else(|| KernelError::Failed("placement vertex missing".into()))?;
+                        entry.insert(mt::Edge::new_unchecked(front, back, edge.curve().transformed(matrix)));
+                    }
+                    let copied = edges.get(&edge.id()).ok_or_else(|| KernelError::Failed("placement edge missing".into()))?;
+                    mapped.push(if edge.orientation() { copied.clone() } else { copied.inverse() });
+                }
+                wires.push(mt::Wire::from(mapped));
+            }
+            // Wire connectivity, seam sharing and orientation are copied exactly;
+            // no new topology is introduced by this geometry-only operation.
+            let mut copied = mt::Face::new_unchecked(wires, face.surface().transformed(matrix));
+            if !face.orientation() {
+                copied.invert();
+            }
+            faces.push(copied);
+        }
+        shells.push(mt::Shell::from(faces));
+    }
+    Ok(Solid::new_unchecked(shells))
+}
+
+#[cfg(test)]
+#[test]
+fn affine_placement_keeps_body_and_face_paint_attached() {
+    let paint = crate::Paint { opacity: 0.4, faces: vec![crate::FacePaint { face: 0, color: [0.8, 0.2, 0.1], opacity: 0.3 }] };
+    let body = crate::box_solid(Vec3::ZERO, Vec3::new(10.0, 20.0, 30.0)).unwrap().with_color(Some([0.2, 0.6, 0.8])).with_paint(Some(paint.clone()));
+    let source_faces = body.faces(0.01).unwrap();
+    let transform = [[0.0, 2.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.5, 0.0], [30.0, 40.0, 50.0, 1.0]];
+    let placed = transform_matrix(&body, transform).unwrap();
+    assert_eq!(placed.color(), body.color());
+    assert_eq!(placed.paint(), Some(&paint));
+    let faces = placed.faces(0.01).unwrap();
+    for source in source_faces {
+        let target = faces.iter().find(|f| f.index == source.index).unwrap();
+        let p = source.centroid;
+        assert!(target.centroid.dist(Vec3::new(30.0 - p.y, 40.0 + 2.0 * p.x, 50.0 + 0.5 * p.z)) < 1e-6);
+    }
 }
 
 /// Rigid transform: rotate about `axis` through `origin` by `angle` radians, then translate.
@@ -454,7 +621,7 @@ pub fn transform(body: &Body, translate: Vec3, origin: Vec3, axis: Vec3, angle: 
     if !(translate.is_finite() && origin.is_finite() && angle.is_finite()) {
         return Err(KernelError::Invalid("non-finite transform".into()));
     }
-    if body.is_mesh() {
+    {
         // Same motion as a matrix: rotate about the line through `origin`, then translate.
         let ax = if angle.abs() > 1e-12 { axis.normalized().ok_or_else(|| KernelError::Invalid("rotation axis".into()))? } else { Vec3::Z };
         let (c, s) = (angle.cos(), angle.sin());
@@ -471,24 +638,22 @@ pub fn transform(body: &Body, translate: Vec3, origin: Vec3, axis: Vec3, angle: 
         );
         let tr = origin - ro + translate;
         let m = [[r[0][0], r[0][1], r[0][2], 0.0], [r[1][0], r[1][1], r[1][2], 0.0], [r[2][0], r[2][1], r[2][2], 0.0], [tr.x, tr.y, tr.z, 1.0]];
-        return body.mesh_transformed(&m).ok_or_else(|| KernelError::Failed("mesh transform".into()));
+        transform_matrix(body, m)
     }
-    guard("transform", || {
-        let mut s = body.deep_copy();
-        if angle.abs() > 1e-12 {
-            let ax = axis.normalized().ok_or_else(|| KernelError::Invalid("rotation axis".into()))?;
-            s = mt::builder::rotated(&s, p3(origin), v3(ax), mt::Rad(angle));
-        }
-        if translate.len() > 0.0 {
-            s = mt::builder::translated(&s, v3(translate));
-        }
-        Body::new(s)
-    })
 }
 
 /// Split a body with a plane: the parts on the positive and the negative side of the plane
 /// (only the non-empty ones).
 pub fn split_by_plane(body: &Body, plane: &solvecraft_geom::Plane) -> Result<Vec<Body>> {
+    let mut out = Vec::new();
+    for positive in [true, false] {
+        out.extend(half_space(body, plane, positive)?);
+    }
+    Ok(out)
+}
+
+/// The part of a body on one side of a plane (`None` when nothing is there).
+pub(crate) fn half_space(body: &Body, plane: &solvecraft_geom::Plane, positive: bool) -> Result<Option<Body>> {
     body.require_brep("split")?;
     let size = body.size();
     let mut bb = solvecraft_geom::Aabb3::EMPTY;
@@ -506,12 +671,11 @@ pub fn split_by_plane(body: &Body, plane: &solvecraft_geom::Plane) -> Result<Vec
         ]),
         holes: vec![],
     };
-    let mut out = Vec::new();
-    for (lo, hi) in [(0.0, reach), (-reach, 0.0)] {
-        let half = crate::build::extrude(plane, std::slice::from_ref(&sq), lo, hi)?.pop().ok_or_else(|| KernelError::Failed("half space".into()))?;
-        if let Some(part) = boolean(body, &half, BoolOp::Intersect)? {
-            out.push(part);
-        }
-    }
-    Ok(out)
+    let (lo, hi) = if positive { (0.0, reach) } else { (-reach, 0.0) };
+    let half = crate::build::extrude(plane, std::slice::from_ref(&sq), lo, hi)?.pop().ok_or_else(|| KernelError::Failed("half space".into()))?;
+    boolean(body, &half, BoolOp::Intersect)
 }
+
+#[cfg(test)]
+#[path = "placement_tests.rs"]
+mod placement_tests;

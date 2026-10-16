@@ -41,10 +41,11 @@ pub mod colors {
 pub fn bounds(s: &Session) -> Aabb3 {
     let st = s.world_state();
     let mut b = Aabb3::EMPTY;
-    for body in &st.bodies {
+    let v = &s.visibility;
+    for body in st.bodies.iter().filter(|x| s.body_visible(&x.name)) {
         b = b.union(&body.mesh().bounds());
     }
-    for ss in &st.sketches {
+    for ss in st.sketches.iter().filter(|x| !v.hidden_sketches.contains(&x.feature)) {
         if let Some((lo, hi)) = ss.sketch.bounds() {
             for p in [lo, hi] {
                 b.add(ss.plane.to_world(p));
@@ -92,6 +93,13 @@ pub fn sketch_lines(sk: &Sketch, plane: &Plane, active: bool, determined: &[bool
         };
         for seg in sk.segs(i) {
             out.push((seg.polyline(0.02).iter().map(|p| plane.to_world(*p)).collect(), col, c.construction || c.centerline));
+        }
+    }
+    // Virtual sharp corners (kept by fillets and chamfers): thin extension lines from the
+    // curves to the corner, like construction geometry.
+    for (_, ext) in sk.virtual_corners() {
+        for (a, b) in ext {
+            out.push((vec![plane.to_world(a), plane.to_world(b)], colors::SKETCH_CONSTRUCTION, true));
         }
     }
     // 3D curves are in world coordinates already.
@@ -151,8 +159,17 @@ pub fn scene(s: &Session, cam: &Camera) -> Scene {
     for (d, col) in [(Vec3::X, colors::AXIS_X), (Vec3::Y, colors::AXIS_Y), (Vec3::Z, colors::AXIS_Z)] {
         sc.lines.push(SceneLine { points: vec![Vec3::ZERO, d * axis], color: col, width: 1.6, on_top: false });
     }
-    for body in &st.bodies {
-        let selected = s.selection.iter().any(|x| matches!(x, Sel::Body { name } if *name == body.name));
+    let selected_occurrences: Vec<String> = s
+        .selection
+        .iter()
+        .filter_map(|x| match x {
+            Sel::Occurrence { path } => s.occurrence_bodies(path, true).ok(),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    for body in st.bodies.iter().filter(|b| s.body_visible(&b.name)) {
+        let selected = selected_occurrences.contains(&body.name) || s.selection.iter().any(|x| matches!(x, Sel::Body { name } if *name == body.name));
         let mesh = body.mesh();
         // The body's appearance (or imported colour) and faces with looks of their own, as in
         // the viewport.
@@ -174,8 +191,7 @@ pub fn scene(s: &Session, cam: &Camera) -> Scene {
     }
     for ss in &st.sketches {
         let active = s.active_sketch == Some(ss.feature);
-        // Finished sketches are hidden once a feature uses them, like Fusion's default.
-        if !active && sketch_consumed(s, ss.feature) {
+        if !sketch_shown(s, ss.feature) {
             continue;
         }
         for (pts, col, cons) in sketch_lines(&ss.sketch, &ss.plane, active, &ss.report.curve_determined) {
@@ -183,6 +199,13 @@ pub fn scene(s: &Session, cam: &Camera) -> Scene {
         }
     }
     sc
+}
+
+/// Is a sketch drawn? The active one is; others unless hidden. Finished sketches are hidden
+/// once a feature uses them, like Fusion's default, unless shown one by one.
+pub fn sketch_shown(s: &Session, id: u64) -> bool {
+    let v = &s.visibility;
+    s.active_sketch == Some(id) || (!v.hidden_sketches.contains(&id) && (v.shown_sketches.contains(&id) || !sketch_consumed(s, id)))
 }
 
 /// Is a sketch used by a later feature?

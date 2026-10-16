@@ -54,6 +54,12 @@ mod status_tests {
         assert!(app.session.log.last().is_some_and(|l| l.starts_with("Redo: ") && !l.contains("edit.redo")), "{:?}", app.session.log.last());
     }
 }
+#[cfg(test)]
+mod extrude_edit_tests;
+mod file_load;
+#[cfg(test)]
+mod file_ui_tests;
+mod manufacturing;
 pub mod palette;
 pub mod params_dialog;
 pub mod prefs;
@@ -62,10 +68,19 @@ mod preselect_tests;
 pub mod preview;
 pub mod recovery_ui;
 pub mod ref_images;
+#[cfg(test)]
+mod revolve_edit_tests;
+#[cfg(test)]
+mod revolve_manipulator_tests;
 pub mod scenario;
 pub mod selection;
 pub mod shortcut_box;
 pub mod sketch3d;
+#[cfg(test)]
+mod sketch3d_frame_ui_tests;
+pub(crate) mod sketch_attachment_ui;
+#[cfg(test)]
+mod sketch_attachment_ui_tests;
 pub mod sketch_dims;
 #[cfg(test)]
 mod sketch_edit_tests;
@@ -101,9 +116,6 @@ pub struct UiState {
     pub show_grid: bool,
     pub show_origin: bool,
     pub perspective: bool,
-    pub hidden_bodies: Vec<String>,
-    /// Origin items (O, X, Y, Z, XY, XZ, YZ) and construction planes hidden one by one.
-    pub hidden_origin: Vec<String>,
     pub show_sketches: bool,
     pub palette_open: bool,
     /// Dark theme (the default); a preference kept between runs.
@@ -118,9 +130,6 @@ pub struct UiState {
     pub ground_shadow: bool,
     /// The world's up axis (Z or Y; #3): the camera, view cube, home view and ground follow it.
     pub up_axis: solvecraft_engine::render::UpAxis,
-    /// Sketches hidden one by one, and finished sketches shown although a feature uses them.
-    pub hidden_sketches: Vec<u64>,
-    pub shown_sketches: Vec<u64>,
     /// Sketches whose closed profiles are not shaded.
     pub hidden_profiles: Vec<u64>,
     /// Finished sketches whose dimensions are shown.
@@ -140,8 +149,6 @@ impl Default for UiState {
             show_grid: true,
             show_origin: true,
             perspective: false,
-            hidden_bodies: Vec::new(),
-            hidden_origin: Vec::new(),
             show_sketches: true,
             palette_open: false,
             dark: true,
@@ -150,8 +157,6 @@ impl Default for UiState {
             visual_style: 0,
             ground_shadow: true,
             up_axis: Default::default(),
-            hidden_sketches: Vec::new(),
-            shown_sketches: Vec::new(),
             hidden_profiles: Vec::new(),
             shown_dims: Vec::new(),
             locked_bodies: Vec::new(),
@@ -165,12 +170,14 @@ impl Default for UiState {
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str, &[&str]) -> Option<String>>>,
+    pub show_in_folder: Option<Box<dyn Fn(&str)>>,
     /// Where the host reads the anti-aliasing preference at start (a small JSON file).
     pub graphics_path: Option<String>,
 }
 
 pub struct SolveApp {
     pub session: Session,
+    pub manufacturing: manufacturing::State,
     pub ui: UiState,
     pub cam: Camera,
     /// A view change in progress (view cube, Home, Fit); any mouse navigation cancels it.
@@ -239,6 +246,7 @@ pub struct SolveApp {
     fitted: bool,
     /// The start page.
     pub home: home::HomeState,
+    pub file_load: file_load::FileLoad,
     /// The other open designs (tabs).
     pub docs: documents::Documents,
 }
@@ -247,6 +255,7 @@ impl SolveApp {
     pub fn new(session: Session, services: Services) -> Self {
         SolveApp {
             session,
+            manufacturing: Default::default(),
             ui: UiState::default(),
             cam: Camera::default(),
             cam_anim: None,
@@ -290,6 +299,7 @@ impl SolveApp {
             styled: false,
             fitted: false,
             home: home::HomeState::default(),
+            file_load: file_load::FileLoad::default(),
             docs: documents::Documents::default(),
         }
     }
@@ -314,6 +324,7 @@ impl SolveApp {
             "browser_collapsed": self.tree.collapsed,
             "browser_expanded": self.tree.expanded,
             "recent": self.home.recent,
+            "recent_opened_at": self.home.opened_at,
             "shortcut_box": self.sbox.prefs(),
             "shortcuts": self.keymap.prefs(),
             "toolbar": self.toolbar_custom.prefs(),
@@ -329,6 +340,7 @@ impl SolveApp {
     pub fn load_prefs(&mut self, prefs: &str) {
         let Ok(v) = serde_json::from_str::<Value>(prefs) else { return };
         let flag = |k: &str| v.get(k).and_then(Value::as_bool);
+        self.home.opened_at = v.get("recent_opened_at").and_then(|x| serde_json::from_value(x.clone()).ok()).unwrap_or_default();
         if let Some(d) = flag("dark") {
             self.ui.dark = d;
         }
@@ -395,6 +407,9 @@ impl SolveApp {
 
     /// Run a command programmatically (JSON parameters, no dialogs).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if self.file_load.busy() {
+            return Err("a file operation is in progress".into());
+        }
         let t0 = now_ms();
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
         self.big_operation |= now_ms() - t0 >= recovery_ui::BIG_OPERATION_MS;
@@ -405,7 +420,14 @@ impl SolveApp {
         match &r {
             Ok(_) => {
                 self.session.echo(format!("{} done", command_label(id)));
-                if matches!(id, "file.new" | "doc.open") {
+                if matches!(id, "file.new" | "doc.open" | "doc.recover") {
+                    self.menu.props = None;
+                    sketch_attachment_ui::clear(self);
+                    // The old document is already replaced: discard its editor without
+                    // applying cancellation hooks (such as restoring its timeline marker).
+                    self.dialog = None;
+                    self.tool = None;
+                    self.preview = preview::PreviewState::default();
                     self.cam = Camera::default();
                     self.fit_view();
                 }
@@ -413,6 +435,9 @@ impl SolveApp {
                     && let Some(p) = self.session.path.clone()
                 {
                     self.home.add_recent(&p);
+                    if matches!(id, "file.save" | "file.save_as") {
+                        home::remember_session(&mut self.home, &self.session);
+                    }
                 }
             }
             Err(e) => {
@@ -433,6 +458,12 @@ impl SolveApp {
     /// Start a command the way a toolbar click does: interactive tools and dialogs for commands
     /// that have them, otherwise run it with defaults.
     pub fn start(&mut self, id: &str) {
+        manufacturing::cancel_editor(self);
+        if id.starts_with("cam.") {
+            self.home.open = false;
+            manufacturing::start(self, id);
+            return;
+        }
         // A component moved without Capture Position: ask first (Capture, Revert or Cancel).
         if browser::needs_capture(self, id) {
             self.tree.capture_prompt = Some(id.to_string());
@@ -440,9 +471,26 @@ impl SolveApp {
         }
         self.tool = None;
         self.home.open = false;
+        match id {
+            "file.save" => return toolbar::save(self),
+            "file.save_as" => return toolbar::save_as(self),
+            "doc.open" => {
+                if let Some(path) = self.services.pick_open.as_ref().and_then(|f| f()) {
+                    self.open_path_async(&path);
+                }
+                return;
+            }
+            _ => {}
+        }
+        if matches!(id, "sketch.insert_dxf" | "sketch.insert_svg") {
+            if let Some(path) = self.services.pick_open.as_ref().and_then(|f| f()) {
+                let _ = self.run(id, json!({"path": path}));
+            }
+            return;
+        }
         if matches!(id, "file.insert_step" | "file.insert_mesh") {
             if let Some(p) = self.services.pick_open.as_ref().and_then(|f| f()) {
-                self.insert_path(&p);
+                self.insert_path_async(&p);
             }
             return;
         }
@@ -490,7 +538,20 @@ impl SolveApp {
         {
             self.last_command = Some((spec.id.to_string(), spec.label.to_string()));
         }
-        if let Some(t) = tools::Tool::for_command(id) {
+        if let Some(mut t) = tools::Tool::for_command(id) {
+            if id == "sketch.dimension" {
+                t.picks = self
+                    .session
+                    .selection
+                    .iter()
+                    .filter_map(|s| match s {
+                        solvecraft_engine::Sel::SketchCurve { id } | solvecraft_engine::Sel::SketchPoint { id } => Some(id.clone()),
+                        _ => None,
+                    })
+                    .take(2)
+                    .collect();
+                let _ = self.session.execute("select.clear", &json!({}));
+            }
             self.tool = Some(t);
             self.set_status(tools::hint(id), false);
             return;
@@ -521,13 +582,13 @@ impl SolveApp {
         let Some(idx) = self.session.doc.feature_index(id) else { return };
         let marker = self.session.doc.marker;
         self.tool = None;
-        if self.run("timeline.roll_to", json!({ "position": idx })).is_err() {
+        if dialogs::roll_marker(self, Some(idx)).is_err() {
             return;
         }
         match dialogs::for_feature(self, id, marker) {
             Some(d) => self.dialog = Some(d),
             None => {
-                let _ = self.run("timeline.roll_to", marker.map(|m| json!({ "position": m })).unwrap_or_else(|| json!({})));
+                let _ = dialogs::roll_marker(self, marker);
                 self.palette.text = format!("timeline.edit {{\"feature\": {id}, \"set\": {{}}}}");
                 self.ui.palette_open = true;
             }
@@ -539,6 +600,13 @@ impl SolveApp {
     /// puts them back. Editing the sketch that is already open does nothing; editing another one
     /// finishes the current sketch first, so edit sessions never nest.
     pub fn edit_sketch(&mut self, id: u64) {
+        if let solvecraft_engine::doc::FaceAttachmentStatus::Lost { message, .. } =
+            self.session.placed_document().sketch_face_attachment(id, &self.session.model)
+        {
+            browser::redefine_sketch(self, id);
+            self.set_status(message, true);
+            return;
+        }
         if self.session.active_sketch == Some(id) {
             return;
         }
@@ -594,7 +662,7 @@ impl SolveApp {
     pub fn origin_visible(&self) -> bool {
         self.ui.show_origin
             || (self.dialog.as_ref().is_some_and(|d| matches!(d.kind, dialogs::Kind::Sketch))
-                && !self.session.world_state().bodies.iter().any(|b| !self.ui.hidden_bodies.contains(&b.name)))
+                && !self.session.world_state().bodies.iter().any(|b| self.session.body_visible(&b.name)))
     }
 
     pub fn set_status(&mut self, s: impl Into<String>, error: bool) {
@@ -608,6 +676,13 @@ impl SolveApp {
             self.fit_view();
             stand_up::offer(self, path, &[]);
         }
+    }
+
+    pub fn open_path_async(&mut self, path: &str) {
+        file_load::begin(self, path, false);
+    }
+    pub fn insert_path_async(&mut self, path: &str) {
+        file_load::begin(self, path, true);
     }
 
     /// Insert a STEP file's bodies (an Import base feature) or a 3MF/STL file's meshes into the
@@ -629,9 +704,9 @@ impl SolveApp {
     pub fn drop_path(&mut self, path: &str) {
         let import = solvecraft_engine::io::is_step_path(path) || solvecraft_engine::io::is_mesh_path(path);
         if import && !self.session.doc.features.is_empty() {
-            self.insert_path(path);
+            self.insert_path_async(path);
         } else {
-            self.open_path(path);
+            self.open_path_async(path);
         }
     }
 
@@ -653,7 +728,7 @@ impl SolveApp {
 
     /// `cam` moved to frame the whole model.
     pub fn fitted(&self, mut cam: Camera) -> Camera {
-        let b = solvecraft_engine::view::bounds(&self.session);
+        let b = if self.ui.tab == "MILLING" { crate::viewport::model_bounds(self) } else { solvecraft_engine::view::bounds(&self.session) };
         if b.is_empty() {
             cam.target = solvecraft_engine::geom::Vec3::ZERO;
             cam.distance = 150.0;
@@ -721,6 +796,11 @@ impl SolveApp {
 
     /// Per-frame logic before layout.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        manufacturing::update_exports(self, ctx);
+        #[cfg(target_arch = "wasm32")]
+        manufacturing::advance(self, ctx);
+
+        file_load::tick(self, ctx);
         self.esc_handled = false;
         prefs::apply(self, ctx);
         if !self.styled || theme::is_dark() != self.ui.dark {
@@ -786,6 +866,7 @@ impl SolveApp {
         let t0 = now_ms();
         scenario::clear_handles();
         toolbar::app_bar(self, ui);
+        file_load::show(self, ui.ctx());
         documents::prompt(self, ui.ctx());
         if self.home.open {
             home::show(self, ui);
@@ -799,7 +880,9 @@ impl SolveApp {
             timeline::timeline(self, ui);
         }
         palette::palette_bar(self, ui);
-        if self.ui.show_browser {
+        if self.ui.tab == "MILLING" {
+            manufacturing::panel(self, ui);
+        } else if self.ui.show_browser {
             browser::browser(self, ui);
         }
         preview::update(self, ui.ctx());
@@ -807,6 +890,7 @@ impl SolveApp {
             viewport::show(self, ui);
         });
         dialogs::show(self, ui.ctx());
+        manufacturing::editor(self, ui.ctx());
         sketch_palette::show(self, ui.ctx());
         params_dialog::show(self, ui.ctx());
         recovery_ui::show(self, ui.ctx());

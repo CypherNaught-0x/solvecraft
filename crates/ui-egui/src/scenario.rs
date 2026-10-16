@@ -245,6 +245,15 @@ impl Harness {
     }
 
     pub fn call(&mut self, method: &str, params: Value) -> Value {
+        if method == "ui.resize"
+            && let (Some(w), Some(h)) = (params["width"].as_f64(), params["height"].as_f64())
+            && w.is_finite()
+            && h.is_finite()
+            && w > 0.0
+            && h > 0.0
+        {
+            self.size = egui::vec2(w as f32, h as f32);
+        }
         let (req, _rx) = ControlRequest::new(method, params);
         let out = match handle(&mut self.app, &self.ctx, &req) {
             Outcome::Done(v) => v,
@@ -730,8 +739,7 @@ pub fn check(h: &mut Harness, e: &Value) -> Result<(), String> {
             }
             "hidden" => {
                 // Bodies hidden in the view.
-                let h = &ui["ui"]["hidden_bodies"];
-                let h = if h.is_null() { &ui["ui"]["hiddenBodies"] } else { h };
+                let h = &ui["visibility"]["hidden_bodies"];
                 if h != v {
                     return Err(format!("hidden bodies: got {h}, want {v}"));
                 }
@@ -857,7 +865,7 @@ pub fn check(h: &mut Harness, e: &Value) -> Result<(), String> {
                     }
                 }
             }
-            "quit_requested" | "quitting" => {
+            "file_busy" | "quit_requested" | "quitting" => {
                 if ui[k] != *v {
                     return Err(format!("{k}: got {}, want {v}", ui[k]));
                 }
