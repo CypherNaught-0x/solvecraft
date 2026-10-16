@@ -47,6 +47,11 @@ Changes:
   point that does not evaluate counts as flat instead of recursing). Surface grids refine only
   the direction that bends, and a ruling left undivided gets cells comparable to the other
   direction (long triangles from a trim loop to the grid's far ends cut through cylinders).
+- `tessellation/mod.rs`, `tessellation/triangulation.rs`: optional checked triangulation records
+  exhausted edge/surface refinement budgets and non-finite evaluations per call, across native
+  worker threads or sequential Wasm execution. Verification rejects these fallbacks; ordinary
+  display meshing retains its bounded approximation behavior. These checks do not constitute
+  an analytic error proof for arbitrary oscillatory surfaces.
 - `lib.rs`: compiler warnings no longer fail the build. Example, test and bench targets are
   dropped (their sources are not vendored).
 

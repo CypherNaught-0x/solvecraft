@@ -6,6 +6,15 @@ use crate::Point2;
 use array_macro::array;
 use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// SolveCraft: optional per-call failure flag; ordinary display meshing retains its fallback.
+fn mark_unresolved(flag: Option<&AtomicBool>) {
+    if let Some(flag) = flag { flag.store(true, Ordering::Relaxed); }
+}
+fn unresolved(flag: Option<&AtomicBool>) -> bool {
+    flag.is_some_and(|flag| flag.load(Ordering::Relaxed))
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
@@ -210,6 +219,7 @@ pub(super) fn shell_tessellation<'a, C, S>(
     shell: &Shell<Point3, C, S>,
     tol: f64,
     sp: impl SP<S>,
+    unresolved_tolerance: Option<&AtomicBool>,
 ) -> MeshedShell
 where
     C: PolylineableCurve + 'a,
@@ -227,7 +237,7 @@ where
             let v0 = vmap.get(&edge.absolute_front().id()).unwrap();
             let v1 = vmap.get(&edge.absolute_back().id()).unwrap();
             let curve = edge.curve();
-            let poly = bounded_polyline(&curve, curve.range_tuple(), tol);
+            let poly = bounded_polyline(&curve, curve.range_tuple(), tol, unresolved_tolerance);
             (id, Edge::new_unchecked(v0, v1, poly))
         })
         .collect();
@@ -246,7 +256,7 @@ where
             .iter()
             .map(create_boundary)
             .collect();
-        shell_create_polygon(&face.surface(), wires, face.orientation(), tol, &sp, cap)
+        shell_create_polygon(&face.surface(), wires, face.orientation(), tol, &sp, cap, unresolved_tolerance)
     };
     shell.face_par_iter().map(create_face).collect()
 }
@@ -257,6 +267,7 @@ pub(super) fn shell_tessellation_single_thread<'a, C, S>(
     shell: &'a Shell<Point3, C, S>,
     tol: f64,
     sp: impl SP<S>,
+    unresolved_tolerance: Option<&AtomicBool>,
 ) -> MeshedShell
 where
     C: PolylineableCurve + 'a,
@@ -277,7 +288,7 @@ where
             let vb = edge.absolute_back();
             let v1 = vmap.entry_or_insert(vb).clone();
             let curve = edge.curve();
-            let poly = bounded_polyline(&curve, curve.range_tuple(), tol);
+            let poly = bounded_polyline(&curve, curve.range_tuple(), tol, unresolved_tolerance);
             Edge::new_unchecked(&v0, &v1, poly)
         },
     );
@@ -297,7 +308,7 @@ where
             .iter()
             .map(&mut create_boundary)
             .collect();
-        shell_create_polygon(&face.surface(), wires, face.orientation(), tol, &sp, cap)
+        shell_create_polygon(&face.surface(), wires, face.orientation(), tol, &sp, cap, unresolved_tolerance)
     };
     shell.face_iter().map(create_face).collect()
 }
@@ -318,7 +329,7 @@ where
         let curve = &edge.curve;
         CompressedEdge {
             vertices: edge.vertices,
-            curve: bounded_polyline(curve, curve.range_tuple(), tol),
+            curve: bounded_polyline(curve, curve.range_tuple(), tol, None),
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -339,7 +350,7 @@ where
         let preboundary: Option<Vec<_>> = boundaries.iter().map(create_boundary).collect();
         let polygon: Option<PolygonMesh> = (|| {
             let boundary = PolyBoundary::new(preboundary?, &surface, tol);
-            Some(trimming_tessellation(&surface, &boundary, tol, cap))
+            Some(trimming_tessellation(&surface, &boundary, tol, cap, None))
         })();
         CompressedFace {
             boundaries,
@@ -365,6 +376,7 @@ fn shell_create_polygon<S: PreMeshableSurface>(
     tol: f64,
     sp: impl SP<S>,
     cap: usize,
+    unresolved_tolerance: Option<&AtomicBool>,
 ) -> Face<Point3, PolylineCurve, Option<PolygonMesh>> {
     let preboundary = wires
         .iter()
@@ -374,8 +386,9 @@ fn shell_create_polygon<S: PreMeshableSurface>(
         })
         .collect::<Option<Vec<_>>>();
     let polygon: Option<PolygonMesh> = (|| {
+        if unresolved(unresolved_tolerance) { return None; }
         let boundary = PolyBoundary::new(preboundary?, &surface, tol);
-        Some(trimming_tessellation(surface, &boundary, tol, cap))
+        Some(trimming_tessellation(surface, &boundary, tol, cap, unresolved_tolerance))
     })();
     // SolveCraft: faces with seam edges (a loop running along an edge both ways, as STEP
     // writes cylinders) are valid here; `debug_new` asserts simple loops in debug builds.
@@ -682,11 +695,12 @@ fn spade_round(x: f64) -> f64 {
 }
 
 /// Tessellates one surface trimmed by polyline.
-fn trimming_tessellation<S>(surface: &S, polyboundary: &PolyBoundary, tol: f64, cap: usize) -> PolygonMesh
+fn trimming_tessellation<S>(surface: &S, polyboundary: &PolyBoundary, tol: f64, cap: usize, unresolved_tolerance: Option<&AtomicBool>) -> PolygonMesh
 where S: PreMeshableSurface {
     let mut triangulation = Cdt::new();
     polyboundary.insert_to(&mut triangulation);
-    insert_surface(&mut triangulation, surface, polyboundary, tol, cap);
+    insert_surface(&mut triangulation, surface, polyboundary, tol, cap, unresolved_tolerance);
+    if unresolved(unresolved_tolerance) { return PolygonMesh::default(); }
     let mut mesh = triangulation_into_polymesh(
         triangulation.vertices(),
         triangulation.inner_faces(),
@@ -704,14 +718,17 @@ fn insert_surface(
     polyline: &PolyBoundary,
     tol: f64,
     cap: usize,
+    unresolved_tolerance: Option<&AtomicBool>,
 ) {
     let bdb: BoundingBox<Point2> = polyline.0.iter().flatten().collect();
     let range = ((bdb.min()[0], bdb.max()[0]), (bdb.min()[1], bdb.max()[1]));
     if !(range.0 .0.is_finite() && range.0 .1.is_finite() && range.1 .0.is_finite() && range.1 .1.is_finite()) {
+        mark_unresolved(unresolved_tolerance);
         return;
     }
-    let (udiv, vdiv) = bounded_surface_division(&surface, range, tol, cap);
-    let (udiv, vdiv) = balanced_grid(&surface, udiv, vdiv, cap);
+    let (udiv, vdiv) = bounded_surface_division(&surface, range, tol, cap, unresolved_tolerance);
+    let (udiv, vdiv) = balanced_grid(&surface, udiv, vdiv, cap, unresolved_tolerance);
+    if unresolved(unresolved_tolerance) { return; }
     let insert_res: Vec<Vec<Option<_>>> = udiv
         .into_iter()
         .map(|u| {
@@ -762,7 +779,7 @@ pub(super) fn face_cap(faces: usize) -> usize {
 /// SolveCraft: truck's curve division, bounded: at most `MAX_EDGE_POINTS` points and a
 /// bisection depth of 24; a midpoint that does not evaluate (NaN) counts as flat (truck's
 /// version recursed on it 100 levels deep, which never finishes).
-fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64, f64), tol: f64) -> PolylineCurve {
+fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64, f64), tol: f64, unresolved_tolerance: Option<&AtomicBool>) -> PolylineCurve {
     let mut out = vec![curve.subs(range.0)];
     let mut stack: Vec<(f64, f64, usize)> = vec![(range.0, range.1, 0)];
     while let Some((a, b, depth)) = stack.pop() {
@@ -772,8 +789,10 @@ fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64, f64), tol: f64
         let d2 = curve.subs(t).distance2(chord);
         let tm = 0.5 * (a + b);
         let dm = curve.subs(tm).distance2(pa.midpoint(pb));
+        if !d2.is_finite() || !dm.is_finite() { mark_unresolved(unresolved_tolerance); }
         let flat = !(d2 >= tol * tol || dm >= tol * tol);
         if flat || depth >= 24 || out.len() + stack.len() >= MAX_EDGE_POINTS {
+            if !flat { mark_unresolved(unresolved_tolerance); }
             out.push(pb);
         } else {
             // Right half after the left one (stack order).
@@ -786,9 +805,9 @@ fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64, f64), tol: f64
 
 /// SolveCraft: truck's surface division, bounded: stops refining when the grid would exceed
 /// `cap` points or after 24 rounds; cells that do not evaluate (NaN) are not refined.
-fn bounded_surface_division<S: PreMeshableSurface>(surface: &S, (ur, vr): ((f64, f64), (f64, f64)), tol: f64, cap: usize) -> (Vec<f64>, Vec<f64>) {
+fn bounded_surface_division<S: PreMeshableSurface>(surface: &S, (ur, vr): ((f64, f64), (f64, f64)), tol: f64, cap: usize, unresolved_tolerance: Option<&AtomicBool>) -> (Vec<f64>, Vec<f64>) {
     let (mut udiv, mut vdiv) = (vec![ur.0, ur.1], vec![vr.0, vr.1]);
-    for _ in 0..24 {
+    for iteration in 0..24 {
         let mut fu = vec![false; udiv.len() - 1];
         let mut fv = vec![false; vdiv.len() - 1];
         for (i, u) in udiv.windows(2).enumerate() {
@@ -804,13 +823,18 @@ fn bounded_surface_division<S: PreMeshableSurface>(surface: &S, (ur, vr): ((f64,
                 let pt10 = surface.subs(u[1], v[0]).to_vec();
                 let pt11 = surface.subs(u[1], v[1]).to_vec();
                 let pt = Point3::from_vec(pt00 * (1.0 - p) * (1.0 - q) + pt01 * (1.0 - p) * q + pt10 * p * (1.0 - q) + pt11 * p * q);
-                let far = p0.distance2(pt) > tol * tol;
+                let deviation = p0.distance2(pt);
+                if !deviation.is_finite() { mark_unresolved(unresolved_tolerance); }
+                let far = deviation > tol * tol;
                 // Which direction bends: refine only that one (a cylinder needs no division
                 // along its rulings).
                 let alu = surface.subs(u[0], v0).to_vec() * (1.0 - p) + surface.subs(u[1], v0).to_vec() * p;
                 let alv = surface.subs(u0, v[0]).to_vec() * (1.0 - q) + surface.subs(u0, v[1]).to_vec() * q;
-                let bend_u = p0.distance2(Point3::from_vec(alu)) > tol * tol;
-                let bend_v = p0.distance2(Point3::from_vec(alv)) > tol * tol;
+                let du = p0.distance2(Point3::from_vec(alu));
+                let dv = p0.distance2(Point3::from_vec(alv));
+                if !du.is_finite() || !dv.is_finite() { mark_unresolved(unresolved_tolerance); }
+                let bend_u = du > tol * tol;
+                let bend_v = dv > tol * tol;
                 if bend_u || bend_v {
                     fu[i] |= bend_u;
                     fv[j] |= bend_v;
@@ -825,7 +849,8 @@ fn bounded_surface_division<S: PreMeshableSurface>(surface: &S, (ur, vr): ((f64,
         if nu == udiv.len() && nv == vdiv.len() {
             break;
         }
-        if nu.saturating_mul(nv) > cap {
+        if nu.saturating_mul(nv) > cap || (iteration == 23 && unresolved_tolerance.is_some()) {
+            mark_unresolved(unresolved_tolerance);
             break;
         }
         let refine = |d: &[f64], f: &[bool]| {
@@ -848,7 +873,7 @@ fn bounded_surface_division<S: PreMeshableSurface>(surface: &S, (ur, vr): ((f64,
 /// the other. A ruled surface (cylinder, cone) needs no division along its rulings, and the
 /// triangles that then join a trimming loop to the far ends of the grid cut through the
 /// surface (a cylinder with a hole lost volume this way).
-fn balanced_grid(surface: &impl PreMeshableSurface, udiv: Vec<f64>, vdiv: Vec<f64>, cap: usize) -> (Vec<f64>, Vec<f64>) {
+fn balanced_grid(surface: &impl PreMeshableSurface, udiv: Vec<f64>, vdiv: Vec<f64>, cap: usize, unresolved_tolerance: Option<&AtomicBool>) -> (Vec<f64>, Vec<f64>) {
     let mid = |d: &[f64]| if d.is_empty() { 0.0 } else { d[d.len() / 2] };
     let (um, vm) = (mid(&udiv), mid(&vdiv));
     let step = |d: &[f64], along_u: bool| -> Vec<f64> {
@@ -892,6 +917,7 @@ fn balanced_grid(surface: &impl PreMeshableSurface, udiv: Vec<f64>, vdiv: Vec<f6
     if total <= cap {
         return (u2, v2);
     }
+    mark_unresolved(unresolved_tolerance);
     let f = (total as f64 / cap.max(4) as f64).sqrt();
     let thin = |d: Vec<f64>| -> Vec<f64> {
         let n = ((d.len() as f64 / f).ceil() as usize).max(2);
@@ -977,13 +1003,13 @@ fn par_bench() {
 
     let instant = Instant::now();
     (0..100).for_each(|_| {
-        let _shell = shell_tessellation(&shell, 0.01, by_search_parameter);
+        let _shell = shell_tessellation(&shell, 0.01, by_search_parameter, None);
     });
     println!("{}ms", instant.elapsed().as_millis());
 
     let instant = Instant::now();
     (0..100).for_each(|_| {
-        let _shell = shell_tessellation_single_thread(&shell, 0.01, by_search_parameter);
+        let _shell = shell_tessellation_single_thread(&shell, 0.01, by_search_parameter, None);
     });
     println!("{}ms", instant.elapsed().as_millis());
 }

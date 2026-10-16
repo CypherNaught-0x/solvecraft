@@ -385,4 +385,31 @@ mod tests {
         assert!(job.snapshot.lock().unwrap().is_none());
         assert_eq!(job.progress.load(Ordering::Relaxed), 100);
     }
+
+    #[test]
+    fn cam_snapshot_uses_fixed_tolerance_for_large_curved_geometry() {
+        let mut session = Session::default();
+        session.execute("solid.cylinder", &json!({"radius":5000,"height":6})).unwrap();
+        let mut recipe = cam::corpus::fixture("face").unwrap();
+        recipe.setup.models[0].body = session.model.state().bodies[0].name.clone();
+        recipe.setup.stock.min = crate::geom::Vec3::new(-5000., -5000., 0.);
+        recipe.setup.stock.max = crate::geom::Vec3::new(5000., 5000., 7.);
+        let manufacturing = &mut session.doc_mut().manufacturing;
+        manufacturing.setups.push(recipe.setup);
+        manufacturing.tools = recipe.tools;
+        manufacturing.operations = recipe.operations;
+        manufacturing.programs.push(cam::Program { id: 1, name: "Large cylinder".into(), setup: 1, operations: vec![1] });
+        let prepared = input(&session, 1).unwrap();
+        let mut checked = 0;
+        for triangle in &prepared.geometry.target {
+            if triangle.iter().any(|p| p.z < 1.) && triangle.iter().any(|p| p.z > 5.) {
+                for i in 0..3 {
+                    let midpoint = (triangle[i] + triangle[(i + 1) % 3]) * 0.5;
+                    assert!((5000. - midpoint.x.hypot(midpoint.y)).abs() <= cam::VERIFY_ERROR / 2.);
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 1000);
+    }
 }

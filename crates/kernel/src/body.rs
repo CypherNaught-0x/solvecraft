@@ -120,6 +120,27 @@ fn mesh_shells(solid: &Solid, tol: f64) -> Vec<MeshedShell> {
         .collect()
 }
 
+fn mesh_shells_checked(solid: &Solid, tol: f64) -> Result<Vec<MeshedShell>> {
+    solid
+        .boundaries()
+        .iter()
+        .map(|shell| {
+            let evaluated: truck_topology::Shell<mt::Point3, mt::Curve, evaluation::Surface> = shell
+                .face_iter()
+                .map(|face| {
+                    let mut face_mesh = truck_topology::Face::new_unchecked(face.absolute_boundaries().clone(), evaluation::Surface(face.surface()));
+                    if !face.orientation() {
+                        face_mesh.invert();
+                    }
+                    face_mesh
+                })
+                .collect();
+            truck_meshalgo::tessellation::robust_triangulation_checked(&evaluated, tol)
+                .ok_or_else(|| KernelError::Failed("verification tessellation cannot meet tolerance within refinement budget".into()))
+        })
+        .collect()
+}
+
 /// A face's triangles (corner positions and normals, in the mesh's winding) with every edge
 /// whose middle sags more than `tol` from the surface split there, found through the mesh's
 /// surface parameters. A split depends on the edge alone, so neighbours stay conforming.
@@ -644,16 +665,53 @@ impl Body {
     pub fn tessellate_with(&self, tol: f64, refine: bool) -> Result<Mesh> {
         let tol = if tol.is_finite() && tol > 0.0 { tol } else { 0.05 };
         let tol = tol.max(self.size() * 1e-6);
+        self.tessellate_impl(tol, refine, None)
+    }
+
+    /// Fixed physical chord tolerance for verification, without the display mesher's
+    /// size-dependent tolerance floor or display-only planar reprojection. Missing
+    /// faces and excessive output are errors, never a partially accepted body.
+    /// A third-party shell triangulation remains an atomic operation.
+    pub fn tessellate_for_verification(&self, tol: f64, triangle_limit: usize) -> Result<Mesh> {
+        if !tol.is_finite() || tol <= 0.0 || triangle_limit == 0 || triangle_limit > 2_000_000 {
+            return Err(KernelError::Invalid("verification tessellation needs positive finite tolerance and 1–2000000 triangles".into()));
+        }
+        self.tessellate_impl(tol, false, Some(triangle_limit))
+    }
+
+    fn tessellate_impl(&self, tol: f64, refine: bool, triangle_limit: Option<usize>) -> Result<Mesh> {
         if let Some(m) = &self.mesh {
+            if triangle_limit.is_some_and(|limit| m.triangles.len() > limit) {
+                return Err(KernelError::Failed("verification tessellation exceeds triangle budget".into()));
+            }
             return Ok(m.to_mesh());
         }
         guard("tessellate", || {
-            let meshed = mesh_shells(&self.solid, tol);
+            let meshed = if triangle_limit.is_some() { mesh_shells_checked(&self.solid, tol)? } else { mesh_shells(&self.solid, tol) };
             let mut out = Mesh::default();
             let solid_faces: Vec<&mt::Face> = self.solid.face_iter().collect();
+            if triangle_limit.is_some()
+                && (solid_faces.is_empty() || meshed.iter().map(|shell| shell.face_iter().count()).sum::<usize>() != solid_faces.len())
+            {
+                return Err(KernelError::Failed("verification tessellation has missing faces".into()));
+            }
             for (fi, face) in meshed.iter().flat_map(|s| s.face_iter()).enumerate() {
-                let Some(pm) = face.surface() else { continue };
-                let projected = solid_faces.get(fi).and_then(|f| match f.surface() {
+                let Some(pm) = face.surface() else {
+                    if triangle_limit.is_some() {
+                        return Err(KernelError::Failed(format!("verification tessellation could not mesh face {fi}")));
+                    }
+                    continue;
+                };
+                let count = pm.faces().triangle_iter().count();
+                if let Some(limit) = triangle_limit {
+                    if count == 0 {
+                        return Err(KernelError::Failed(format!("verification tessellation produced no triangles for face {fi}")));
+                    }
+                    if count > limit.saturating_sub(out.triangles.len()) {
+                        return Err(KernelError::Failed("verification tessellation exceeds triangle budget".into()));
+                    }
+                }
+                let projected = solid_faces.get(fi).filter(|_| triangle_limit.is_none()).and_then(|f| match f.surface() {
                     mt::Surface::BSplineSurface(s) if s.degrees() == (5, 5) => {
                         evaluation::display_projection(&s, pm.normals()).and_then(|n| retriangulate_projected(&pm, mt::Vector3::new(n.x, n.y, n.z)))
                     }
@@ -1015,3 +1073,7 @@ impl Body {
 #[cfg(test)]
 #[path = "body_lump_tests.rs"]
 mod lump_tests;
+
+#[cfg(test)]
+#[path = "body_verification_tests.rs"]
+mod verification_tests;

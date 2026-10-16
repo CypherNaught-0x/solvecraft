@@ -102,7 +102,7 @@ checks catch stationary contact and tools already inside fixtures. Body groups p
 cavities and prevent opposite winding in separate fixtures from cancelling. Open/nonmanifold
 meshes, clearance within the interpolation/refinement margin, and failed numerical queries remain
 **inconclusive**. It does not call offset or toolpath-generation algorithms and observes cancellation
-during topology preparation and collision queries. The current algorithm fingerprint is `cam/16`;
+during topology preparation and collision queries. The current algorithm fingerprint is `cam/17`;
 the boundary validation and offset adapter changes invalidate older generated/verified caches.
 No target fitting, translation, unit guessing or discarded unknown NC commands is allowed.
 
@@ -174,7 +174,14 @@ Protected height-field boundaries use local spatial certificates. A conservative
 height at a neighboring XY point bounds distance to the outside of the protected solid for an
 entire potentially removed cell column. A gouge is reported only with a definitely removed point
 inside a protected volume by more than tolerance. Clearance reserves 0.001 mm post/interpolation
-error plus the 0.0025 mm verifier budget; CAD tessellation requests half that verifier budget.
+error plus the 0.0025 mm verifier budget; CAD tessellation uses half that verifier budget as a fixed physical tolerance. It bypasses the
+display mesher's size-dependent tolerance floor and planar display reprojection. Exhausted edge
+or surface refinement, non-finite evaluations, missing faces and excessive triangle output fail
+preparation instead of accepting a coarser or partial target. The original large-cylinder
+regression (radius 5000 mm) previously had 0.00954 mm radial chord error for a 0.00125 mm
+request; the verification path reduces it below 0.00125 mm, including through engine snapshot
+preparation. These checks expose known mesher fallbacks; they are not an analytic approximation
+proof for arbitrary oscillatory surfaces.
 Queries use an independent XY index, observe work limits and cancellation, and leave unsuccessful
 certificates explicitly inconclusive with a `protected_surface_unresolved` finding.
 
@@ -495,3 +502,17 @@ A local Chrome 155 release-Wasm generation probe on 2026-10-16 produced 6,674 bl
 compared with 6.4 ms for the 1,400-vertex case. Validation is cooperative, but the library offset
 query remains atomic. This records an unresolved responsiveness limit; it is not a guarantee of
 frame-rate responsiveness. The probe excludes CAD preparation and stock verification.
+
+
+A 2026-10-16 primitive probe measures the remaining atomic work separately from machining
+acceptance. A 100-island pocket with 9,904 vertices emits 80,307 blocks with a maximum 9.7 ms
+scheduler batch. Hashing 1,000 setup references or 10,000 profile curve IDs (256-byte names and
+64-element occurrence paths) takes batches up to 3.2 ms and 8.0 ms respectively. These original
+synthetic probes test computation; they do not supply matching intended geometry for dimensional
+acceptance. Fixed-tolerance CAD cylinder tessellation takes about 12 ms at radius 10 mm,
+102 ms at radius 500 mm and 1,087 ms at radius 5000 mm, producing 3,560, 8,188 and 28,382
+triangles. The largest case now respects the requested 0.00125 mm chord tolerance instead of
+silently coarsening it. Native preparation runs on its worker, but a Wasm shell tessellation is
+still atomic and the measured large-body stall remains a browser responsiveness gap. Local
+before/after evidence is in `target/cam-web-probe/primitive-baseline.json` and
+`primitive-fixed.json`; output budgets and tolerances were not relaxed.

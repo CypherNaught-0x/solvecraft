@@ -20,6 +20,22 @@ pub use parallelizable::*;
 
 pub use triangulation::retriangulate_projected;
 
+/// SolveCraft: report exhausted refinement budgets or non-finite evaluations instead
+/// of accepting the display mesher's coarser fallback. This records the bounded
+/// mesher's tolerance checks; it is not a proof for arbitrary oscillatory surfaces.
+pub fn robust_triangulation_checked<C: PolylineableCurve, S: RobustMeshableSurface>(
+    shell: &Shell<Point3, C, S>, tol: f64,
+) -> Option<Shell<Point3, PolylineCurve, Option<PolygonMesh>>> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    if !tol.is_finite() || tol <= 0.0 { return None; }
+    let unresolved = AtomicBool::new(false);
+    #[cfg(not(target_arch = "wasm32"))]
+    let result = triangulation::shell_tessellation(shell, tol, triangulation::by_search_nearest_parameter, Some(&unresolved));
+    #[cfg(target_arch = "wasm32")]
+    let result = triangulation::shell_tessellation_single_thread(shell, tol, triangulation::by_search_nearest_parameter, Some(&unresolved));
+    (!unresolved.load(Ordering::Relaxed)).then_some(result)
+}
+
 /// Gathered the traits used in tessellation.
 pub trait PolylineableCurve:
     ParametricCurve3D + BoundedCurve + ParameterDivision1D<Point = Point3> + Parallelizable {
@@ -260,12 +276,13 @@ impl<C: PolylineableCurve, S: MeshableSurface> MeshableShape for Shell<Point3, C
     fn triangulation(&self, tol: f64) -> Self::MeshedShape {
         nonpositive_tolerance!(tol);
         #[cfg(not(target_arch = "wasm32"))]
-        let res = triangulation::shell_tessellation(self, tol, triangulation::by_search_parameter);
+        let res = triangulation::shell_tessellation(self, tol, triangulation::by_search_parameter, None);
         #[cfg(target_arch = "wasm32")]
         let res = triangulation::shell_tessellation_single_thread(
             self,
             tol,
             triangulation::by_search_parameter,
+            None,
         );
         res
     }
@@ -280,12 +297,14 @@ impl<C: PolylineableCurve, S: RobustMeshableSurface> RobustMeshableShape for She
             self,
             tol,
             triangulation::by_search_nearest_parameter,
+            None,
         );
         #[cfg(target_arch = "wasm32")]
         let res = triangulation::shell_tessellation_single_thread(
             self,
             tol,
             triangulation::by_search_nearest_parameter,
+            None,
         );
         res
     }

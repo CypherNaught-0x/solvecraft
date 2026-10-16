@@ -181,7 +181,7 @@ impl PlacedBody {
         cancelled(check)?;
         yield_control().await;
         cancelled(check)?;
-        let mesh = self.body.body.tessellate(cam::VERIFY_ERROR / 2.)?;
+        let mesh = self.body.body.tessellate_for_verification(cam::VERIFY_ERROR / 2., 200_000usize.saturating_sub(out.len()))?;
         if out.len() + mesh.triangles.len() > 200_000 {
             return Err(error("CAM mesh exceeds verification budget"));
         }
