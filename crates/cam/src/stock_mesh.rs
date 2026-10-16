@@ -531,9 +531,19 @@ pub(crate) async fn triangles_cooperative<F: Future<Output = ()>>(
 }
 
 pub(crate) fn stl(report: &Report, bottom: f64) -> Result<String> {
-    let mesh = triangles(report, bottom)?;
+    ready(stl_cooperative(report, bottom, || false, || std::future::ready(())))
+}
+pub(crate) async fn stl_cooperative<F: Future<Output = ()>>(
+    report: &Report,
+    bottom: f64,
+    cancelled: impl Fn() -> bool,
+    yield_control: impl FnMut() -> F,
+) -> Result<String> {
+    let mut work = Work { cancelled, yield_control, remaining: 0 };
+    let mesh = boundary(report, bottom, &mut work).await?.triangles;
     let mut out = String::from("solid cam_remaining_stock\n");
     for triangle in mesh {
+        work.tick().await?;
         out.push_str("facet normal 0 0 0\nouter loop\n");
         for p in triangle {
             out.push_str(&format!("vertex {} {} {}\n", p.x, p.y, p.z));
@@ -544,6 +554,8 @@ pub(crate) fn stl(report: &Report, bottom: f64) -> Result<String> {
         }
     }
     out.push_str("endsolid cam_remaining_stock\n");
+    work.remaining = 0;
+    work.tick().await?;
     Ok(out)
 }
 

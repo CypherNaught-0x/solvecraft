@@ -46,10 +46,11 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("MILLING", "EXPORT")
         .icon("save")
         .noundo()
-        .params("job: ID, path?: string; requires current passing verification"),
+        .params("job: ID, path?: string, background?: bool; requires current passing verification; background output is published by cam.export.result"),
     CommandSpec::new("cam.export", "Export CAM Artifact", export)
         .noundo()
-        .params("job: ID, format: toolpath|setup_sheet|stock|validation, path?: string"),
+        .params("job: ID, format: toolpath|setup_sheet|stock|validation, path?: string, background?: bool; background output is published by cam.export.result"),
+    CommandSpec::new("cam.export.result", "Collect CAM Export", export_result).noundo().params("job: ID; consumes completed output after checking freshness; writes the requested path or returns content"),
 ];
 fn from_holes(s: &mut Session, p: &Value) -> Result<Value> {
     let setup = id(p, "setup")?;
@@ -237,6 +238,7 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
                 "findings":r.findings,"cells":r.cells.len(),"work":r.work});
         }
     }
+    v["export"] = jobs::exports::status(&job)?;
     Ok(v)
 }
 fn cancel(s: &mut Session, p: &Value) -> Result<Value> {
@@ -248,6 +250,9 @@ fn cancel(s: &mut Session, p: &Value) -> Result<Value> {
 fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
     let job = jobs::job(s, id(p, "job")?)?;
     jobs::current(s, &job)?;
+    if jobs::exports::busy(&job)? {
+        return Err(EngineError::Other("finish or cancel the current export first".into()));
+    }
     let path = match job.state()? {
         jobs::JobState::Generated(p) | jobs::JobState::Verified(p, _) => p,
         _ => return Err(EngineError::Other("generate a path first; another job may still be running".into())),
@@ -273,6 +278,10 @@ fn post(s: &mut Session, p: &Value) -> Result<Value> {
     if report.status != cam::verify::Status::Pass || report.finished_dimensions != cam::verify::Status::Pass || !report.stock_complete {
         return Err(EngineError::Other("posting blocked by failed or inconclusive verification".into()));
     }
+    if p.get("background").and_then(Value::as_bool).unwrap_or(false) {
+        jobs::exports::start(job, "gcode".into(), p.get("path").and_then(Value::as_str).map(str::to_owned))?;
+        return status(s, p);
+    }
     cam::nc::round_trip(&path, &job.input()?.setup, &job.input()?.tools).map_err(jobs::error)?;
     output(p, cam::nc::post(&path, &job.input()?.setup).map_err(jobs::error)?)
 }
@@ -285,13 +294,82 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(EngineError::Other("no generated result".into())),
     };
     let format = p.get("format").and_then(Value::as_str).unwrap_or("validation");
+    if p.get("background").and_then(Value::as_bool).unwrap_or(false) {
+        jobs::exports::start(job, format.into(), p.get("path").and_then(Value::as_str).map(str::to_owned))?;
+        return status(s, p);
+    }
     output(p, crate::io::cam::artifact(job.input()?, &path, report.as_deref(), format)?)
+}
+
+fn export_result(s: &mut Session, p: &Value) -> Result<Value> {
+    let job = jobs::job(s, id(p, "job")?)?;
+    jobs::current(s, &job)?;
+    let (content, destination) = jobs::exports::take(&job)?;
+    output(&destination.map_or_else(|| json!({}), |path| json!({"path":path})), content)
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    fn wait_export(s: &mut Session, job: u64) -> Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let status = s.execute("cam.job.status", &json!({"job":job})).unwrap();
+            if status["export"]["state"] != "running" {
+                return status;
+            }
+            assert!(std::time::Instant::now() < deadline, "export worker timeout");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    #[test]
+    fn background_exports_only_publish_complete_current_results_once() {
+        let mut s = configured();
+        let job = s.execute("cam.generate", &json!({"program":1})).unwrap()["job"].as_u64().unwrap();
+        s.execute("cam.simulate", &json!({"job":job})).unwrap();
+        for format in ["toolpath", "validation", "setup_sheet", "stock", "gcode"] {
+            let cmd = if format == "gcode" { "cam.post" } else { "cam.export" };
+            let expected = s.execute(cmd, &json!({"job":job,"format":format})).unwrap()["content"].as_str().unwrap().to_owned();
+            s.execute(cmd, &json!({"job":job,"format":format,"background":true})).unwrap();
+            assert!(s.execute(cmd, &json!({"job":job,"format":format,"background":true})).is_err());
+            let status = wait_export(&mut s, job);
+            assert_eq!(status["export"]["state"], "ready", "{status}");
+            let actual = s.execute("cam.export.result", &json!({"job":job})).unwrap()["content"].as_str().unwrap().to_owned();
+            match format {
+                "toolpath" | "validation" => {
+                    assert_eq!(serde_json::from_str::<Value>(&actual).unwrap(), serde_json::from_str::<Value>(&expected).unwrap())
+                }
+                "setup_sheet" => assert!(actual.contains("<h2>Operation settings and selected geometry</h2>")),
+                _ => assert_eq!(actual, expected),
+            }
+            assert!(s.execute("cam.export.result", &json!({"job":job})).is_err());
+        }
+        let path = std::env::temp_dir().join(format!("solvecraft-cam-export-{}.nc", std::process::id()));
+        s.execute("cam.post", &json!({"job":job,"background":true,"path":path})).unwrap();
+        assert_eq!(wait_export(&mut s, job)["export"]["state"], "ready");
+        assert!(!path.exists());
+        s.execute("cam.export.result", &json!({"job":job})).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("G21"));
+        std::fs::remove_file(&path).unwrap();
+        s.execute("cam.post", &json!({"job":job,"background":true,"path":path})).unwrap();
+        wait_export(&mut s, job);
+        let mut tool = s.doc.manufacturing.tools[0].clone();
+        tool.diameter += 0.1;
+        s.execute("cam.tool.put", &json!({"tool":tool})).unwrap();
+        assert!(s.execute("cam.export.result", &json!({"job":job})).unwrap_err().to_string().contains("stale"));
+        assert!(!path.exists());
+    }
+    #[test]
+    fn cancelling_a_background_export_cannot_publish_or_restart_it() {
+        let mut s = configured();
+        let job = s.execute("cam.generate", &json!({"program":1})).unwrap()["job"].as_u64().unwrap();
+        s.execute("cam.export", &json!({"job":job,"format":"toolpath","background":true})).unwrap();
+        s.execute("cam.job.cancel", &json!({"job":job})).unwrap();
+        assert_eq!(wait_export(&mut s, job)["export"]["state"], "cancelled");
+        assert!(s.execute("cam.export.result", &json!({"job":job})).is_err());
+        assert!(s.execute("cam.export", &json!({"job":job,"format":"toolpath","background":true})).is_err());
+    }
     fn configured() -> Session {
         let mut s = Session::default();
         s.execute("solid.box", &json!({"length":20,"width":20,"height":4})).unwrap();

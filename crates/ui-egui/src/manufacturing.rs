@@ -12,6 +12,7 @@ pub struct State {
     editor: Option<Editor>,
     pub program: u64,
     pub job: Option<u64>,
+    pending_export: Option<u64>,
     pub playback: usize,
     pub playing: bool,
     pub finding: Option<usize>,
@@ -133,6 +134,10 @@ pub fn start(app: &mut SolveApp, id: &str) {
     }
 }
 fn export(app: &mut SolveApp, format: &str) {
+    if app.manufacturing.pending_export.is_some() {
+        app.set_status("Finish or cancel the current export first", true);
+        return;
+    }
     let Some(job) = app.manufacturing.job else {
         app.set_status("Generate a program first", true);
         return;
@@ -145,7 +150,41 @@ fn export(app: &mut SolveApp, format: &str) {
     };
     if let Some(path) = app.services.pick_save.as_ref().and_then(|f| f(&format!("milling.{ext}"), &[ext])) {
         let cmd = if format == "gcode" { "cam.post" } else { "cam.export" };
-        let _ = app.run(cmd, json!({"job":job,"format":format,"path":path}));
+        if app.run(cmd, json!({"job":job,"format":format,"path":path,"background":true})).is_ok() {
+            app.manufacturing.pending_export = Some(job);
+            app.set_status("Preparing machining export…", false);
+        }
+    }
+}
+/// Collect through a command only after the worker finishes; the command rechecks freshness.
+pub(crate) fn update_exports(app: &mut SolveApp, ctx: &egui::Context) {
+    let Some(id) = app.manufacturing.pending_export else {
+        return;
+    };
+    let state = solvecraft_engine::manufacturing::job(&app.session, id).and_then(|job| {
+        if let JobState::Failed(error) = job.state()? {
+            return Err(solvecraft_engine::EngineError::Other(error));
+        }
+        solvecraft_engine::manufacturing::exports::status(&job)
+    });
+    match state {
+        Ok(state) if state["state"] == "running" => {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        Ok(state) if state["state"] == "ready" => {
+            app.manufacturing.pending_export = None;
+            if let Ok(result) = app.run("cam.export.result", json!({"job":id})) {
+                app.set_status(format!("Export saved · {} bytes", result["bytes"]), false);
+            }
+        }
+        other => {
+            app.manufacturing.pending_export = None;
+            let message = match other {
+                Ok(state) => state["error"].as_str().unwrap_or("CAM export cancelled").to_owned(),
+                Err(error) => error.to_string(),
+            };
+            app.set_status(message, true);
+        }
     }
 }
 pub fn panel(app: &mut SolveApp, ui: &mut egui::Ui) {
@@ -271,6 +310,10 @@ pub fn panel(app: &mut SolveApp, ui: &mut egui::Ui) {
                     }
                     if app.manufacturing.finding.is_some() && ui.small_button("Clear issue marker").clicked() {
                         app.manufacturing.finding = None;
+                    }
+                    if app.manufacturing.pending_export == Some(id) {
+                        ui.spinner();
+                        ui.label("Preparing export…");
                     }
                     if ui.button("Cancel job").clicked() {
                         let _ = app.run("cam.job.cancel", json!({"job":id}));
@@ -893,6 +936,18 @@ mod tests {
         h.step(&json!({"widget":"To start"})).unwrap();
         h.frames(2);
         assert_eq!(h.app.manufacturing.playback, 0);
+        let export_path = std::env::temp_dir().join(format!("solvecraft-cam-ui-export-{}.nc", std::process::id()));
+        let picked = export_path.clone();
+        h.app.services.pick_save = Some(Box::new(move |_, _| Some(picked.to_string_lossy().into_owned())));
+        h.step(&json!({"start":"cam.post"})).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while h.app.manufacturing.pending_export.is_some() {
+            h.frames(1);
+            assert!(std::time::Instant::now() < deadline, "UI export did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(std::fs::read_to_string(&export_path).unwrap().contains("G21"));
+        std::fs::remove_file(export_path).unwrap();
         h.app.run("solid.box", json!({"length":1,"width":1,"height":1})).unwrap();
         assert!(view::stock(&h.app).is_none());
         assert!(h.app.run("cam.inspect", json!({"job":job,"include_stock":true})).is_err());

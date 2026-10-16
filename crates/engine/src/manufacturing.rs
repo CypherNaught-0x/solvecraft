@@ -1,5 +1,6 @@
 //! Immutable CAM jobs, independent of the desktop UI and document undo state.
 use crate::{EngineError, Result, Session, cam};
+pub mod exports;
 pub(crate) mod holes;
 mod snapshot;
 use std::collections::BTreeMap;
@@ -19,6 +20,7 @@ pub struct Job {
     input: Arc<OnceLock<cam::JobInput>>,
     snapshot: Mutex<Option<snapshot::Snapshot>>,
     stock: Arc<Mutex<Option<std::result::Result<Arc<crate::geom::Mesh>, String>>>>,
+    pub(crate) export: Arc<Mutex<exports::State>>,
     pub cancelled: Arc<AtomicBool>,
     #[cfg(target_arch = "wasm32")]
     pending: Mutex<Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<JobState>>>>>>,
@@ -72,6 +74,7 @@ pub fn start(s: &mut Session, program: u64, background: bool) -> Result<u64> {
     if s.cam_jobs.jobs.len() >= 16 {
         let removable = s.cam_jobs.jobs.iter().find_map(|(id, j)| match j.state() {
             Ok(JobState::Preparing | JobState::Running | JobState::Verifying(_)) => None,
+            Ok(JobState::Generated(_) | JobState::Verified(..)) if exports::busy(j).unwrap_or(true) => None,
             _ => Some(*id),
         });
         if let Some(id) = removable {
@@ -87,6 +90,7 @@ pub fn start(s: &mut Session, program: u64, background: bool) -> Result<u64> {
         input: Arc::new(OnceLock::new()),
         snapshot: Mutex::new(Some(snapshot)),
         stock: Arc::new(Mutex::new(None)),
+        export: Arc::new(Mutex::new(exports::State::Idle)),
         cancelled: Arc::new(AtomicBool::new(false)),
         #[cfg(target_arch = "wasm32")]
         pending: Mutex::new(None),
@@ -224,8 +228,14 @@ async fn stock_display(report: &cam::verify::Report, frame: cam::Frame, bottom: 
     Ok(mesh)
 }
 fn run(job: Arc<Job>, verify: bool) {
+    match task(&job, verify) {
+        Ok(future) => run_future(job, future, true),
+        Err(e) => job.set(JobState::Failed(e.to_string())),
+    }
+}
+fn run_future(job: Arc<Job>, future: impl std::future::Future<Output = Result<JobState>>, publish_state: bool) {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<JobState> {
-        let mut future = std::pin::pin!(task(&job, verify)?);
+        let mut future = std::pin::pin!(future);
         loop {
             if job.cancelled.load(Ordering::Relaxed) {
                 return Ok(JobState::Cancelled);
@@ -242,7 +252,13 @@ fn run(job: Arc<Job>, verify: bool) {
         Ok(Err(e)) => JobState::Failed(e.to_string()),
         Err(_) => JobState::Failed("CAM worker failed; no result published".into()),
     };
-    job.set(state);
+    if publish_state {
+        job.set(state);
+    } else if let JobState::Failed(error) = state
+        && let Ok(mut export) = job.export.lock()
+    {
+        *export = exports::State::Failed(error);
+    }
 }
 pub fn job(s: &Session, id: u64) -> Result<Arc<Job>> {
     s.cam_jobs.jobs.get(&id).cloned().ok_or_else(|| EngineError::Other("CAM job missing; regenerate after reopening".into()))
@@ -319,6 +335,7 @@ mod tests {
             input: Arc::new(OnceLock::new()),
             snapshot: Mutex::new(Some(snapshot::Snapshot::capture(&s, 1).unwrap())),
             stock: Arc::new(Mutex::new(None)),
+            export: Arc::new(Mutex::new(exports::State::Idle)),
             cancelled: Arc::new(AtomicBool::new(false)),
             #[cfg(target_arch = "wasm32")]
             pending: Mutex::new(None),
@@ -327,6 +344,35 @@ mod tests {
         });
         (s, job)
     }
+    #[test]
+    fn completed_export_worker_cannot_restore_state_after_result_collection() {
+        let (_, job) = captured();
+        let ready = Arc::new(std::sync::Barrier::new(2));
+        let collected = Arc::new(std::sync::Barrier::new(2));
+        let worker_job = job.clone();
+        let worker_ready = ready.clone();
+        let worker_collected = collected.clone();
+        let worker = std::thread::spawn(move || {
+            let result = worker_job.export.clone();
+            run_future(
+                worker_job,
+                async move {
+                    *result.lock().unwrap() = exports::State::Ready { content: "complete".into(), destination: None };
+                    worker_ready.wait();
+                    worker_collected.wait();
+                    Ok(JobState::Preparing)
+                },
+                false,
+            );
+        });
+        ready.wait();
+        assert_eq!(exports::take(&job).unwrap().0, "complete");
+        job.set(JobState::Running);
+        collected.wait();
+        worker.join().unwrap();
+        assert!(matches!(job.state().unwrap(), JobState::Running));
+    }
+
     #[test]
     fn snapshot_is_immutable_and_preparation_is_deferred() {
         let (mut s, job) = captured();

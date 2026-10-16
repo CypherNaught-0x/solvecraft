@@ -1,10 +1,29 @@
 //! CAM artifact serialization. The engine owns freshness and posting gates.
-use crate::{IoError, Result};
+mod incremental;
+pub use incremental::artifact_cooperative;
+
+#[cfg(test)]
+use crate::IoError;
+use crate::Result;
 use solvecraft_cam::{JobInput, Toolpath, verify::Report};
 pub fn escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
+/// Synchronous compatibility wrapper; interactive clients use the cooperative entry point.
 pub fn artifact(input: &JobInput, path: &Toolpath, report: Option<&Report>, format: &str) -> Result<String> {
+    let mut future = std::pin::pin!(artifact_cooperative(input, path, report, format, || false, || std::future::ready(())));
+    loop {
+        if let std::task::Poll::Ready(result) =
+            std::future::Future::poll(future.as_mut(), &mut std::task::Context::from_waker(std::task::Waker::noop()))
+        {
+            return result;
+        }
+    }
+}
+
+// Original serializer retained only as an independent schema/escaping oracle in tests.
+#[cfg(test)]
+fn reference_artifact(input: &JobInput, path: &Toolpath, report: Option<&Report>, format: &str) -> Result<String> {
     let json = |v: serde_json::Value| serde_json::to_string_pretty(&v).map_err(|e| IoError::Invalid(e.to_string()));
     match format {
         "toolpath" => json(serde_json::json!({"version":solvecraft_cam::VERSION,"input":input,"toolpath":path})),

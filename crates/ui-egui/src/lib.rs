@@ -796,6 +796,7 @@ impl SolveApp {
 
     /// Per-frame logic before layout.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        manufacturing::update_exports(self, ctx);
         #[cfg(target_arch = "wasm32")]
         manufacturing::advance(self, ctx);
 

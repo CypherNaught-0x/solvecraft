@@ -568,6 +568,16 @@ pub fn stock_stl(report: &Report, bottom: f64) -> Result<String> {
     crate::stock_mesh::stl(report, bottom)
 }
 
+/// Incremental extraction and ASCII serialization. Cancellation returns no partial artifact.
+pub async fn stock_stl_cooperative<F: std::future::Future<Output = ()>>(
+    report: &Report,
+    bottom: f64,
+    cancelled: impl Fn() -> bool,
+    yield_control: impl FnMut() -> F,
+) -> Result<String> {
+    crate::stock_mesh::stl_cooperative(report, bottom, cancelled, yield_control).await
+}
+
 /// The same conforming conservative boundary as `stock_stl`, without serialization.
 /// Coordinates are in the setup frame. An empty mesh represents fully removed stock.
 pub fn stock_triangles(report: &Report, bottom: f64) -> Result<Vec<[Vec3; 3]>> {

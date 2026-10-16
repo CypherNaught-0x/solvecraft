@@ -29,8 +29,20 @@ The Manufacture workspace, CLI and MCP share these registered commands:
 | `cam.job.status`, `cam.job.cancel` | `{job}` |
 | `cam.inspect` | `{job?, include_path?, include_stock?, motion?, finding?}`: world-space stock display mesh and machine state after the requested number of motion blocks |
 | `cam.simulate` | `{job, background?}`: independent post round trip and stock/clearance checks |
-| `cam.post` | `{job,path?}`: requires fresh generated paths and passing verification |
-| `cam.export` | `{job,format,path?}`: `toolpath`, `setup_sheet`, `stock`, `validation` |
+| `cam.post` | `{job,path?,background?}`: requires fresh generated paths and passing verification |
+| `cam.export` | `{job,format,path?,background?}`: `toolpath`, `setup_sheet`, `stock`, `validation` |
+| `cam.export.result` | `{job}`: consumes completed background output after checking freshness; writes its requested path or returns content |
+
+UI export and posting use background jobs: a native worker or the browser's cooperative scheduler
+builds the complete artifact from the immutable snapshot. `cam.job.status` includes an `export`
+state (`idle`, `running`, `ready`, `failed`, `cancelled`). `cam.export.result` rechecks document and
+occurrence freshness before consuming output and atomically writing the requested destination.
+No file is written before this collection command. Cancellation returns no partial artifact;
+`cam.job.cancel` cancels the job, including its export. One pending/ready export per job is allowed.
+The UI collects completion through that same command and displays export progress and errors.
+Programmatic calls default to the existing synchronous behavior. JSON values and stock geometry
+are preserved; incremental JSON can use different whitespace and object-key order. Artifacts are
+bounded to 128 MiB; exhausted output budgets fail explicitly.
 
 All dimensions are mm; speeds are mm/min and rpm; angles in the command model are radians.
 The UI displays tool and ramp angles in degrees. IDs must be nonzero and unique per item kind.
@@ -209,8 +221,9 @@ evidence and the remaining finite gates are:
   round-robin order; status queries advance one checkpoint. This target is checked between polls,
   so it is not a hard deadline. Measured dense offset, large-body tessellation and long-reference
   encoding remain atomic for about 21.2, 90.8 and 8 ms respectively on the documented browser.
-  Direct export timing is still unmeasured except for NC posting. Complete that finite timing
-  assessment and record any needed responsiveness changes before closing browser acceptance.
+  The previously synchronous export path is now incremental: original large export probes measure
+  batches at most4.3ms, with no batch above16ms; direct synchronous command calls remain atomic.
+  The measured geometry calls above remain explicit scheduling limits, not a hard deadline.
   Native background jobs perform profile sampling, tessellation, transforms and hashing on the
   worker from an immutable snapshot. Synchronous command calls remain available. Status distinguishes
   `preparing` from `running`; the fingerprint is null until preparation completes. Cancellation
@@ -548,3 +561,27 @@ The uninstrumented production release-Wasm follow-up measured 10.3 / 27.2 / 90.8
 baseline. The largest case remains an approximately 91 ms atomic step on this machine; no
 hard scheduling deadline or full browser responsiveness claim follows from this measurement.
 Evidence: `target/cam-web-probe/tessellation-production-index.json`.
+
+
+## Incremental export acceptance
+
+A quiet Chrome155 release-Wasm probe with an original 200,000-block path measured synchronous
+toolpath JSON up to296.7ms and posting/roundtrip342.5–360.8ms. An original tiled height field
+with40,000cells exported34,051,171bytes of STL in540.5ms; validation JSON took35.5ms. These are
+serialization/resource measurements, not claims that a synthetic report passed machining checks.
+The incremental path avoids a full intermediate JSON Value for large arrays, yields between
+motion/cell/triangle batches and each operation/tool, and reuses cooperative stock extraction
+through ASCII serialization. Focused tests compare all JSON fields, HTML values/escaping and
+STL/NC bytes, inject cancellation at every serialization checkpoint, and check stale/cancelled
+background results cannot write output. The UI regression now exercises background posting and collection through an injected save-picker
+service. A disposable native command walkthrough additionally exports all five formats, including
+a33.9MB stock mesh, and verifies no destination file exists before explicit result collection.
+A fresh system save-dialog attempt was not completed: native accessibility timed out and window
+capture reported no presented frame. That manual check is not counted as a new passing walkthrough.
+
+The incremental follow-up measured at most4.3ms per scheduler batch for the same original export
+cases (no batch above16ms). The40,000-cell STL is still34,051,171bytes, and the200,000-block NC
+program is still11,999,980bytes. Toolpath JSON shrinks from41,002,015 to15,201,072bytes through
+whitespace removal; semantic equivalence is asserted against the original serializer. Evidence:
+`target/cam-web-probe/exports-baseline.json` and `exports-incremental.json`. These timings exclude
+file-system publication and are machine-specific; command freshness checks still govern publication.
