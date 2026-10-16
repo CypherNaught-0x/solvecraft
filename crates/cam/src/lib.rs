@@ -6,7 +6,9 @@ mod collision;
 pub mod compare;
 pub mod corpus;
 mod coverage;
+pub mod cutter_envelope;
 mod dimensions;
+pub mod engagement;
 mod hashing;
 pub use hashing::fingerprint_job_cooperative;
 pub mod generate;
@@ -28,7 +30,7 @@ pub(crate) fn invalid<T>(message: impl Into<String>) -> Result<T> {
     Err(Error(message.into()))
 }
 
-pub const VERSION: &str = "cam/18";
+pub const VERSION: &str = "cam/19";
 pub const TOLERANCE: f64 = 0.01;
 pub const POST_ERROR: f64 = 0.001;
 pub const VERIFY_ERROR: f64 = 0.0025;

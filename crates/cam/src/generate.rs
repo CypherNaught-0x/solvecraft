@@ -1,4 +1,7 @@
 //! Toolpath construction. No verifier or NC interpreter algorithms live here.
+pub mod contact;
+mod parallel;
+pub mod rough_slice;
 use crate::*;
 use cavalier_contours::polyline::{PlineSource, PlineSourceMut, Polyline, seg_arc_radius_and_center, seg_length};
 use cavalier_contours::shape_algorithms::{Shape, ShapeOffsetOptions};
@@ -170,6 +173,7 @@ async fn operation(input: &JobInput, o: &Operation, progress: Progress) -> Resul
     w.push(Motion::Coolant { on: o.coolant }).await?;
     let levels = depths(o.top, o.bottom + o.allowance, o.stepdown)?;
     match &o.geometry {
+        Strategy::Parallel => parallel::generate(input, o, t, &mut w).await?,
         Strategy::Face => {
             let (a, b) = (s.stock.min, s.stock.max);
             let radius = t.diameter / 2.0;

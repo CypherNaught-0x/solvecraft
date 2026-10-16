@@ -38,8 +38,17 @@ pub fn setup(app: &SolveApp) -> Option<&cam::Setup> {
         return Some(setup);
     }
     let m = &app.session.doc.manufacturing;
-    let program = m.programs.iter().find(|p| p.id == app.manufacturing.program).or_else(|| m.programs.first());
-    program.and_then(|p| m.setups.iter().find(|s| s.id == p.setup)).or_else(|| m.setups.first())
+    let editing = match &app.manufacturing.editor {
+        Some(Editor::Operation(o)) => Some(o.setup),
+        Some(Editor::Program(p)) => Some(p.setup),
+        _ => None,
+    };
+    m.setups
+        .iter()
+        .find(|s| Some(s.id) == editing)
+        .or_else(|| m.setups.iter().find(|s| s.id == app.manufacturing.setup))
+        .or_else(|| m.programs.iter().find(|p| p.id == app.manufacturing.program).and_then(|p| m.setups.iter().find(|s| s.id == p.setup)))
+        .or_else(|| m.setups.first())
 }
 pub fn corners(stock: cam::Stock) -> [Vec3; 8] {
     let a = stock.min;
@@ -149,6 +158,7 @@ pub fn key(app: &SolveApp, h: &mut impl Hasher) {
             r.occurrence.hash(h);
         }
     }
+    setup(app).map(|s| s.id).hash(h);
     app.manufacturing.program.hash(h);
     app.manufacturing.job.hash(h);
     app.manufacturing.view.workpiece.hash(h);

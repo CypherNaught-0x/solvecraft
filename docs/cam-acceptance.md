@@ -51,9 +51,18 @@ regeneration restores freshness. On the intermediate `9d82b944` base, formatting
 Clippy, assets, layers and the 12-crate Wasm check passed. The full native run found
 UI integration regressions; their fixes are included, but local reruns were stopped
 after disk exhaustion and severe host overload. Final validation on `650ba567` is
-pending in upstream PR #1682. Its initial locked-build failure was corrected for
-the 0.14.0 release, and profile-sampling tests now cover upstream's degree-9 Beziers.
-Historical timings and captures alone do not qualify these integration changes.
+complete in upstream PR #1682 at `b41bbcc9`: all four Linux runtime shards,
+Clippy, repository/format checks, reference/doc tests and both Windows checks pass
+in [CI run 38889963145](https://github.com/bherbruck/solidcraft/actions/runs/38889963145).
+The initial locked-build failure was corrected for the 0.14.0 release, and profile
+sampling tests now cover upstream's degree-9 Beziers. Original fixture viewport
+captures are available in the run's `cam-ui-evidence-1` artifact. The PR was merged
+upstream as `737c9358` on 2026-10-16, then reverted by
+[#1715](https://github.com/bherbruck/solidcraft/pull/1715) as out of project scope.
+The revert also states that upstream does not accept Fusion captures or derived
+comparison data. The retained development branch is not current upstream support.
+These CI results qualify the tested milling change;
+the subsequent adaptive/3D milestone requires separate validation and references.
 
 ## Recorded local acceptance
 

@@ -165,6 +165,7 @@ impl Setup {
 #[serde(rename_all = "snake_case")]
 pub enum ToolKind {
     FlatEndMill,
+    BallEndMill,
     TwistDrill,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -195,10 +196,11 @@ impl Tool {
                 .iter()
                 .any(|v| !positive(*v))
             || self.overall_length < self.cutting_length
+            || (self.kind == ToolKind::BallEndMill && self.cutting_length < self.diameter / 2.)
             || !self.tip_angle.is_finite()
             || !(0.1..3.1).contains(&self.tip_angle)
         {
-            return invalid("invalid tool dimensions, number or drill angle (radians)");
+            return invalid("invalid tool dimensions, number or drill angle (radians); ball cutting length must include its hemisphere");
         }
         Ok(())
     }
@@ -254,6 +256,8 @@ impl HoleSource {
 #[serde(tag = "strategy", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Strategy {
     Face,
+    /// Ball finishing of the complete stock XY footprint; vertical allowance.
+    Parallel,
     Contour {
         boundary: Boundary,
         inside: bool,
@@ -318,7 +322,9 @@ impl Operation {
         {
             return invalid("lead must be nonnegative; ramp angle must be 0.06–10 degrees");
         }
-        if (self.ramp_angle.is_some() || self.lead_distance > 0.0) && matches!(self.geometry, Strategy::Face | Strategy::Drill { .. }) {
+        if (self.ramp_angle.is_some() || self.lead_distance > 0.0)
+            && matches!(self.geometry, Strategy::Face | Strategy::Parallel | Strategy::Drill { .. })
+        {
             return invalid("lead/ramp entry is supported for contour and pocket operations");
         }
         if let Some(source) = &self.source {
@@ -357,14 +363,33 @@ impl Operation {
             || self.top > s.stock.max.z
             || self.top < s.stock.min.z
             || self.stepover > t.diameter
-            || self.top - self.bottom + t.tip_length() > t.cutting_length
             || (self.top - self.bottom) / self.stepdown > 10_000.0
             || self.tolerance < 1e-5
             || self.tolerance > 1.0
         {
             return invalid("invalid heights, feeds, step sizes, tolerance or cutting reach");
         }
+        // An operation's declared Top Z is not proof that earlier operations
+        // actually removed the stock above it. Until rest-dependent short-tool
+        // reach is qualified, require cutting reach from the original stock top.
+        if s.stock.max.z - self.bottom + t.tip_length() > t.cutting_length {
+            return invalid(
+                "tool cutting length must span the original stock top to the requested bottom; stock-dependent short-tool reach is unsupported",
+            );
+        }
         match &self.geometry {
+            Strategy::Parallel => {
+                if t.kind != ToolKind::BallEndMill {
+                    return invalid("parallel finishing needs a ball end mill");
+                }
+                // Necessary flat-surface cusp bound; curved/steep regions still
+                // require independent whole-surface dimensional verification.
+                let radius = t.diameter / 2.;
+                let cusp = radius - (radius * radius - (self.stepover / 2.).powi(2)).max(0.).sqrt();
+                if cusp > (self.tolerance - crate::POST_ERROR - crate::VERIFY_ERROR) / 2. {
+                    return invalid("parallel stepover exceeds the flat-surface cusp budget");
+                }
+            }
             Strategy::Drill { holes, peck, .. } => {
                 if t.kind != ToolKind::TwistDrill
                     || self.allowance != 0.0

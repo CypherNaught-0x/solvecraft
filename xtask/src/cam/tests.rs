@@ -81,9 +81,29 @@ fn hash(package: &Package, manifest: &mut Value, name: &str) {
 }
 
 #[test]
+fn milestone_selection_is_strict_and_missing_strategies_cannot_pass() {
+    assert_eq!(oracle_request(&["--dir", "/tmp/reference"]).unwrap().1, "milling");
+    for args in [vec![], vec!["--dir"], vec!["--dir", "x", "--milestone", "partial"], vec!["--dir", "x", "--dir", "y"]] {
+        assert!(oracle_request(&args).is_err());
+    }
+    let (package, _, _) = package(5., 5.);
+    assert!(compare_case(&package.0, &package.0.join("wrong"), "parallel").unwrap_err().contains("required parallel"));
+    let dir = package.0.to_str().unwrap();
+    assert!(oracle(Path::new("/no-repository"), &["--dir", dir, "--milestone", "adaptive-3d"]).is_err());
+    let result = json_file(&package.0.join("comparison-adaptive-3d/report.json")).unwrap();
+    let cases = result["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 4);
+    for (case, (name, _)) in cases.iter().zip(THREE_DIMENSIONAL_CASES) {
+        assert_eq!(case["case"], *name);
+        assert_eq!(case["pass"], false);
+        assert_eq!(case["status"], "incomplete");
+    }
+}
+
+#[test]
 fn oracle_requires_direct_reference_nc_to_exported_stock_agreement() {
     let (package, _, _) = package(5.006, 4.994);
-    let result = compare_case(&package.0, &package.0.join("comparison")).unwrap();
+    let result = compare_case(&package.0, &package.0.join("comparison"), "face").unwrap();
     // Both used to pass through a common midpoint at Z5, although the two
     // reference results differ by 0.012 mm, beyond the 0.01 mm budget.
     assert_eq!(result["stock"]["status"], "pass", "{result}");
@@ -98,7 +118,7 @@ fn oracle_requires_direct_reference_nc_to_exported_stock_agreement() {
 fn oracle_complete_analytic_capture_passes_and_retains_post_provenance() {
     let (package, _, manifest) = package(5., 5.);
     let out = package.0.join("comparison");
-    let result = compare_case(&package.0, &out).unwrap();
+    let result = compare_case(&package.0, &out, "face").unwrap();
     assert_eq!(result["pass"], true, "{result}");
     assert_eq!(result["reference_nc_vs_reference_stl"]["status"], "pass");
     assert_eq!(result["comparison_version"], COMPARISON_VERSION);
@@ -157,7 +177,7 @@ fn oracle_definite_failures_survive_inconclusive_checks() {
     write(&package.0.join("simulation.json"), pretty(&simulation).unwrap()).unwrap();
     hash(&package, &mut manifest, "simulation.json");
     write(&package.0.join("manifest.json"), pretty(&manifest).unwrap()).unwrap();
-    let result = compare_case(&package.0, &package.0.join("comparison")).unwrap();
+    let result = compare_case(&package.0, &package.0.join("comparison"), "face").unwrap();
     assert_eq!(result["status"], "fail");
     assert_eq!(result["pass"], false);
     for (severity, expected) in [("error", "fail"), ("unresolved", "inconclusive")] {
@@ -166,7 +186,7 @@ fn oracle_definite_failures_survive_inconclusive_checks() {
         write(&package.0.join("simulation.json"), pretty(&simulation).unwrap()).unwrap();
         hash(&package, &mut manifest, "simulation.json");
         write(&package.0.join("manifest.json"), pretty(&manifest).unwrap()).unwrap();
-        let result = compare_case(&package.0, &package.0.join("comparison")).unwrap();
+        let result = compare_case(&package.0, &package.0.join("comparison"), "face").unwrap();
         assert_eq!(result["status"], expected);
         assert_eq!(result["pass"], false);
     }

@@ -15,11 +15,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("MILLING", "SETUP")
         .icon("box")
         .params("setup: complete Setup object (create or replace by ID)"),
-    CommandSpec::new("cam.tool.put", "Tool Library", tool).at("MILLING", "SETUP").icon("hole").params("tool: complete Tool object"),
+    CommandSpec::new("cam.tool.put", "Tool Library", tool)
+        .at("MILLING", "SETUP")
+        .icon("hole")
+        .params("tool: complete Tool object; kind flat_end_mill, ball_end_mill or twist_drill"),
     CommandSpec::new("cam.operation.put", "Milling Operation", operation)
         .at("MILLING", "TOOLPATHS")
         .icon("cam_path")
-        .params("operation: complete Operation object; strategy face, contour, pocket or drill"),
+        .params("operation: complete Operation object; strategy face, contour, pocket, drill or parallel (ball tool, complete stock XY footprint, vertical allowance)"),
     CommandSpec::new("cam.program.put", "NC Program", program)
         .at("MILLING", "SETUP")
         .icon("save")
@@ -400,6 +403,90 @@ mod tests {
         assert_eq!(s.execute("cam.job.status", &json!({"job":id})).unwrap()["stale"], true);
         s.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(s.execute("cam.job.status", &json!({"job":id})).unwrap()["stale"], false);
+    }
+    #[test]
+    fn ball_tool_library_round_trips_undo_and_rejects_incompatible_operations() {
+        let mut s = configured();
+        let mut ball = s.doc.manufacturing.tools[0].clone();
+        ball.id = 2;
+        ball.number = 2;
+        ball.kind = cam::ToolKind::BallEndMill;
+        s.execute("cam.tool.put", &json!({"tool":ball})).unwrap();
+        let reopened = crate::io::read_design(&crate::io::write_design(&s.doc)).unwrap();
+        assert_eq!(reopened.manufacturing.tools[1], ball);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.manufacturing.tools.len(), 1);
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.doc.manufacturing.tools[1], ball);
+        let before = s.doc.clone();
+        let mut operation = s.doc.manufacturing.operations[0].clone();
+        operation.tool = 2;
+        let error = s.execute("cam.operation.put", &json!({"operation":operation})).unwrap_err();
+        assert!(error.to_string().contains("flat end mill"));
+        assert_eq!(s.doc, before);
+        ball.cutting_length = ball.diameter / 2. - 0.1;
+        assert!(s.execute("cam.tool.put", &json!({"tool":ball})).is_err());
+        assert_eq!(s.doc, before);
+    }
+    #[test]
+    fn parallel_finishing_commands_verify_post_persist_and_invalidate() {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length":1,"width":1,"height":5})).unwrap();
+        let mut input = cam::corpus::fixture("face").unwrap();
+        let body = &s.model.state().bodies[0];
+        let bounds = body.mesh().bounds();
+        input.setup.models[0].body = body.name.clone();
+        input.setup.stock.min = bounds.min;
+        input.setup.stock.max = bounds.max + crate::geom::Vec3::Z;
+        input.tools[0].kind = cam::ToolKind::BallEndMill;
+        input.tools[0].diameter = 2.;
+        input.operations[0].geometry = cam::Strategy::Parallel;
+        input.operations[0].top = bounds.max.z + 1.;
+        input.operations[0].bottom = bounds.max.z - 0.5;
+        input.operations[0].stepover = 0.1;
+        s.execute("cam.setup.put", &json!({"setup":input.setup})).unwrap();
+        s.execute("cam.tool.put", &json!({"tool":input.tools[0]})).unwrap();
+        s.execute("cam.operation.put", &json!({"operation":input.operations[0]})).unwrap();
+        s.execute("cam.program.put", &json!({"program":{"id":1,"name":"Ball finishing","setup":1,"operations":[1]}})).unwrap();
+        let job = s.execute("cam.generate", &json!({"program":1})).unwrap()["job"].clone();
+        let report = s.execute("cam.simulate", &json!({"job":job})).unwrap();
+        assert_eq!(report["verification"]["status"], "pass", "{report}");
+        assert_eq!(report["verification"]["finished_dimensions"], "pass", "{report}");
+        let code = s.execute("cam.post", &json!({"job":job})).unwrap();
+        assert!(code["content"].as_str().unwrap().contains("G21"));
+        let reopened = crate::io::read_design(&crate::io::write_design(&s.doc)).unwrap();
+        assert_eq!(reopened.manufacturing, s.doc.manufacturing);
+        input.tools[0].diameter = 1.8;
+        s.execute("cam.tool.put", &json!({"tool":input.tools[0]})).unwrap();
+        assert_eq!(s.execute("cam.job.status", &json!({"job":job})).unwrap()["stale"], true);
+        assert!(s.execute("cam.post", &json!({"job":job})).is_err());
+        assert_eq!(s.execute("cam.generate", &json!({"program":1})).unwrap()["state"], "generated");
+    }
+    #[test]
+    fn parallel_finishing_accepts_a_tessellated_cad_ramp_with_roundoff_at_face_seams() {
+        let mut s = Session::default();
+        s.execute("sketch.create", &json!({"plane":{"origin":[0,0,0],"x_dir":[1,0,0],"y_dir":[0,0,1]}})).unwrap();
+        s.execute("sketch.line", &json!({"points":[[0,0],[1,0],[1,1.2],[0,1]],"closed":true})).unwrap();
+        s.execute("sketch.finish", &json!({})).unwrap();
+        s.execute("solid.extrude", &json!({"distance":1,"direction":"negative"})).unwrap();
+        let mut input = cam::corpus::fixture("parallel-slope").unwrap();
+        input.setup.models[0].body = s.model.state().bodies[0].name.clone();
+        input.setup.stock.max.z = 2.;
+        input.setup.retract = 3.;
+        input.setup.clearance = 4.;
+        input.operations[0].top = 2.;
+        input.operations[0].bottom = 0.5;
+        s.execute("cam.setup.put", &json!({"setup":input.setup})).unwrap();
+        s.execute("cam.tool.put", &json!({"tool":input.tools[0]})).unwrap();
+        s.execute("cam.operation.put", &json!({"operation":input.operations[0]})).unwrap();
+        s.execute("cam.program.put", &json!({"program":{"id":1,"name":"Original ramp","setup":1,"operations":[1]}})).unwrap();
+        let generated = s.execute("cam.generate", &json!({"program":1})).unwrap();
+        assert_eq!(generated["state"], "generated", "{generated}");
+        let job = generated["job"].clone();
+        let report = s.execute("cam.simulate", &json!({"job":job})).unwrap();
+        assert_eq!(report["verification"]["status"], "pass", "{report}");
+        assert_eq!(report["verification"]["finished_dimensions"], "pass", "{report}");
+        assert!(s.execute("cam.post", &json!({"job":job})).is_ok());
     }
     #[test]
     fn operation_order_survives_reopen_undo_redo_and_controls_generated_sequence() {

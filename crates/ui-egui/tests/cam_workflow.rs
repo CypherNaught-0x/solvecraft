@@ -4,16 +4,18 @@ use serde_json::json;
 use solidcraft_engine::cam;
 use solidcraft_ui_egui::scenario::Harness;
 #[test]
-fn four_strategies_generate_simulate_post_and_display_through_ui() {
+fn milling_and_parallel_generate_simulate_post_and_display_through_ui() {
     solidcraft_engine::capture::install(std::sync::Arc::new(|scene, camera, width, height| {
         let (rgba, renderer) = solidcraft_gpu::capture::headless_rgba(scene, camera, width, height)?;
         Ok(solidcraft_engine::capture::Picture { rgba, renderer })
     }));
-    for name in ["face", "contour", "pocket", "drill"] {
+    for name in ["face", "contour", "pocket", "drill", "parallel-flat"] {
         let mut h = Harness::new();
         h.call("ui.resize", json!({"width":1500,"height":1200}));
-        h.app.run("solid.box", json!({"length":20,"width":20,"height":if name=="face" {5} else {6}})).unwrap();
-        if name != "face" {
+        let parallel = name == "parallel-flat";
+        let side = if parallel { 1 } else { 20 };
+        h.app.run("solid.box", json!({"length":side,"width":side,"height":if name=="face" || parallel {5} else {6}})).unwrap();
+        if name != "face" && !parallel {
             h.app.run("solid.hole",json!({"position":[10,10,6],"direction":[0,0,-1],"diameter":if name=="drill" {1} else {16},"depth":1,"type":if name=="drill" {"drilled"} else {"simple"},"tip_angle":118})).unwrap();
         }
         let mut input = cam::corpus::fixture(name).unwrap();
@@ -47,9 +49,10 @@ fn four_strategies_generate_simulate_post_and_display_through_ui() {
             h.app.session.selection =
                 vec![solidcraft_engine::Sel::Face { body: body.name, index: face, point: solidcraft_engine::geom::Vec3::new(10.5, 10., 5.5) }];
             h.frames(3);
-            h.step(&json!({"widget":"Analytic plate"})).unwrap();
-            h.step(&json!({"widget":"drill"})).unwrap();
+            h.step(&json!({"widget":"drill","near":"01"})).unwrap();
             h.frames(20);
+            h.step(&json!({"widget":"Geometry"})).unwrap();
+            h.frames(3);
             h.step(&json!({"widget":"Use selected holes"})).unwrap();
             h.step(&json!({"widget":"Save"})).unwrap();
             assert_eq!(h.app.session.doc.manufacturing.operations[0].hole_sources.len(), 1);
@@ -62,8 +65,12 @@ fn four_strategies_generate_simulate_post_and_display_through_ui() {
         assert_eq!(report["verification"]["status"], "pass", "{name}: {report}");
         assert_eq!(report["verification"]["finished_dimensions"], "pass", "{name}: {report}");
         h.app.run("cam.post", json!({"job":id,"path":h.dir.join(format!("{name}.nc"))})).unwrap();
+        h.step(&json!({"widget":"Display"})).unwrap();
+        h.frames(3);
         h.step(&json!({"widget":"Target model"})).unwrap();
         h.step(&json!({"widget":"Remaining stock"})).unwrap();
+        h.step(&json!({"widget":"Toolpath"})).unwrap();
+        h.frames(3);
         h.step(&json!({"widget":"To start"})).unwrap();
         h.call("ui.view", json!({"view":"fit"}));
         let out = h.call("ui.render", json!({"path":h.dir.join(format!("{name}.png")),"width":1000,"height":750}));

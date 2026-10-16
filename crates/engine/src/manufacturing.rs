@@ -2,6 +2,7 @@
 use crate::{EngineError, Result, Session, cam};
 pub mod exports;
 pub(crate) mod holes;
+mod mesh_vertices;
 mod snapshot;
 use std::collections::BTreeMap;
 use std::sync::{

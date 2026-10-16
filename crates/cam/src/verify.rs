@@ -182,6 +182,16 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
             .collect(),
     );
     let surface = crate::surface::Surface::new(&input.geometry.target, stock.min.z)?;
+    // Surface finishing needs a whole-cell target envelope, including holes and
+    // overlapping projected faces. Reuse the independent boundary-incidence
+    // oracle, not the generator's contact mesh or summed projected area.
+    let finished_surface = input
+        .operations
+        .iter()
+        .any(|o| matches!(o.geometry, Strategy::Parallel))
+        .then(|| crate::coverage::MeshField::new(&input.geometry.target, stock))
+        .transpose()
+        .map_err(|e| Error(format!("parallel finished-surface geometry is unsupported: {e}")))?;
     let finished = crate::dimensions::Finished::new(input, tol)?;
     let dimension_resolution = finished.as_ref().map_or(limits.uncertainty, |f| limits.uncertainty.min(f.refinement));
     let mut r = Report {
@@ -226,212 +236,294 @@ pub async fn simulate_cooperative<F: std::future::Future<Output = ()>>(
     }
     crate::collision::fixtures(input, &segments, limits, &cancelled, &mut yield_control, &mut r).await?;
     let mut pending = vec![([stock.min.x, stock.min.y], [stock.max.x, stock.max.y], 0u8)];
+    let mut cell_depths = Vec::new();
+    let mut topology_round = 0;
     let mut next_yield = 0;
-    while let Some((min, max, depth)) = pending.pop() {
-        if r.work >= next_yield {
-            next_yield = r.work.saturating_add(4096);
+    loop {
+        while let Some((min, max, depth)) = pending.pop() {
+            if r.work >= next_yield {
+                next_yield = r.work.saturating_add(4096);
+                yield_control().await;
+            }
+            if cancelled() {
+                return invalid("simulation cancelled");
+            }
+            if r.work > limits.work || r.cells.len() + pending.len() >= limits.cells {
+                r.stock_complete = false;
+                r.status = if r.status == Status::Fail { Status::Fail } else { Status::Inconclusive };
+                r.finding(Finding {
+                    record: None,
+                    severity: FindingSeverity::Unresolved,
+                    source: None,
+                    kind: "budget_exhausted".into(),
+                    line: None,
+                    at: stock.min,
+                    detail: "Adaptive verification incomplete; increase resource budget or simplify the job".into(),
+                });
+                break;
+            }
+            let center = [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0];
+            let half = ((max[0] - min[0]).hypot(max[1] - min[1])) / 2.0;
+            let mut low = stock.max.z;
+            let mut high = stock.max.z;
+            let mut collision = None;
+            let mut removal_line = None;
+            let mut candidates = Vec::new();
+            motion_index.query(min, max, &mut candidates);
+            candidates.sort_unstable();
+            for (query_index, segment_index) in candidates.into_iter().enumerate() {
+                let seg = &segments[segment_index];
+                r.work += 1;
+                if query_index % 4096 == 4095 {
+                    yield_control().await;
+                    if cancelled() {
+                        return invalid("simulation cancelled");
+                    }
+                }
+                if r.work > limits.work {
+                    break;
+                }
+                let Some(tool) = input.tools.iter().find(|t| t.id == seg.tool) else {
+                    continue;
+                };
+                let radius = tool.diameter / 2.0;
+                let (distance, zlo, zhi) = sweep(center, half, seg, radius);
+                // A vertical drill has exact radial extrema on a rectangular cell.
+                // Circumscribed disks are unnecessarily loose here and can create
+                // artificial saddles where coarse and fine cone cells meet.
+                let (near, far) = if tool.kind == ToolKind::TwistDrill && seg.from.x == seg.to.x && seg.from.y == seg.to.y {
+                    radial_bounds(min, max, [seg.from.x, seg.from.y])
+                } else if seg.from.z == seg.to.z || (seg.from.x == seg.to.x && seg.from.y == seg.to.y) {
+                    lateral_bounds(min, max, seg)
+                } else {
+                    // Sloping motion still uses a common covering disk: its upper
+                    // height bound must cover the entire cell at the same pose.
+                    ((distance - half).max(0.0), distance + half)
+                };
+                let cone_low = if tool.kind == ToolKind::TwistDrill { near / (tool.tip_angle / 2.0).tan() } else { 0.0 };
+                let cone_high = if tool.kind == ToolKind::TwistDrill { far / (tool.tip_angle / 2.0).tan() } else { 0.0 };
+                let (overlaps, cutter_low, cutter_high) = if tool.kind == ToolKind::BallEndMill {
+                    // Constant-height and vertical sweeps have exact radial extrema.
+                    // Avoid the isotropic sphere inflation's artificial +/- cell
+                    // height error on a nearly flat machined surface.
+                    if seg.from.z == seg.to.z || (seg.from.x == seg.to.x && seg.from.y == seg.to.y) {
+                        let near = (near - POST_ERROR).max(0.);
+                        let far = far + POST_ERROR;
+                        let tip = seg.from.z.min(seg.to.z);
+                        let guard = 512. * f64::EPSILON * tip.abs().max(radius).max(1.);
+                        let height = |distance: f64| tip + radius - ((radius - distance) * (radius + distance)).max(0.).sqrt();
+                        (near <= radius, height(near) - guard, if far <= radius { height(far) + guard } else { f64::INFINITY })
+                    } else {
+                        match crate::cutter_envelope::ball_rectangle(seg.from, seg.to, radius, min, max, POST_ERROR)? {
+                            Some(bounds) => (true, bounds.low, bounds.high.unwrap_or(f64::INFINITY)),
+                            None => (false, f64::INFINITY, f64::INFINITY),
+                        }
+                    }
+                } else {
+                    (near <= radius + POST_ERROR, zlo + cone_low, if far <= radius { zhi + cone_high } else { f64::INFINITY })
+                };
+                // A vertical withdrawal starts at the endpoint of the preceding feed
+                // with the same tool; this exact geometric fact needs no raster estimate.
+                let withdrawal = segment_index.checked_sub(1).and_then(|i| segments.get(i)).is_some_and(|previous| {
+                    !previous.rapid
+                        && previous.tool == seg.tool
+                        && previous.to == seg.from
+                        && seg.from.x == seg.to.x
+                        && seg.from.y == seg.to.y
+                        && seg.to.z >= seg.from.z
+                });
+                if seg.rapid && overlaps && !withdrawal {
+                    if cutter_high < low - tol {
+                        collision = Some(("rapid_through_stock", seg.line));
+                    } else if cutter_low < high - tol {
+                        collision = Some(("rapid_clearance_unresolved", seg.line));
+                    }
+                } else if !seg.rapid && overlaps {
+                    low = low.min(cutter_low).max(stock.min.z);
+                    if cutter_high.is_finite() {
+                        let next = high.min(cutter_high).max(stock.min.z);
+                        if next < high {
+                            removal_line = Some(seg.line);
+                        }
+                        high = next;
+                    }
+                }
+                // Shank and holder sweeps against remaining stock, separate from cutter removal.
+                for (rad, lift, label) in [
+                    (tool.shank_diameter / 2.0, tool.cutting_length, "shank_collision"),
+                    (tool.holder_diameter / 2.0, tool.overall_length, "holder_collision"),
+                ] {
+                    let (d, z, _) = sweep(center, half, seg, rad);
+                    if d + half < rad && z + lift < low - tol {
+                        collision = Some((label, seg.line));
+                    } else if d < rad + half && z + lift < high - tol {
+                        collision = Some(("holder_clearance_unresolved", seg.line));
+                    }
+                }
+            }
+            let (target_low, target_high, _) = if let Some(field) = &finished_surface {
+                field.bounds(min, max, &mut r.work, limits.work).map(|[low, high]| (low, high, false)).unwrap_or((stock.min.z, stock.max.z, true))
+            } else {
+                surface.bounds(center, (max[0] - min[0]).max(max[1] - min[1]) / 2.0, &mut r.work, limits.work)
+            };
+            let protection = surface
+                .protect(
+                    crate::surface::Region { center, half, low, high, target_high, tolerance: tol },
+                    &mut r.work,
+                    limits,
+                    &cancelled,
+                    &mut yield_control,
+                )
+                .await?;
+            let rest = low - target_high > tol;
+            let expected = if let Some(f) = &finished {
+                f.envelope((center, half, [target_low, target_high]), &mut r.work, limits.work, &cancelled, &mut yield_control).await?
+            } else {
+                None
+            };
+            let dimension = expected.map(|e| e.classify(low, high));
+            // Refine both the machined result and the requested finished features:
+            // an omitted hole must not hide inside one large untouched stock cell.
+            let unresolved = ((high - low > tol / 2.0 || protection == Status::Inconclusive || collision.is_some()) && half > limits.uncertainty)
+                || (dimension == Some(Status::Inconclusive) && half > dimension_resolution);
+            if unresolved && depth < 24 && r.work <= limits.work {
+                pending.extend([
+                    (min, center, depth + 1),
+                    ([center[0], min[1]], [max[0], center[1]], depth + 1),
+                    ([min[0], center[1]], [center[0], max[1]], depth + 1),
+                    (center, max, depth + 1),
+                ]);
+                continue;
+            }
+            let at = Vec3::new(center[0], center[1], low);
+            if let Some(dimension) = dimension {
+                if dimension == Status::Fail {
+                    r.finished_dimensions = Status::Fail;
+                    r.finding(Finding {
+                        record: None,
+                        severity: FindingSeverity::Error,
+                        source: None,
+                        kind: "finished_region_error".into(),
+                        line: removal_line,
+                        at,
+                        detail: expected.map_or_else(String::new, |e| e.description()),
+                    });
+                } else if dimension == Status::Inconclusive && r.finished_dimensions == Status::Pass {
+                    r.finished_dimensions = Status::Inconclusive;
+                }
+            }
+            if let Some((kind, line)) = collision {
+                if !kind.ends_with("unresolved") {
+                    r.status = Status::Fail;
+                } else if r.status == Status::Pass {
+                    r.status = Status::Inconclusive;
+                }
+                r.finding(Finding {
+                    record: None,
+                    severity: if kind.ends_with("unresolved") { FindingSeverity::Unresolved } else { FindingSeverity::Error },
+                    source: None,
+                    kind: kind.into(),
+                    line: Some(line),
+                    at,
+                    detail: "Swept cutter or non-cutting tool envelope intersects remaining stock".into(),
+                });
+            }
+            if protection == Status::Fail {
+                r.status = Status::Fail;
+                r.finding(Finding {
+                    record: None,
+                    severity: FindingSeverity::Error,
+                    source: None,
+                    kind: "gouge".into(),
+                    line: removal_line,
+                    at,
+                    detail: format!("A definitely removed point lies more than {:.6} mm inside the protected height-field solid", tol),
+                });
+            }
+            // Rest is reported separately: intermediate roughing is not required to finish a part.
+            if rest && !r.findings.iter().any(|f| f.kind == "remaining_material") {
+                r.finding(Finding {
+                    record: None,
+                    severity: FindingSeverity::Information,
+                    source: None,
+                    kind: "remaining_material".into(),
+                    line: None,
+                    at,
+                    detail: format!("At least {:.6} mm above target; may be intentional outside selected finished regions", low - target_high),
+                });
+            }
+            if protection == Status::Inconclusive {
+                if r.status == Status::Pass {
+                    r.status = Status::Inconclusive;
+                }
+                r.finding(Finding {
+                    record: None,
+                    severity: FindingSeverity::Unresolved,
+                    source: None,
+                    kind: "protected_surface_unresolved".into(),
+                    line: removal_line,
+                    at,
+                    detail: "Local surface-distance bounds cannot yet certify the protected CAD boundary at this resolution or work budget".into(),
+                });
+            }
+            r.cells.push(Cell { min, max, low, high, target_low, target_high });
+            cell_depths.push(depth);
+        }
+        // Curved finishing can produce an artificial checkerboard where adaptive
+        // cells use different conservative upper heights. Re-evaluate only those
+        // cells; never enlarge the export fill allowance or smooth away material.
+        if finished_surface.is_none()
+            || !r.stock_complete
+            || r.status != Status::Pass
+            || r.finished_dimensions != Status::Pass
+            || topology_round == 8
+            || r.cells.len() > 60_000
+        {
+            break;
+        }
+        // Charge bounded sorting/incidence work against the same job budget.
+        let cost = r.cells.len().saturating_mul(256);
+        if cost > limits.work.saturating_sub(r.work) {
+            break;
+        }
+        r.work += cost;
+        let refine = crate::stock_mesh::refinement_cells(&r.cells, stock.min.z, &cancelled, &mut yield_control).await?;
+        if refine.is_empty() || refine.iter().any(|&i| cell_depths.get(i).is_none_or(|d| *d >= 24)) {
+            break;
+        }
+        topology_round += 1;
+        let old_cells = std::mem::take(&mut r.cells);
+        let old_depths = std::mem::take(&mut cell_depths);
+        for (index, (cell, depth)) in old_cells.into_iter().zip(old_depths).enumerate() {
+            if index.is_multiple_of(256) {
+                yield_control().await;
+            }
+            if refine.contains(&index) {
+                let (min, max) = (cell.min, cell.max);
+                let center = [(min[0] + max[0]) / 2., (min[1] + max[1]) / 2.];
+                pending.extend([
+                    (min, center, depth + 1),
+                    ([center[0], min[1]], [max[0], center[1]], depth + 1),
+                    ([min[0], center[1]], [center[0], max[1]], depth + 1),
+                    (center, max, depth + 1),
+                ]);
+            } else {
+                r.cells.push(cell);
+                cell_depths.push(depth);
+            }
+        }
+    }
+    for (index, cell) in r.cells.iter().enumerate() {
+        if index.is_multiple_of(256) {
             yield_control().await;
         }
         if cancelled() {
             return invalid("simulation cancelled");
         }
-        if r.work > limits.work || r.cells.len() + pending.len() >= limits.cells {
-            r.stock_complete = false;
-            r.status = if r.status == Status::Fail { Status::Fail } else { Status::Inconclusive };
-            r.finding(Finding {
-                record: None,
-                severity: FindingSeverity::Unresolved,
-                source: None,
-                kind: "budget_exhausted".into(),
-                line: None,
-                at: stock.min,
-                detail: "Adaptive verification incomplete; increase resource budget or simplify the job".into(),
-            });
-            break;
-        }
-        let center = [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0];
-        let half = ((max[0] - min[0]).hypot(max[1] - min[1])) / 2.0;
-        let mut low = stock.max.z;
-        let mut high = stock.max.z;
-        let mut collision = None;
-        let mut removal_line = None;
-        let mut candidates = Vec::new();
-        motion_index.query(min, max, &mut candidates);
-        candidates.sort_unstable();
-        for (query_index, segment_index) in candidates.into_iter().enumerate() {
-            let seg = &segments[segment_index];
-            r.work += 1;
-            if query_index % 4096 == 4095 {
-                yield_control().await;
-                if cancelled() {
-                    return invalid("simulation cancelled");
-                }
-            }
-            if r.work > limits.work {
-                break;
-            }
-            let Some(tool) = input.tools.iter().find(|t| t.id == seg.tool) else {
-                continue;
-            };
-            let radius = tool.diameter / 2.0;
-            let (distance, zlo, zhi) = sweep(center, half, seg, radius);
-            // A vertical drill has exact radial extrema on a rectangular cell.
-            // Circumscribed disks are unnecessarily loose here and can create
-            // artificial saddles where coarse and fine cone cells meet.
-            let (near, far) = if tool.kind == ToolKind::TwistDrill && seg.from.x == seg.to.x && seg.from.y == seg.to.y {
-                radial_bounds(min, max, [seg.from.x, seg.from.y])
-            } else if seg.from.z == seg.to.z || (seg.from.x == seg.to.x && seg.from.y == seg.to.y) {
-                lateral_bounds(min, max, seg)
-            } else {
-                // Sloping motion still uses a common covering disk: its upper
-                // height bound must cover the entire cell at the same pose.
-                ((distance - half).max(0.0), distance + half)
-            };
-            let cone_low = if tool.kind == ToolKind::TwistDrill { near / (tool.tip_angle / 2.0).tan() } else { 0.0 };
-            let cone_high = if tool.kind == ToolKind::TwistDrill { far / (tool.tip_angle / 2.0).tan() } else { 0.0 };
-            let overlaps = near <= radius + POST_ERROR;
-            // A vertical withdrawal starts at the endpoint of the preceding feed
-            // with the same tool; this exact geometric fact needs no raster estimate.
-            let withdrawal = segment_index.checked_sub(1).and_then(|i| segments.get(i)).is_some_and(|previous| {
-                !previous.rapid
-                    && previous.tool == seg.tool
-                    && previous.to == seg.from
-                    && seg.from.x == seg.to.x
-                    && seg.from.y == seg.to.y
-                    && seg.to.z >= seg.from.z
-            });
-            if seg.rapid && overlaps && !withdrawal {
-                if zhi + cone_high < low - tol && far <= radius {
-                    collision = Some(("rapid_through_stock", seg.line));
-                } else if zlo + cone_low < high - tol {
-                    collision = Some(("rapid_clearance_unresolved", seg.line));
-                }
-            } else if !seg.rapid && overlaps {
-                low = low.min(zlo + cone_low).max(stock.min.z);
-                if far <= radius {
-                    let next = high.min(zhi + cone_high).max(stock.min.z);
-                    if next < high {
-                        removal_line = Some(seg.line);
-                    }
-                    high = next;
-                }
-            }
-            // Shank and holder sweeps against remaining stock, separate from cutter removal.
-            for (rad, lift, label) in [
-                (tool.shank_diameter / 2.0, tool.cutting_length, "shank_collision"),
-                (tool.holder_diameter / 2.0, tool.overall_length, "holder_collision"),
-            ] {
-                let (d, z, _) = sweep(center, half, seg, rad);
-                if d + half < rad && z + lift < low - tol {
-                    collision = Some((label, seg.line));
-                } else if d < rad + half && z + lift < high - tol {
-                    collision = Some(("holder_clearance_unresolved", seg.line));
-                }
-            }
-        }
-        let (target_low, target_high, _) = surface.bounds(center, (max[0] - min[0]).max(max[1] - min[1]) / 2.0, &mut r.work, limits.work);
-        let protection = surface
-            .protect(
-                crate::surface::Region { center, half, low, high, target_high, tolerance: tol },
-                &mut r.work,
-                limits,
-                &cancelled,
-                &mut yield_control,
-            )
-            .await?;
-        let rest = low - target_high > tol;
-        let expected =
-            if let Some(f) = &finished { f.envelope((center, half), &mut r.work, limits.work, &cancelled, &mut yield_control).await? } else { None };
-        let dimension = expected.map(|e| e.classify(low, high));
-        // Refine both the machined result and the requested finished features:
-        // an omitted hole must not hide inside one large untouched stock cell.
-        let unresolved = ((high - low > tol / 2.0 || protection == Status::Inconclusive || collision.is_some()) && half > limits.uncertainty)
-            || (dimension == Some(Status::Inconclusive) && half > dimension_resolution);
-        if unresolved && depth < 24 && r.work <= limits.work {
-            pending.extend([
-                (min, center, depth + 1),
-                ([center[0], min[1]], [max[0], center[1]], depth + 1),
-                ([min[0], center[1]], [center[0], max[1]], depth + 1),
-                (center, max, depth + 1),
-            ]);
-            continue;
-        }
-        let at = Vec3::new(center[0], center[1], low);
-        if let Some(dimension) = dimension {
-            if dimension == Status::Fail {
-                r.finished_dimensions = Status::Fail;
-                r.finding(Finding {
-                    record: None,
-                    severity: FindingSeverity::Error,
-                    source: None,
-                    kind: "finished_region_error".into(),
-                    line: removal_line,
-                    at,
-                    detail: expected.map_or_else(String::new, |e| e.description()),
-                });
-            } else if dimension == Status::Inconclusive && r.finished_dimensions == Status::Pass {
-                r.finished_dimensions = Status::Inconclusive;
-            }
-        }
-        if let Some((kind, line)) = collision {
-            if !kind.ends_with("unresolved") {
-                r.status = Status::Fail;
-            } else if r.status == Status::Pass {
-                r.status = Status::Inconclusive;
-            }
-            r.finding(Finding {
-                record: None,
-                severity: if kind.ends_with("unresolved") { FindingSeverity::Unresolved } else { FindingSeverity::Error },
-                source: None,
-                kind: kind.into(),
-                line: Some(line),
-                at,
-                detail: "Swept cutter or non-cutting tool envelope intersects remaining stock".into(),
-            });
-        }
-        if protection == Status::Fail {
-            r.status = Status::Fail;
-            r.finding(Finding {
-                record: None,
-                severity: FindingSeverity::Error,
-                source: None,
-                kind: "gouge".into(),
-                line: removal_line,
-                at,
-                detail: format!("A definitely removed point lies more than {:.6} mm inside the protected height-field solid", tol),
-            });
-        }
-        // Rest is reported separately: intermediate roughing is not required to finish a part.
-        if rest && !r.findings.iter().any(|f| f.kind == "remaining_material") {
-            r.finding(Finding {
-                record: None,
-                severity: FindingSeverity::Information,
-                source: None,
-                kind: "remaining_material".into(),
-                line: None,
-                at,
-                detail: format!("At least {:.6} mm above target; may be intentional outside selected finished regions", low - target_high),
-            });
-        }
-        if protection == Status::Inconclusive {
-            if r.status == Status::Pass {
-                r.status = Status::Inconclusive;
-            }
-            r.finding(Finding {
-                record: None,
-                severity: FindingSeverity::Unresolved,
-                source: None,
-                kind: "protected_surface_unresolved".into(),
-                line: removal_line,
-                at,
-                detail: "Local surface-distance bounds cannot yet certify the protected CAD boundary at this resolution or work budget".into(),
-            });
-        }
-        let area = (max[0] - min[0]) * (max[1] - min[1]);
-        r.remaining_volume_low += area * (low - stock.min.z);
-        r.remaining_volume_high += area * (high - stock.min.z);
-        r.maximum_height_interval = r.maximum_height_interval.max(high - low);
-        r.cells.push(Cell { min, max, low, high, target_low, target_high });
+        let area = (cell.max[0] - cell.min[0]) * (cell.max[1] - cell.min[1]);
+        r.remaining_volume_low += area * (cell.low - stock.min.z);
+        r.remaining_volume_high += area * (cell.high - stock.min.z);
+        r.maximum_height_interval = r.maximum_height_interval.max(cell.high - cell.low);
     }
     if r.work > limits.work {
         r.stock_complete = false;
@@ -604,6 +696,12 @@ pub fn probe_height(input: &JobInput, nc: &Parsed, p: [f64; 2]) -> Result<f64> {
             continue;
         }
         let t = input.tools.iter().find(|t| t.id == s.tool).ok_or_else(|| Error("unknown probe tool".into()))?;
+        if t.kind == ToolKind::BallEndMill {
+            if let Some(height) = crate::cutter_envelope::ball_point_height(s.from, s.to, t.diameter / 2., p)? {
+                z = z.min(height);
+            }
+            continue;
+        }
         let (d, low, _) = sweep(p, 0.0, &s, t.diameter / 2.0);
         if d <= t.diameter / 2.0 {
             let point = if t.kind == ToolKind::TwistDrill { d / (t.tip_angle / 2.0).tan() } else { 0.0 };

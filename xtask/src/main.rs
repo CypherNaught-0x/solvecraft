@@ -65,6 +65,7 @@ commands:
   cam-validate    validate analytic machining fixtures and write JSON/HTML reports
   cam-oracle --dir DIR
                   compare ignored local Fusion reference packages (missing evidence fails)
+                  --milestone adaptive-3d requires adaptive, roughing-3d, parallel and constant-z
   ci              fmt --check, assets, licences --check, lists, layers, clippy -D warnings, then the tests
                   with the wasm check alongside, then web-offline-test when Chrome is installed
                   (stops at the first failing step)
