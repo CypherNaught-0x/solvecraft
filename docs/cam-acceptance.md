@@ -38,8 +38,8 @@ Fusion captures and their derived reports remain ignored local evidence.
 
 ## Upstream integration
 
-The historical acceptance below was recorded before rebasing onto upstream
-`9d82b944`. The integration adopts SolidCraft naming, pending document migrations,
+The historical acceptance below was recorded before rebasing onto upstream.
+The current integration includes `650ba567` (0.14.0 and subsequent merges) and adopts SolidCraft naming, pending document migrations,
 copy-on-write sessions, asynchronous file dialogs and the current viewport pipeline.
 Fresh analytic acceptance passes all nine recipes/fourteen stages. Input reconciliation
 and the independent oracle were rerun against the same immutable Fusion captures:
@@ -47,8 +47,13 @@ all four packages pass. The rebased native facing workflow passes generation,
 simulation, posting, save/reopen and regeneration. Its actual Manufacture window
 was inspected, including blue cutting paths, amber clearances and Pass/Pass status.
 First Save changes the design name and conservatively invalidates the prior cache;
-regeneration restores freshness. Native/Wasm integration gates remain pending;
-historical timings and captures alone do not qualify those integration changes.
+regeneration restores freshness. On the intermediate `9d82b944` base, formatting,
+Clippy, assets, layers and the 12-crate Wasm check passed. The full native run found
+UI integration regressions; their fixes are included, but local reruns were stopped
+after disk exhaustion and severe host overload. Final validation on `650ba567` is
+pending in upstream PR #1682. Its initial locked-build failure was corrected for
+the 0.14.0 release, and profile-sampling tests now cover upstream's degree-9 Beziers.
+Historical timings and captures alone do not qualify these integration changes.
 
 ## Recorded local acceptance
 

@@ -365,7 +365,8 @@ mod tests {
             Seg2::Line { a, b },
             Seg2::Arc { center: a, radius: 8., start: 0.2, sweep: -5. },
             Seg2::Cubic { p0: a, p1: c, p2: b, p3: Vec2::ZERO },
-            Seg2::Bezier { n: 7, p: [a, b, c, a, b, c, a, b] },
+            Seg2::Bezier { n: 7, p: [a, b, c, a, b, c, a, b, c, a] },
+            Seg2::Bezier { n: 9, p: [a, b, c, a, b, c, a, b, c, a] },
         ];
         for w in [-0.5, 0., 0.7, 1., 5.] {
             curves.push(Seg2::Conic { a, apex: c, b, w });
@@ -391,7 +392,7 @@ mod tests {
         p.plane.origin = Vec3::new(1e15, 0., 0.);
         assert!(p.segments(&Seg2::Line { a: Vec2::ZERO, b: Vec2::X }).is_err());
         let p = profile();
-        assert!(p.segments(&Seg2::Bezier { n: 255, p: [Vec2::ZERO; 8] }).is_err());
+        assert!(p.segments(&Seg2::Bezier { n: 255, p: Default::default() }).is_err());
         assert!(p.segments(&Seg2::Conic { a: Vec2::ZERO, apex: Vec2::X, b: Vec2::Y, w: -1. }).is_err());
         assert!(p.segments(&Seg2::Line { a: Vec2::new(f64::NAN, 0.), b: Vec2::ZERO }).is_err());
     }
