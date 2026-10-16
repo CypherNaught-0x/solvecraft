@@ -49,9 +49,10 @@ fn milling_and_parallel_generate_simulate_post_and_display_through_ui() {
             h.app.session.selection =
                 vec![solidcraft_engine::Sel::Face { body: body.name, index: face, point: solidcraft_engine::geom::Vec3::new(10.5, 10., 5.5) }];
             h.frames(3);
-            h.step(&json!({"widget":"Analytic plate"})).unwrap();
-            h.step(&json!({"widget":"drill"})).unwrap();
+            h.step(&json!({"widget":"drill","near":"01"})).unwrap();
             h.frames(20);
+            h.step(&json!({"widget":"Geometry"})).unwrap();
+            h.frames(3);
             h.step(&json!({"widget":"Use selected holes"})).unwrap();
             h.step(&json!({"widget":"Save"})).unwrap();
             assert_eq!(h.app.session.doc.manufacturing.operations[0].hole_sources.len(), 1);
@@ -64,8 +65,12 @@ fn milling_and_parallel_generate_simulate_post_and_display_through_ui() {
         assert_eq!(report["verification"]["status"], "pass", "{name}: {report}");
         assert_eq!(report["verification"]["finished_dimensions"], "pass", "{name}: {report}");
         h.app.run("cam.post", json!({"job":id,"path":h.dir.join(format!("{name}.nc"))})).unwrap();
+        h.step(&json!({"widget":"Display"})).unwrap();
+        h.frames(3);
         h.step(&json!({"widget":"Target model"})).unwrap();
         h.step(&json!({"widget":"Remaining stock"})).unwrap();
+        h.step(&json!({"widget":"Toolpath"})).unwrap();
+        h.frames(3);
         h.step(&json!({"widget":"To start"})).unwrap();
         h.call("ui.view", json!({"view":"fit"}));
         let out = h.call("ui.render", json!({"path":h.dir.join(format!("{name}.png")),"width":1000,"height":750}));

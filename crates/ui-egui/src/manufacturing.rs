@@ -1,7 +1,11 @@
 //! Manufacture workspace. All edits and jobs use the public CAM commands.
+mod browser;
+#[cfg(test)]
+mod interaction_tests;
 #[cfg(any(target_arch = "wasm32", test))]
 mod scheduler;
 pub(crate) mod view;
+mod workflow;
 use crate::{SolveApp, theme::Tokens};
 use egui::{Color32, Stroke};
 use serde_json::json;
@@ -10,6 +14,10 @@ use solidcraft_engine::{cam, geom::Vec3, manufacturing::JobState};
 #[derive(Default)]
 pub struct State {
     editor: Option<Editor>,
+    setup: u64,
+    operation: Option<u64>,
+    operation_tab: OperationTab,
+    page: workflow::Page,
     pub program: u64,
     pub job: Option<u64>,
     pending_export: Option<u64>,
@@ -38,6 +46,16 @@ pub(crate) fn advance(app: &mut SolveApp, ctx: &egui::Context) {
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum OperationTab {
+    #[default]
+    Tool,
+    Geometry,
+    Heights,
+    Passes,
+    Linking,
+}
+
 enum Editor {
     Setup(cam::Setup),
     Tool(cam::Tool),
@@ -54,6 +72,9 @@ pub fn start(app: &mut SolveApp, id: &str) {
     crate::dialogs::cancel(app);
     app.tool = None;
     app.ui.tab = "MILLING".into();
+    browser::reconcile(app);
+    app.manufacturing.error.clear();
+    app.manufacturing.operation_tab = OperationTab::default();
     let m = &app.session.doc.manufacturing;
     match id {
         "cam.setup.put" => {
@@ -85,7 +106,7 @@ pub fn start(app: &mut SolveApp, id: &str) {
             }
         }
         "cam.operation.put" => {
-            let (Some(s), Some(t)) = (m.setups.first(), m.tools.first()) else {
+            let (Some(s), Some(t)) = (m.setups.iter().find(|s| s.id == app.manufacturing.setup), m.tools.first()) else {
                 app.set_status("Create a setup and a tool first", true);
                 return;
             };
@@ -103,7 +124,7 @@ pub fn start(app: &mut SolveApp, id: &str) {
             }
         }
         "cam.program.put" => {
-            let Some(s) = m.setups.first() else {
+            let Some(s) = m.setups.iter().find(|s| s.id == app.manufacturing.setup) else {
                 app.set_status("Create a setup first", true);
                 return;
             };
@@ -115,8 +136,10 @@ pub fn start(app: &mut SolveApp, id: &str) {
             }));
         }
         "cam.generate" => {
-            let p = if app.manufacturing.program == 0 { m.programs.first().map(|p| p.id).unwrap_or(0) } else { app.manufacturing.program };
+            let p = app.manufacturing.program;
             if let Ok(v) = app.run(id, json!({"program":p,"background":true})) {
+                app.manufacturing.program = p;
+                app.manufacturing.page = workflow::Page::Toolpath;
                 app.manufacturing.job = v["job"].as_u64();
                 app.manufacturing.playback = 0;
                 app.manufacturing.playing = false;
@@ -190,68 +213,31 @@ pub(crate) fn update_exports(app: &mut SolveApp, ctx: &egui::Context) {
     }
 }
 pub fn panel(app: &mut SolveApp, ui: &mut egui::Ui) {
-    let model = app.session.doc.manufacturing.clone();
+    browser::reconcile(app);
     let mut action = None;
-    let previous_program = app.manufacturing.program;
-    egui::Panel::left("manufacturing_browser").default_size(290.0).show(ui, |ui| {
+    egui::Panel::left("manufacturing_browser").default_size(320.0).show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt("cam_panel_scroll").show(ui, |ui| {
             ui.heading("Manufacture");
-            ui.label("Three-axis milling · reference post");
-            ui.horizontal(|ui| {
-                if ui.button("Setup").clicked() {
-                    action = Some("cam.setup.put");
-                }
-                if ui.button("Tool").clicked() {
-                    action = Some("cam.tool.put");
-                }
-                if ui.button("Operation").clicked() {
-                    action = Some("cam.operation.put");
-                }
-            });
-            egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
-                for setup in &model.setups {
-                    ui.collapsing(&setup.name, |ui| {
-                        if ui.small_button("Edit setup").clicked() {
-                            app.manufacturing.editor = Some(Editor::Setup(setup.clone()));
-                        }
-                        for o in model.operations.iter().filter(|o| o.setup == setup.id) {
-                            if ui.selectable_label(false, &o.name).clicked() {
-                                app.manufacturing.editor = Some(Editor::Operation(o.clone()));
-                            }
-                        }
-                    });
-                }
-                ui.collapsing("Tools", |ui| {
-                    for tool in &model.tools {
-                        if ui.button(format!("T{} · {}", tool.number, tool.name)).clicked() {
-                            app.manufacturing.editor = Some(Editor::Tool(tool.clone()));
-                        }
-                    }
-                });
-                ui.collapsing("NC programs", |ui| {
-                    for p in &model.programs {
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(&mut app.manufacturing.program, p.id, &p.name);
-                            if ui.small_button("Edit").clicked() {
-                                app.manufacturing.editor = Some(Editor::Program(p.clone()));
-                            }
-                        });
-                    }
-                    if ui.button("New program").clicked() {
-                        action = Some("cam.program.put");
-                    }
-                });
-            });
+            ui.weak("Three-axis milling");
+            browser::show(app, ui, &mut action);
+            ui.separator();
+            let availability = workflow::Availability::read(app);
+            if availability.stale {
+                app.manufacturing.playing = false;
+            }
+            workflow::actions(app, ui, &availability, &mut action);
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button("Generate").clicked() {
-                    action = Some("cam.generate");
-                }
-                if ui.button("Simulate").clicked() {
-                    action = Some("cam.simulate");
+                for (page, label) in
+                    [(workflow::Page::Toolpath, "Toolpath"), (workflow::Page::Display, "Display"), (workflow::Page::Output, "Output")]
+                {
+                    ui.selectable_value(&mut app.manufacturing.page, page, label);
                 }
             });
-            if let Some(id) = app.manufacturing.job {
+            ui.add_space(6.);
+            if app.manufacturing.page == workflow::Page::Toolpath
+                && let Some(id) = app.manufacturing.job
+            {
                 if let Ok(job) = solidcraft_engine::manufacturing::job(&app.session, id) {
                     if solidcraft_engine::manufacturing::current(&app.session, &job).is_err() {
                         ui.colored_label(Tokens::get().warning, "Inputs changed — regenerate");
@@ -317,14 +303,11 @@ pub fn panel(app: &mut SolveApp, ui: &mut egui::Ui) {
                         ui.spinner();
                         ui.label("Preparing export…");
                     }
-                    if ui.button("Cancel job").clicked() {
-                        let _ = app.run("cam.job.cancel", json!({"job":id}));
-                    }
                     let count = match job.state() {
                         Ok(JobState::Generated(p) | JobState::Verified(p, _)) => p.blocks.len(),
                         _ => 0,
                     };
-                    if count > 0 {
+                    if count > 0 && !availability.stale {
                         view::advance(&mut app.manufacturing, count, 0.);
                         if ui.checkbox(&mut app.manufacturing.playing, "Play toolpath").changed()
                             && app.manufacturing.playing
@@ -368,63 +351,66 @@ pub fn panel(app: &mut SolveApp, ui: &mut egui::Ui) {
                     ui.label("Regenerate after reopening or switching documents");
                 }
             }
-            ui.separator();
-            egui::ComboBox::from_label("Workpiece")
-                .selected_text(match app.manufacturing.view.workpiece {
-                    view::Workpiece::Model => "Target model",
-                    view::Workpiece::InitialStock => "Initial stock",
-                    view::Workpiece::RemainingStock => "Remaining stock",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut app.manufacturing.view.workpiece, view::Workpiece::Model, "Target model");
-                    ui.selectable_value(&mut app.manufacturing.view.workpiece, view::Workpiece::InitialStock, "Initial stock");
-                    ui.selectable_value(&mut app.manufacturing.view.workpiece, view::Workpiece::RemainingStock, "Remaining stock");
-                });
-            if app.manufacturing.view.workpiece == view::Workpiece::RemainingStock {
-                match view::fresh_job(app).map(|j| j.stock_mesh()) {
-                    Some(Ok(Some(_))) => {
-                        ui.label("Final stock · conservative upper surface");
-                    }
-                    Some(Err(e)) => {
-                        ui.colored_label(Tokens::get().warning, e.to_string());
-                    }
-                    _ => {
-                        ui.label("Simulate the current program to display remaining stock");
+            if app.manufacturing.page == workflow::Page::Display {
+                egui::ComboBox::from_label("Workpiece")
+                    .selected_text(match app.manufacturing.view.workpiece {
+                        view::Workpiece::Model => "Target model",
+                        view::Workpiece::InitialStock => "Initial stock",
+                        view::Workpiece::RemainingStock => "Remaining stock",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut app.manufacturing.view.workpiece, view::Workpiece::Model, "Target model");
+                        ui.selectable_value(&mut app.manufacturing.view.workpiece, view::Workpiece::InitialStock, "Initial stock");
+                        ui.selectable_value(&mut app.manufacturing.view.workpiece, view::Workpiece::RemainingStock, "Remaining stock");
+                    });
+                if app.manufacturing.view.workpiece == view::Workpiece::RemainingStock {
+                    match view::fresh_job(app).map(|j| j.stock_mesh()) {
+                        Some(Ok(Some(_))) => {
+                            ui.label("Final stock · conservative upper surface");
+                        }
+                        Some(Err(e)) => {
+                            ui.colored_label(Tokens::get().warning, e.to_string());
+                        }
+                        _ => {
+                            ui.label("Simulate the current program to display remaining stock");
+                        }
                     }
                 }
+                ui.checkbox(&mut app.manufacturing.view.fixtures, "Show fixtures");
+                ui.checkbox(&mut app.manufacturing.view.paths, "Show toolpath");
+                ui.checkbox(&mut app.manufacturing.view.boundary, "Show stock boundary");
+                if ui.button("Fit machining setup").clicked() {
+                    app.fit_view();
+                }
+                ui.horizontal_wrapped(|ui| {
+                    let t = Tokens::get();
+                    ui.colored_label(t.cam_cut, "Cut");
+                    ui.colored_label(t.cam_rapid, "Rapid");
+                    ui.colored_label(t.cam_fixture, "Fixture");
+                });
             }
-            ui.checkbox(&mut app.manufacturing.view.fixtures, "Show fixtures");
-            ui.checkbox(&mut app.manufacturing.view.paths, "Show toolpath");
-            ui.checkbox(&mut app.manufacturing.view.boundary, "Show stock boundary");
-            if ui.button("Fit machining setup").clicked() {
-                app.fit_view();
-            }
-            ui.horizontal_wrapped(|ui| {
-                let t = Tokens::get();
-                ui.colored_label(t.cam_cut, "Cut");
-                ui.colored_label(t.cam_rapid, "Rapid");
-                ui.colored_label(t.cam_fixture, "Fixture");
-            });
-            ui.separator();
-            for (label, f) in [
-                ("Post G-code", "gcode"),
-                ("Setup sheet", "setup_sheet"),
-                ("Toolpath JSON", "toolpath"),
-                ("Validation report", "validation"),
-                ("Remaining stock STL", "stock"),
-            ] {
-                if ui.button(label).clicked() {
-                    export(app, f);
+            if app.manufacturing.page == workflow::Page::Output {
+                ui.strong("Reference three-axis post");
+                ui.label("Tool-tip coordinates · G90 · G94 · geometric cutter compensation");
+                ui.weak("Not qualified for a physical controller.");
+                ui.add_space(8.);
+                for (label, f) in [
+                    ("Post G-code", "gcode"),
+                    ("Setup sheet", "setup_sheet"),
+                    ("Toolpath JSON", "toolpath"),
+                    ("Validation report", "validation"),
+                    ("Remaining stock STL", "stock"),
+                ] {
+                    let enabled = availability.export(f) && app.manufacturing.pending_export.is_none();
+                    if ui.add_enabled(enabled, egui::Button::new(label)).on_disabled_hover_text(availability.hint(f)).clicked() {
+                        export(app, f);
+                    }
                 }
             }
         });
     });
-    if previous_program != app.manufacturing.program {
-        app.manufacturing.job = None;
+    if app.manufacturing.page != workflow::Page::Toolpath {
         app.manufacturing.playing = false;
-        app.manufacturing.playback = 0;
-        app.manufacturing.view.loaded_job = None;
-        app.manufacturing.finding = None;
     }
     if let Some(id) = action {
         start(app, id);
@@ -471,11 +457,19 @@ pub fn editor(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(mut editor) = app.manufacturing.editor.take() else { return };
     let mut save = false;
     let mut delete = false;
+    let mut cancel = false;
     let mut open = true;
     crate::frame::window(ctx, "Manufacturing parameters", crate::frame::Width::Normal).open(&mut open).resizable(true).default_width(420.0).show(
         ctx,
         |ui| {
-            egui::ScrollArea::vertical().max_height(540.0).show(ui, |ui| match &mut editor {
+            ui.strong(match &editor {
+                Editor::Setup(_) => "Setup · stock and work coordinates",
+                Editor::Tool(_) => "Tool · cutting geometry and holder",
+                Editor::Operation(_) => "Operation · machining parameters",
+                Editor::Program(_) => "NC program · operation order",
+            });
+            ui.separator();
+            egui::ScrollArea::vertical().id_salt("cam_editor_scroll").max_height(540.0).show(ui, |ui| match &mut editor {
                 Editor::Setup(s) => edit_setup(app, ui, s),
                 Editor::Tool(t) => edit_tool(ui, t),
                 Editor::Operation(o) => edit_operation(app, ui, o),
@@ -486,10 +480,12 @@ pub fn editor(app: &mut SolveApp, ctx: &egui::Context) {
             }
             ui.horizontal(|ui| {
                 save = ui.button("Save").clicked();
+                cancel = ui.button("Cancel").clicked();
                 delete = ui.button("Delete item").clicked();
             });
         },
     );
+    open &= !cancel;
     if save {
         let (id, p) = match &editor {
             Editor::Setup(s) => ("cam.setup.put", json!({"setup":s})),
@@ -501,6 +497,12 @@ pub fn editor(app: &mut SolveApp, ctx: &egui::Context) {
             Ok(_) => {
                 open = false;
                 app.manufacturing.error.clear();
+                match &editor {
+                    Editor::Setup(s) => browser::select_setup(app, s.id),
+                    Editor::Operation(o) => app.manufacturing.operation = Some(o.id),
+                    Editor::Program(p) => browser::select_program(app, p.id),
+                    Editor::Tool(_) => {}
+                }
             }
             Err(e) => app.manufacturing.error = e.to_string(),
         }
@@ -617,16 +619,13 @@ fn edit_tool(ui: &mut egui::Ui, t: &mut cam::Tool) {
 fn edit_operation(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation) {
     ui.label("Operation name");
     ui.text_edit_singleline(&mut o.name);
-    egui::ComboBox::from_label("Setup").selected_text(o.setup.to_string()).show_ui(ui, |ui| {
-        for s in &app.session.doc.manufacturing.setups {
-            ui.selectable_value(&mut o.setup, s.id, &s.name);
-        }
-    });
-    egui::ComboBox::from_label("Tool").selected_text(o.tool.to_string()).show_ui(ui, |ui| {
-        for t in &app.session.doc.manufacturing.tools {
-            ui.selectable_value(&mut o.tool, t.id, &t.name);
-        }
-    });
+    egui::ComboBox::from_label("Setup")
+        .selected_text(app.session.doc.manufacturing.setups.iter().find(|s| s.id == o.setup).map_or("Missing setup", |s| s.name.as_str()))
+        .show_ui(ui, |ui| {
+            for s in &app.session.doc.manufacturing.setups {
+                ui.selectable_value(&mut o.setup, s.id, &s.name);
+            }
+        });
     let mut kind = match o.geometry {
         cam::Strategy::Face => 0,
         cam::Strategy::Contour { .. } => 1,
@@ -659,6 +658,95 @@ fn edit_operation(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation)
             o.lead_distance = 0.;
         }
     }
+    ui.separator();
+    ui.horizontal(|ui| {
+        for (tab, label) in [
+            (OperationTab::Tool, "Tool"),
+            (OperationTab::Geometry, "Geometry"),
+            (OperationTab::Heights, "Heights"),
+            (OperationTab::Passes, "Passes"),
+            (OperationTab::Linking, "Linking"),
+        ] {
+            ui.selectable_value(&mut app.manufacturing.operation_tab, tab, label);
+        }
+    });
+    ui.separator();
+    match app.manufacturing.operation_tab {
+        OperationTab::Tool => {
+            egui::ComboBox::from_label("Cutting tool")
+                .selected_text(
+                    app.session
+                        .doc
+                        .manufacturing
+                        .tools
+                        .iter()
+                        .find(|t| t.id == o.tool)
+                        .map_or("Missing tool".into(), |t| format!("T{} · {}", t.number, t.name)),
+                )
+                .show_ui(ui, |ui| {
+                    for t in &app.session.doc.manufacturing.tools {
+                        ui.selectable_value(&mut o.tool, t.id, format!("T{} · {}", t.number, t.name));
+                    }
+                });
+            if let Some(t) = app.session.doc.manufacturing.tools.iter().find(|t| t.id == o.tool) {
+                ui.weak(format!("Diameter {:.3} mm · cutting length {:.3} mm", t.diameter, t.cutting_length));
+            }
+            for (label, v) in [("Feed mm/min", &mut o.feed), ("Plunge mm/min", &mut o.plunge_feed), ("Spindle rpm", &mut o.spindle)] {
+                number(ui, label, v);
+            }
+            ui.checkbox(&mut o.coolant, "Coolant");
+        }
+        OperationTab::Geometry => edit_geometry(app, ui, o),
+        OperationTab::Heights => {
+            ui.weak("Absolute Z in setup coordinates · mm");
+            if let Some(s) = app.session.doc.manufacturing.setups.iter().find(|s| s.id == o.setup) {
+                workflow::heights(ui, s, o);
+                ui.label(format!("Clearance {:.3} · Retract {:.3} (from setup)", s.clearance, s.retract));
+            }
+            number(ui, "Top Z", &mut o.top);
+            number(ui, "Bottom Z", &mut o.bottom);
+            if let cam::Strategy::Drill { full_diameter, .. } = &mut o.geometry {
+                ui.checkbox(full_diameter, "Depth is full-diameter depth");
+            }
+        }
+        OperationTab::Passes => {
+            for (label, v) in
+                [("Stepdown", &mut o.stepdown), ("Stepover", &mut o.stepover), ("Stock allowance", &mut o.allowance), ("Tolerance", &mut o.tolerance)]
+            {
+                number(ui, label, v);
+            }
+            if let cam::Strategy::Drill { peck, .. } = &mut o.geometry {
+                let mut enabled = peck.is_some();
+                if ui.checkbox(&mut enabled, "Peck drilling").changed() {
+                    *peck = enabled.then_some(1.0);
+                }
+                if let Some(p) = peck {
+                    number(ui, "Peck depth", p);
+                }
+            } else {
+                ui.checkbox(&mut o.climb, "Climb milling");
+            }
+        }
+        OperationTab::Linking => {
+            if matches!(o.geometry, cam::Strategy::Contour { .. } | cam::Strategy::Pocket { .. }) {
+                number(ui, "Tangential lead distance", &mut o.lead_distance);
+                let mut ramp = o.ramp_angle.is_some();
+                if ui.checkbox(&mut ramp, "Ramp entry").changed() {
+                    o.ramp_angle = ramp.then_some(3_f64.to_radians());
+                }
+                if let Some(a) = &mut o.ramp_angle {
+                    let mut degrees = a.to_degrees();
+                    number(ui, "Ramp angle (degrees)", &mut degrees);
+                    *a = degrees.to_radians();
+                }
+            } else {
+                ui.label("Feed-controlled entry with retracts to the setup heights.");
+                ui.weak("This strategy has no editable leads or ramps.");
+            }
+        }
+    }
+}
+fn edit_geometry(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation) {
     if matches!(o.geometry, cam::Strategy::Contour { .. } | cam::Strategy::Pocket { .. }) {
         if ui.button("Use selected sketch profile").clicked() {
             link_profile(app, o);
@@ -691,7 +779,7 @@ fn edit_operation(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation)
             boundary(ui, b);
         }
         cam::Strategy::Pocket { boundary: b } => boundary(ui, b),
-        cam::Strategy::Drill { holes, peck, full_diameter } => {
+        cam::Strategy::Drill { holes, .. } => {
             ui.add_enabled_ui(!linked_holes, |ui| {
                 for (index, p) in holes.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
@@ -707,45 +795,14 @@ fn edit_operation(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation)
                     holes.pop();
                 }
             });
-            let mut enabled = peck.is_some();
-            if ui.checkbox(&mut enabled, "Peck drilling").changed() {
-                *peck = enabled.then_some(1.0);
-            }
-            if let Some(p) = peck {
-                number(ui, "Peck depth", p);
-            }
-            ui.checkbox(full_diameter, "Depth is full-diameter depth");
         }
         _ => {}
     }
-    for (label, v) in [
-        ("Top Z", &mut o.top),
-        ("Bottom Z", &mut o.bottom),
-        ("Stepdown", &mut o.stepdown),
-        ("Stepover", &mut o.stepover),
-        ("Feed mm/min", &mut o.feed),
-        ("Plunge mm/min", &mut o.plunge_feed),
-        ("Spindle rpm", &mut o.spindle),
-        ("Stock allowance", &mut o.allowance),
-        ("Tolerance", &mut o.tolerance),
-    ] {
-        number(ui, label, v);
+    if matches!(o.geometry, cam::Strategy::Face) {
+        ui.label("Facing covers the rectangular stock in this setup.");
     }
-    if matches!(o.geometry, cam::Strategy::Contour { .. } | cam::Strategy::Pocket { .. }) {
-        number(ui, "Tangential lead distance", &mut o.lead_distance);
-        let mut ramp = o.ramp_angle.is_some();
-        if ui.checkbox(&mut ramp, "Ramp entry").changed() {
-            o.ramp_angle = ramp.then_some(3_f64.to_radians());
-        }
-        if let Some(a) = &mut o.ramp_angle {
-            let mut degrees = a.to_degrees();
-            number(ui, "Ramp angle (degrees)", &mut degrees);
-            *a = degrees.to_radians();
-        }
-    }
-    ui.checkbox(&mut o.climb, "Climb milling");
-    ui.checkbox(&mut o.coolant, "Coolant");
 }
+
 fn link_holes(app: &mut SolveApp, o: &mut cam::Operation) {
     let mut picks = Vec::new();
     for selected in &app.session.selection {
@@ -807,11 +864,13 @@ fn link_profile(app: &mut SolveApp, o: &mut cam::Operation) {
 fn edit_program(app: &mut SolveApp, ui: &mut egui::Ui, p: &mut cam::Program) {
     ui.label("Program name");
     ui.text_edit_singleline(&mut p.name);
-    egui::ComboBox::from_label("Setup").selected_text(p.setup.to_string()).show_ui(ui, |ui| {
-        for s in &app.session.doc.manufacturing.setups {
-            ui.selectable_value(&mut p.setup, s.id, &s.name);
-        }
-    });
+    egui::ComboBox::from_label("Setup")
+        .selected_text(app.session.doc.manufacturing.setups.iter().find(|s| s.id == p.setup).map_or("Missing setup", |s| s.name.as_str()))
+        .show_ui(ui, |ui| {
+            for s in &app.session.doc.manufacturing.setups {
+                ui.selectable_value(&mut p.setup, s.id, &s.name);
+            }
+        });
     ui.label("Ordered operations");
     let mut swap = None;
     let mut remove = None;
@@ -1031,6 +1090,8 @@ mod tests {
         h.app.ui.tab = "MILLING".into();
         // Changing strategy resizes this centered dialog; wait for its layout animation.
         h.frames(20);
+        h.step(&json!({"widget":"Geometry"})).unwrap();
+        h.frames(3);
         h.step(&json!({"widget":"Use selected holes"})).unwrap();
         h.frames(2);
         assert!(h.app.manufacturing.error.is_empty(), "{}", h.app.manufacturing.error);
