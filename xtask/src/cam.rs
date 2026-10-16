@@ -7,7 +7,33 @@ use std::path::{Path, PathBuf};
 mod reference;
 #[cfg(test)]
 mod tests;
-const COMPARISON_VERSION: &str = "cam-oracle/2";
+const COMPARISON_VERSION: &str = "cam-oracle/3";
+
+const MILLING_CASES: &[(&str, &str)] = &[("face", "face"), ("contour", "contour"), ("pocket", "pocket"), ("drill", "drill")];
+const THREE_DIMENSIONAL_CASES: &[(&str, &str)] =
+    &[("adaptive", "adaptive"), ("roughing-3d", "roughing_3d"), ("parallel", "parallel"), ("constant-z", "constant_z")];
+
+fn oracle_request(args: &[&str]) -> Result<(PathBuf, &'static str), String> {
+    if !args.len().is_multiple_of(2) {
+        return Err("cam-oracle options require values".into());
+    }
+    let mut dir = None;
+    let mut milestone = None;
+    for option in args.as_chunks::<2>().0 {
+        match option {
+            ["--dir", value] if dir.is_none() => dir = Some(PathBuf::from(value)),
+            ["--milestone", value] if milestone.is_none() => {
+                milestone = Some(match *value {
+                    "milling" => "milling",
+                    "adaptive-3d" => "adaptive-3d",
+                    _ => return Err("CAM milestone must be milling or adaptive-3d".into()),
+                })
+            }
+            _ => return Err("unknown or duplicate cam-oracle option".into()),
+        }
+    }
+    Ok((dir.ok_or("cam-oracle requires --dir LOCAL_ORACLE_DIRECTORY")?, milestone.unwrap_or("milling")))
+}
 
 fn write(path: &Path, content: impl AsRef<[u8]>) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| format!("{}: {e}", path.display()))
@@ -127,7 +153,7 @@ fn metrics(input: &JobInput, parsed: &nc::Parsed, report: &verify::Report) -> Re
         "remaining_volume":[report.remaining_volume_low,report.remaining_volume_high]}))
 }
 pub fn oracle(root: &Path, args: &[&str]) -> Result<(), String> {
-    let dir = args.windows(2).find(|w| w[0] == "--dir").map(|w| PathBuf::from(w[1])).ok_or("cam-oracle requires --dir LOCAL_ORACLE_DIRECTORY")?;
+    let (dir, milestone) = oracle_request(args)?;
     let canonical = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
     if canonical.starts_with(root) {
         let ignored = std::process::Command::new("git")
@@ -140,17 +166,18 @@ pub fn oracle(root: &Path, args: &[&str]) -> Result<(), String> {
             return Err("Fusion storage inside this repository must be git-ignored (use plan/fusion/cam)".into());
         }
     }
-    let out = dir.join("comparison");
+    let out = dir.join(if milestone == "milling" { "comparison" } else { "comparison-adaptive-3d" });
     directory(&out)?;
     let mut cases = Vec::new();
-    for name in ["face", "contour", "pocket", "drill"] {
+    let required = if milestone == "milling" { MILLING_CASES } else { THREE_DIMENSIONAL_CASES };
+    for &(name, strategy) in required {
         let case = dir.join(name);
-        let value = compare_case(&case, &out.join(name)).unwrap_or_else(|e| json!({"pass":false,"status":"incomplete","error":e}));
+        let value = compare_case(&case, &out.join(name), strategy).unwrap_or_else(|e| json!({"pass":false,"status":"incomplete","error":e}));
         let mut value = value;
         value["case"] = json!(name);
         cases.push(value);
     }
-    report(&out, &cases, "Local Fusion CAM comparison")?;
+    report(&out, &cases, &format!("Local Fusion CAM comparison — {milestone}"))?;
     let _ = root;
     println!("Fusion CAM oracle: {}/{} passed → {}", cases.iter().filter(|v| v["pass"] == true).count(), cases.len(), out.display());
     if cases.iter().all(|v| v["pass"] == true) {
@@ -159,7 +186,7 @@ pub fn oracle(root: &Path, args: &[&str]) -> Result<(), String> {
         Err("Fusion parity unverified: missing, failed or inconclusive reference cases".into())
     }
 }
-fn compare_case(dir: &Path, out: &Path) -> Result<Value, String> {
+fn compare_case(dir: &Path, out: &Path, expected_strategy: &str) -> Result<Value, String> {
     let manifest = json_file(&dir.join("manifest.json"))?;
     for field in ["fusion_version", "post_sha256", "captured_at", "input_fingerprint"] {
         if manifest[field].as_str().is_none_or(str::is_empty) {
@@ -174,6 +201,9 @@ fn compare_case(dir: &Path, out: &Path) -> Result<Value, String> {
         return Err("reference capture is incomplete".into());
     }
     let input_value = json_file(&dir.join("input.json"))?;
+    if input_value["operations"].as_array().and_then(|ops| ops.last()).and_then(|op| op["geometry"]["strategy"].as_str()) != Some(expected_strategy) {
+        return Err(format!("reference package must end with the required {expected_strategy} strategy"));
+    }
     let reference_value = json_file(&dir.join("reference-input.json"))?;
     if input_value != reference_value {
         return Err("SolidCraft and reference inputs differ; comparison invalid".into());

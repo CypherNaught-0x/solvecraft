@@ -14,6 +14,8 @@ use parry3d_f64::{
 use solidcraft_geom::Vec3;
 use std::collections::BTreeMap;
 
+mod hemisphere;
+
 #[derive(Clone, Copy)]
 struct Bounds {
     min: Vec3,
@@ -72,26 +74,41 @@ fn root(parents: &mut [usize], mut i: usize) -> usize {
 fn vector(p: Vec3) -> Vector {
     Vector::new(p.x, -p.z, p.y)
 }
+#[derive(Clone, Copy, PartialEq)]
+enum ShapeKind {
+    Cylinder,
+    Cone,
+    Hemisphere,
+}
 struct Part {
     radius: f64,
     low: f64,
     high: f64,
-    cone: bool,
+    shape: ShapeKind,
     label: &'static str,
 }
 fn parts(t: &Tool) -> Vec<Part> {
-    let tip = t.tip_length();
+    let tip = if t.kind == ToolKind::BallEndMill { t.diameter / 2. } else { t.tip_length() };
     let mut out = Vec::with_capacity(4);
     if t.kind == ToolKind::TwistDrill {
-        out.push(Part { radius: t.diameter / 2.0, low: 0.0, high: tip, cone: true, label: "cutter" });
+        out.push(Part { radius: t.diameter / 2.0, low: 0.0, high: tip, shape: ShapeKind::Cone, label: "cutter" });
+    }
+    if t.kind == ToolKind::BallEndMill {
+        out.push(Part { radius: tip, low: 0., high: tip, shape: ShapeKind::Hemisphere, label: "cutter" });
     }
     if t.cutting_length > tip {
-        out.push(Part { radius: t.diameter / 2.0, low: tip, high: t.cutting_length, cone: false, label: "cutter" });
+        out.push(Part { radius: t.diameter / 2.0, low: tip, high: t.cutting_length, shape: ShapeKind::Cylinder, label: "cutter" });
     }
     if t.overall_length > t.cutting_length {
-        out.push(Part { radius: t.shank_diameter / 2.0, low: t.cutting_length, high: t.overall_length, cone: false, label: "shank" });
+        out.push(Part { radius: t.shank_diameter / 2.0, low: t.cutting_length, high: t.overall_length, shape: ShapeKind::Cylinder, label: "shank" });
     }
-    out.push(Part { radius: t.holder_diameter / 2.0, low: t.overall_length, high: t.overall_length + t.holder_length, cone: false, label: "holder" });
+    out.push(Part {
+        radius: t.holder_diameter / 2.0,
+        low: t.overall_length,
+        high: t.overall_length + t.holder_length,
+        shape: ShapeKind::Cylinder,
+        label: "holder",
+    });
     out
 }
 impl Part {
@@ -109,9 +126,12 @@ impl Part {
         let center = vector(self.center(s.from));
         let position = Pose::translation(center.x, center.y, center.z);
         let triangle = Triangle::new(vector(tri[0]), vector(tri[1]), vector(tri[2]));
+        if self.shape == ShapeKind::Hemisphere {
+            return hemisphere::cast(&position, vector(s.to - s.from), self.radius, &triangle, margin);
+        }
         let cylinder = Cylinder::new((self.high - self.low) / 2.0, self.radius);
         let cone = Cone::new((self.high - self.low) / 2.0, self.radius);
-        let shape: &dyn Shape = if self.cone { &cone } else { &cylinder };
+        let shape: &dyn Shape = if self.shape == ShapeKind::Cone { &cone } else { &cylinder };
         let query = |distance| {
             cast_shapes(
                 &position,
@@ -419,6 +439,35 @@ mod tests {
         }
     }
     #[test]
+    fn ball_assembly_distinguishes_tip_shank_holder_and_clear_corners() {
+        let cases = [(Vec3::new(5., -0.1, 15.1), "cutter"), (Vec3::new(5., -0.1, 40.), "shank"), (Vec3::new(5., -0.1, 70.), "holder")];
+        for (min, kind) in cases {
+            let mut input = corpus::fixture("face").unwrap();
+            let mut ball = input.tools[0].clone();
+            ball.id = 2;
+            ball.number = 2;
+            ball.kind = ToolKind::BallEndMill;
+            input.tools.push(ball);
+            input.geometry.fixtures = box_mesh(min, min + Vec3::new(0.02, 0.2, 0.05));
+            let parsed = nc::parse("G21 G90 G17 G94 G54\nG0 X0 Y0 Z15\nT2 M6\nG0 X10\nM30", &input.tools).unwrap();
+            let report = verify::simulate(&input, &parsed, Limits::default()).unwrap();
+            assert_eq!(report.status, Status::Fail, "{kind}: {:?}", report.findings);
+            assert!(report.findings.iter().any(|f| f.kind == format!("fixture_{kind}_collision") && f.line == Some(4)));
+        }
+        // Near the tip, a ball clears material that the same diameter's flat
+        // cutter would hit. Keep the whole closed fixture outside the sphere.
+        let mut input = corpus::fixture("face").unwrap();
+        let mut ball = input.tools[0].clone();
+        ball.id = 2;
+        ball.number = 2;
+        ball.kind = ToolKind::BallEndMill;
+        input.tools.push(ball);
+        input.geometry.fixtures = box_mesh(Vec3::new(-0.05, 2.8, 15.1), Vec3::new(0.05, 2.9, 15.2));
+        let parsed = nc::parse("G21 G90 G17 G94 G54\nG0 X0 Y0 Z15\nT2 M6\nG0 X1\nM30", &input.tools).unwrap();
+        let report = verify::simulate(&input, &parsed, Limits::default()).unwrap();
+        assert_eq!(report.status, Status::Pass, "{:?}", report.findings);
+    }
+    #[test]
     fn contained_tool_is_not_missed_and_winding_is_irrelevant() {
         let cube = box_mesh(Vec3::new(-20.0, -20.0, 10.0), Vec3::new(20.0, 20.0, 100.0));
         for reverse in [false, true] {
@@ -455,7 +504,7 @@ mod tests {
     }
     #[test]
     fn cylinder_corners_and_margin_are_resolved() {
-        let part = Part { radius: 1.0, low: 0.0, high: 2.0, cone: false, label: "cutter" };
+        let part = Part { radius: 1.0, low: 0.0, high: 2.0, shape: ShapeKind::Cylinder, label: "cutter" };
         let s = Segment { from: Vec3::ZERO, to: Vec3::ZERO, rapid: true, feed: 0.0, tool: 1, line: 4 };
         let triangle = |x, y| [Vec3::new(x, y, 0.5), Vec3::new(x + 0.05, y, 1.5), Vec3::new(x, y + 0.05, 1.5)];
         assert_eq!(part.cast(&s, &triangle(0.8, 0.8), 0.0035), Status::Pass);
@@ -464,7 +513,7 @@ mod tests {
     }
     #[test]
     fn drill_point_shape_has_clearance_outside_its_cone() {
-        let part = Part { radius: 1.0, low: 0.0, high: 1.0, cone: true, label: "cutter" };
+        let part = Part { radius: 1.0, low: 0.0, high: 1.0, shape: ShapeKind::Cone, label: "cutter" };
         let s = Segment { from: Vec3::ZERO, to: Vec3::ZERO, rapid: false, feed: 100.0, tool: 1, line: 4 };
         let clear = [Vec3::new(0.8, 0.0, 0.1), Vec3::new(0.9, 0.0, 0.1), Vec3::new(0.8, 0.1, 0.2)];
         assert_eq!(part.cast(&s, &clear, 0.0035), Status::Pass);

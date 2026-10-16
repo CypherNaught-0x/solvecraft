@@ -4,14 +4,34 @@ use solidcraft_geom::Vec3;
 mod channel;
 mod extended;
 mod exterior;
+mod parallel;
 mod through;
 
-pub const CASES: &[&str] =
-    &["face", "contour", "pocket", "drill", "concave-islands", "multi-operation", "clamped-through-holes", "external-contour", "narrow-channel"];
+pub const CASES: &[&str] = &[
+    "face",
+    "contour",
+    "pocket",
+    "drill",
+    "concave-islands",
+    "multi-operation",
+    "clamped-through-holes",
+    "external-contour",
+    "narrow-channel",
+    "parallel-flat",
+    "parallel-slope",
+    "parallel-dome",
+    "parallel-bowl",
+    "parallel-saddle",
+];
 
 /// Independent point expectations, indexed by the completed operation count.
 pub fn probes(name: &str, completed: usize) -> Result<Vec<([f64; 2], f64)>> {
     match name {
+        "parallel-dome" | "parallel-bowl" | "parallel-saddle" if completed == 1 => {
+            [[0.1, 0.1], [0.4, 0.5], [0.5, 0.5], [0.9, 0.7]].into_iter().map(|p| Ok((p, parallel::height(name, p)?))).collect()
+        }
+        "parallel-flat" if completed == 1 => Ok(vec![([0.5, 0.5], 5.), ([0.5, 0.45], 5.), ([0.01, 0.99], 5.)]),
+        "parallel-slope" if completed == 1 => Ok(vec![([0.1, 0.5], 5.02), ([0.4, 0.5], 5.08), ([0.9, 0.5], 5.18)]),
         "face" | "pocket" | "drill" => Ok(vec![([10., 10.], 5.)]),
         "contour" => Ok(vec![([10., 10.], 6.)]),
         "narrow-channel" if completed == 1 => Ok(vec![([10., 10.], 5.), ([4., 10.], 5.), ([16., 10.], 5.), ([10., 11.2], 6.), ([3.8, 10.], 6.)]),
@@ -31,6 +51,15 @@ pub fn probes(name: &str, completed: usize) -> Result<Vec<([f64; 2], f64)>> {
 }
 
 pub fn fixture(strategy: &str) -> Result<JobInput> {
+    if matches!(strategy, "parallel-dome" | "parallel-bowl" | "parallel-saddle") {
+        return parallel::curved(strategy);
+    }
+    if strategy == "parallel-flat" {
+        return parallel::fixture(0.);
+    }
+    if strategy == "parallel-slope" {
+        return parallel::fixture(0.2);
+    }
     if strategy == "narrow-channel" {
         return channel::fixture();
     }

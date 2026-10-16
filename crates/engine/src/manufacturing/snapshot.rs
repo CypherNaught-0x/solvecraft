@@ -116,14 +116,15 @@ impl Snapshot {
         let mut target = Vec::new();
         let mut fixtures = Vec::new();
         let mut fixture_groups = Vec::new();
+        let closed_target = self.operations.iter().any(|operation| matches!(operation.geometry, cam::Strategy::Parallel));
         for body in self.models {
-            body.append(self.setup.frame, &mut target, check, yield_control).await?;
+            body.append((self.setup.frame, self.setup.stock, closed_target), &mut target, check, yield_control).await?;
             done += 1;
             progress(done * 20 / total);
         }
         for body in self.fixtures {
             let before = fixtures.len();
-            body.append(self.setup.frame, &mut fixtures, check, yield_control).await?;
+            body.append((self.setup.frame, self.setup.stock, false), &mut fixtures, check, yield_control).await?;
             fixture_groups.push(fixtures.len() - before);
             done += 1;
             progress(done * 20 / total);
@@ -173,11 +174,12 @@ impl PlacedBody {
     }
     async fn append<F: std::future::Future<Output = ()>>(
         self,
-        frame: cam::Frame,
+        setup: (cam::Frame, cam::Stock, bool),
         out: &mut Vec<[Vec3; 3]>,
         check: &impl Fn() -> bool,
         yield_control: &mut impl FnMut() -> F,
     ) -> Result<()> {
+        let (frame, stock, closed_target) = setup;
         cancelled(check)?;
         yield_control().await;
         cancelled(check)?;
@@ -185,13 +187,32 @@ impl PlacedBody {
         if out.len() + mesh.triangles.len() > 200_000 {
             return Err(error("CAM mesh exceeds verification budget"));
         }
+        // Only the new parallel height-field target requires exact closed-mesh
+        // incidence. Keep existing milling and fixture snapshots unchanged.
+        let mut vertices = if closed_target {
+            let extent = mesh
+                .positions
+                .iter()
+                .map(|v| frame.local(apply_point(&self.placement, *v)))
+                .flat_map(|p| [p.x.abs(), p.y.abs(), p.z.abs()])
+                .fold(1_f64, f64::max);
+            let mut vertices = super::mesh_vertices::Vertices::new(extent.max(stock.min.len()).max(stock.max.len()))?;
+            vertices.anchor_stock(stock)?;
+            Some(vertices)
+        } else {
+            None
+        };
         for (i, indices) in mesh.triangles.iter().enumerate() {
             if i.is_multiple_of(256) {
                 cancelled(check)?;
                 yield_control().await;
             }
             let triangle = mesh.tri(indices).ok_or_else(|| error("CAM mesh contains invalid indices"))?;
-            out.push(triangle.map(|v| frame.local(apply_point(&self.placement, v))));
+            let triangle = triangle.map(|v| frame.local(apply_point(&self.placement, v)));
+            out.push(match &mut vertices {
+                Some(vertices) => vertices.triangle(triangle)?,
+                None => triangle,
+            });
         }
         Ok(())
     }

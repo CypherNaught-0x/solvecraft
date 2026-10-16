@@ -43,6 +43,9 @@ PCB / Package, Render, Animation, Simulation, Drawings.
 
 ## Milling
 
+This fork retains CAM development. Upstream reverted the initial integration in
+[#1715](https://github.com/bherbruck/solidcraft/pull/1715) as out of scope.
+
 The first Manufacture workflow implements rectangular stock, setups and fixtures,
 flat mills and drills, facing, contouring, pockets with islands and simple/peck drilling.
 It includes generation, playback, conservative stock/collision verification and five
@@ -52,7 +55,10 @@ controller. See [implementation and validation](docs/cam.md),
 
 [Adaptive clearing and 3D roughing/finishing](docs/cam-next-milestone.md) are the next milestone. They require their
 own analytic fixtures, independent engagement/surface checks and complete local Fusion
-comparisons at the existing dimensional budgets before parity is declared. Indexed and
+comparisons at the existing dimensional budgets before parity is declared. Ball tools,
+independent swept-envelope checks and bounded X-parallel finishing are implemented,
+with five analytic fixtures and one complete parallel Fusion comparison;
+adaptive clearing, rest roughing and constant-Z finishing remain in progress. Indexed and
 multi-axis machining follow later; turning, additive and inspection remain excluded.
 
 ## Milestones

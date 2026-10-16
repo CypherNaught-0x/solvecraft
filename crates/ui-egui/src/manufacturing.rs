@@ -595,6 +595,7 @@ fn edit_tool(ui: &mut egui::Ui, t: &mut cam::Tool) {
     });
     egui::ComboBox::from_label("Tool type").selected_text(format!("{:?}", t.kind)).show_ui(ui, |ui| {
         ui.selectable_value(&mut t.kind, cam::ToolKind::FlatEndMill, "Flat end mill (center cutting)");
+        ui.selectable_value(&mut t.kind, cam::ToolKind::BallEndMill, "Ball end mill");
         ui.selectable_value(&mut t.kind, cam::ToolKind::TwistDrill, "Twist drill");
     });
     for (label, v) in [
@@ -631,13 +632,17 @@ fn edit_operation(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation)
         cam::Strategy::Contour { .. } => 1,
         cam::Strategy::Pocket { .. } => 2,
         cam::Strategy::Drill { .. } => 3,
+        cam::Strategy::Parallel => 4,
     };
     let before = kind;
-    egui::ComboBox::from_label("Strategy").selected_text(["Facing", "Contour", "Pocket", "Drilling"][kind]).show_ui(ui, |ui| {
-        for (i, label) in ["Facing", "Contour", "Pocket", "Drilling"].into_iter().enumerate() {
-            ui.selectable_value(&mut kind, i, label);
-        }
-    });
+    egui::ComboBox::from_label("Strategy").selected_text(["Facing", "Contour", "Pocket", "Drilling", "Parallel finishing (X)"][kind]).show_ui(
+        ui,
+        |ui| {
+            for (i, label) in ["Facing", "Contour", "Pocket", "Drilling", "Parallel finishing (X)"].into_iter().enumerate() {
+                ui.selectable_value(&mut kind, i, label);
+            }
+        },
+    );
     if kind != before {
         o.source = None;
         o.hole_sources.clear();
@@ -646,8 +651,13 @@ fn edit_operation(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation)
             1 => cam::Strategy::Contour { boundary: b, inside: false },
             2 => cam::Strategy::Pocket { boundary: b },
             3 => cam::Strategy::Drill { holes: vec![[0.0, 0.0]], peck: None, full_diameter: false },
+            4 => cam::Strategy::Parallel,
             _ => cam::Strategy::Face,
         };
+        if !matches!(o.geometry, cam::Strategy::Contour { .. } | cam::Strategy::Pocket { .. }) {
+            o.ramp_angle = None;
+            o.lead_distance = 0.;
+        }
     }
     if matches!(o.geometry, cam::Strategy::Contour { .. } | cam::Strategy::Pocket { .. }) {
         if ui.button("Use selected sketch profile").clicked() {
@@ -672,6 +682,9 @@ fn edit_operation(app: &mut SolveApp, ui: &mut egui::Ui, o: &mut cam::Operation)
         }
     }
     let linked_holes = !o.hole_sources.is_empty();
+    if matches!(o.geometry, cam::Strategy::Parallel) {
+        ui.label("Ball tool · complete stock XY footprint · vertical stock allowance");
+    }
     match &mut o.geometry {
         cam::Strategy::Contour { boundary: b, inside } => {
             ui.checkbox(inside, "Inside contour");
@@ -956,6 +969,47 @@ mod tests {
         h.app.run("solid.box", json!({"length":1,"width":1,"height":1})).unwrap();
         assert!(view::stock(&h.app).is_none());
         assert!(h.app.run("cam.inspect", json!({"job":job,"include_stock":true})).is_err());
+    }
+    #[test]
+    fn ball_tool_and_parallel_strategy_are_saved_through_the_visible_editors() {
+        let mut h = crate::scenario::Harness::new();
+        h.call("ui.resize", json!({"width":1500,"height":1200}));
+        h.app.run("solid.box", json!({"length":1,"width":1,"height":5})).unwrap();
+        let mut input = cam::corpus::fixture("face").unwrap();
+        let body = &h.app.session.model.state().bodies[0];
+        let bounds = body.mesh().bounds();
+        input.setup.models[0].body = body.name.clone();
+        input.setup.stock.min = bounds.min;
+        input.setup.stock.max = bounds.max + Vec3::Z;
+        input.tools[0].diameter = 2.;
+        input.operations[0].top = bounds.max.z + 1.;
+        input.operations[0].bottom = bounds.max.z - 0.5;
+        input.operations[0].stepover = 0.1;
+        h.app.run("cam.setup.put", json!({"setup":input.setup})).unwrap();
+        h.step(&json!({"start":"cam.tool.put"})).unwrap();
+        h.app.manufacturing.editor = Some(Editor::Tool(input.tools.remove(0)));
+        h.frames(20);
+        h.step(&json!({"widget":"FlatEndMill"})).unwrap();
+        h.frames(2);
+        h.step(&json!({"widget":"Ball end mill"})).unwrap();
+        h.step(&json!({"widget":"Save"})).unwrap();
+        assert_eq!(h.app.session.doc.manufacturing.tools[0].kind, cam::ToolKind::BallEndMill);
+        h.step(&json!({"start":"cam.operation.put"})).unwrap();
+        h.app.manufacturing.editor = Some(Editor::Operation(input.operations.remove(0)));
+        h.frames(20);
+        h.step(&json!({"widget":"Facing"})).unwrap();
+        h.frames(2);
+        h.step(&json!({"widget":"Parallel finishing (X)"})).unwrap();
+        h.frames(20);
+        h.step(&json!({"widget":"Save"})).unwrap();
+        assert!(h.app.manufacturing.error.is_empty(), "{}", h.app.manufacturing.error);
+        assert_eq!(h.app.session.doc.manufacturing.operations[0].geometry, cam::Strategy::Parallel);
+        h.app.run("cam.program.put", json!({"program":{"id":1,"name":"Ball finish","setup":1,"operations":[1]}})).unwrap();
+        let job = h.app.run("cam.generate", json!({"program":1})).unwrap()["job"].clone();
+        let report = h.app.run("cam.simulate", json!({"job":job})).unwrap();
+        assert_eq!(report["verification"]["status"], "pass", "{report}");
+        assert_eq!(report["verification"]["finished_dimensions"], "pass", "{report}");
+        assert!(h.app.run("cam.post", json!({"job":job})).is_ok());
     }
     #[test]
     fn hole_selection_dialog_links_saves_and_unlinks_ordered_profiles() {

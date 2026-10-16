@@ -48,6 +48,7 @@ impl Envelope {
 
 enum Feature {
     Plane(f64),
+    Surface(f64),
     Hole { center: [f64; 2], radius: f64, tip: f64, slope: f64 },
     Mill { region: crate::region::Region, outside: bool, width: Option<f64>, allowance: f64, depth: f64 },
 }
@@ -80,6 +81,7 @@ impl Finished {
         let mut features = Vec::new();
         for op in &input.operations {
             match &op.geometry {
+                Strategy::Parallel => features.push(Feature::Surface(op.allowance)),
                 Strategy::Face => features.push(Feature::Plane(op.bottom + op.allowance)),
                 Strategy::Drill { holes, full_diameter, .. } => {
                     let tool = input.tools.iter().find(|t| t.id == op.tool).ok_or_else(|| Error("missing dimensional tool".into()))?;
@@ -124,13 +126,13 @@ impl Finished {
     }
     pub(crate) async fn envelope<F: std::future::Future<Output = ()>>(
         &self,
-        region: ([f64; 2], f64),
+        region: ([f64; 2], f64, [f64; 2]),
         work: &mut usize,
         budget: usize,
         cancelled: &impl Fn() -> bool,
         yield_control: &mut impl FnMut() -> F,
     ) -> Result<Option<Envelope>> {
-        let (p, half) = region;
+        let (p, half, target) = region;
         let unchanged = Envelope::range(self.top, self.top, self.tolerance);
         let mut combined = unchanged;
         for (index, feature) in self.features.iter().enumerate() {
@@ -145,6 +147,11 @@ impl Finished {
                 return Ok(None);
             }
             let allowed = match feature {
+                Feature::Surface(allowance) => Envelope::range(
+                    (target[0] + allowance).clamp(self.bottom, self.top),
+                    (target[1] + allowance).clamp(self.bottom, self.top),
+                    self.tolerance,
+                ),
                 Feature::Plane(z) => {
                     let z = z.clamp(self.bottom, self.top);
                     Envelope::range(z, z, self.tolerance)
@@ -220,7 +227,7 @@ mod tests {
     fn envelope(f: &Finished, p: [f64; 2], half: f64, work: &mut usize, budget: usize) -> Option<Envelope> {
         use std::future::Future;
         let mut ready = || std::future::ready(());
-        let mut future = std::pin::pin!(f.envelope((p, half), work, budget, &|| false, &mut ready));
+        let mut future = std::pin::pin!(f.envelope((p, half, [0., 0.]), work, budget, &|| false, &mut ready));
         match future.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
             std::task::Poll::Ready(result) => result.unwrap(),
             _ => None,
@@ -525,7 +532,7 @@ mod tests {
         };
         let mut work = 0;
         let cancelled = || cancel.get();
-        let mut future = std::pin::pin!(f.envelope(([10., 10.], 0.001), &mut work, 10000, &cancelled, &mut yield_once));
+        let mut future = std::pin::pin!(f.envelope(([10., 10.], 0.001, [0., 0.]), &mut work, 10000, &cancelled, &mut yield_once));
         let mut context = Context::from_waker(Waker::noop());
         assert!(future.as_mut().poll(&mut context).is_pending());
         cancel.set(true);

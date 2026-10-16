@@ -1,7 +1,20 @@
 # Adaptive clearing and 3D milling
 
-Status: planned implementation following the first milling PR. The strategies and
-ball-end tooling below are not implemented or qualified yet.
+Status: ball tools, independent swept-envelope verification and bounded parallel
+finishing are implemented on a retained development branch, with the recorded
+analytic and parallel Fusion checks passing. Upstream
+reverted the first milling PR as out of scope in
+[#1715](https://github.com/bherbruck/solidcraft/pull/1715); these features are not
+available on current upstream main. See
+[the envelope qualification notes](cam-ball-envelope.md). Parallel finishing uses
+an X raster, vertical stock allowance and a closed, bottom-supported height-field
+target. It extends tool centers beyond stock edges to reach sloped boundaries and
+certifies complete motion chords. Adaptive clearing, complete roughing/rest and constant-Z still need implementation
+and their corresponding local Fusion packages.
+
+See [recorded implementation evidence](cam-3d-acceptance.md), the
+[parallel fixture recipes](cam-3d-fixtures.md), and the
+[planned clearing/rest/steep-surface recipes](cam-clearing-fixtures.md).
 
 ## Scope and delivery order
 
@@ -66,6 +79,12 @@ Missing artifacts or unavailable licensed strategies cannot count as passing par
 Require complete passing packages for each delivered strategy before declaring parity.
 All Fusion-produced artifacts and derived comparisons stay in ignored local storage;
 commit only original recipes, harness code and independently authored expectations.
+
+`cargo xtask cam-oracle --dir … --milestone adaptive-3d` requires four separate
+packages: `adaptive`, `roughing-3d`, `parallel` and `constant-z`. The final operation
+must match the package's required strategy. Unsupported or missing strategies
+remain incomplete and cannot be substituted with a passing first-milestone case.
+The default `milling` scope retains its four existing reference requirements.
 
 ## Dependency decisions
 

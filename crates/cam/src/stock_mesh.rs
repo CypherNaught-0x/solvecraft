@@ -259,12 +259,10 @@ async fn spans<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(cells: 
     Ok(spans)
 }
 
-async fn close_tiny_saddles<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(
-    cells: &mut [Cell],
+async fn vertex_cells<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(
     spans: &[Span],
-    bottom: f64,
     work: &mut Work<C, Y>,
-) -> Result<()> {
+) -> Result<BTreeMap<XY, [Option<usize>; 4]>> {
     // NW, NE, SE, SW occupancy at every boundary endpoint, including T-junctions.
     let mut vertices = BTreeMap::<XY, [Option<usize>; 4]>::new();
     for s in spans {
@@ -281,6 +279,45 @@ async fn close_tiny_saddles<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output =
             vertices.entry(s.xy(s.b)).or_insert([None; 4])[b] = Some(*id);
         }
     }
+    Ok(vertices)
+}
+
+/// Locate checkerboard contacts whose conservative cell heights cannot be
+/// exported within the existing tiny-fill budget. The verifier can recompute
+/// these cells at finer resolution; this never changes a height certificate.
+pub(crate) async fn refinement_cells<F: Future<Output = ()>>(
+    cells: &[Cell],
+    bottom: f64,
+    cancelled: impl Fn() -> bool,
+    yield_control: impl FnMut() -> F,
+) -> Result<BTreeSet<usize>> {
+    if cells.len() > MAX_CELLS {
+        return invalid("stock topology refinement exceeds cell budget");
+    }
+    let mut work = Work { cancelled, yield_control, remaining: 0 };
+    let spans = spans(cells, &mut work).await?;
+    let vertices = vertex_cells(&spans, &mut work).await?;
+    let mut refine = BTreeSet::new();
+    for ids in vertices.into_values() {
+        work.tick().await?;
+        let heights = ids.map(|id| id.map_or(bottom, |i| cells[i].high));
+        for (upper, lower) in [([0, 2], [1, 3]), ([1, 3], [0, 2])] {
+            let gap = heights[upper[0]].min(heights[upper[1]]) - heights[lower[0]].max(heights[lower[1]]);
+            if gap > MAX_SADDLE_FILL {
+                refine.extend(ids.into_iter().flatten());
+            }
+        }
+    }
+    Ok(refine)
+}
+
+async fn close_tiny_saddles<C: Fn() -> bool, Y: FnMut() -> F, F: Future<Output = ()>>(
+    cells: &mut [Cell],
+    spans: &[Span],
+    bottom: f64,
+    work: &mut Work<C, Y>,
+) -> Result<()> {
+    let vertices = vertex_cells(spans, work).await?;
     let mut ceilings = Vec::with_capacity(cells.len());
     for c in cells.iter() {
         work.tick().await?;
@@ -648,6 +685,15 @@ mod tests {
         let mut too_large = original;
         too_large.cells[1].high = 2. - 2. * MAX_SADDLE_FILL;
         assert!(triangles(&too_large, 0.).is_err());
+    }
+    #[test]
+    fn excessive_saddle_height_requests_real_cell_refinement() {
+        let cells = vec![cell([0., 0.], [1., 1.], 2.), cell([1., 0.], [2., 1.], 1.9), cell([0., 1.], [1., 2.], 1.8), cell([1., 1.], [2., 2.], 2.)];
+        let ids = ready(refinement_cells(&cells, 0., || false, || std::future::ready(()))).unwrap();
+        assert_eq!(ids, BTreeSet::from([0, 1, 2, 3]));
+        assert_eq!(cells[1].high, 1.9); // The detector never edits stock bounds.
+        let ramp = vec![cell([0., 0.], [1., 1.], 1.), cell([1., 0.], [2., 1.], 2.), cell([0., 1.], [1., 2.], 2.), cell([1., 1.], [2., 2.], 3.)];
+        assert!(ready(refinement_cells(&ramp, 0., || false, || std::future::ready(()))).unwrap().is_empty());
     }
     #[test]
     fn hostile_and_overlapping_cells_are_rejected() {
