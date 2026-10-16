@@ -41,8 +41,8 @@ threshold failure. The adapter now normalizes coordinates by an exact power of t
 scales physical distance tolerances with them, then restores output to millimetres. It
 retains every input vertex. Native debug regressions cover dense convex/concave offsets,
 shifted/scaled coordinates and independent distance expectations. The release-Wasm dense
-concave probe still measured a 21.2 ms atomic offset batch; retaining the crate does not
-close worst-case browser responsiveness acceptance.
+concave probe still measured a 21.2 ms atomic offset batch, an explicit scheduling limit
+recorded in the [acceptance audit](cam-acceptance.md).
 
 ## Portability and integration
 
@@ -77,7 +77,8 @@ workspace native/Wasm gates and analytic kernel tests exercise the adapter. Comb
 original conservative boundary candidate index, the original large-cylinder browser measurement
 fell from about 1087 ms to 91 ms without changing its measured chord error or triangle count.
 This is a concrete reuse of an existing dependency, not a new mesh Boolean or solid-boundary
-library. It does not supply stock side-wall stitching or close atomic browser latency acceptance.
+library. It does not supply stock side-wall stitching; the remaining atomic browser latency
+is recorded in the acceptance audit.
 
 [rstar](https://docs.rs/crate/rstar/0.13.0) is an alternative spatial index. Defer an additional
 index dependency until profiling shows a need beyond the existing XY index or Parry's structures.

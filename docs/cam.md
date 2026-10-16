@@ -1,7 +1,9 @@
 # Three-axis milling and independent validation
 
-M15 is in progress. The implementation is an experimental first milling workflow; **Fusion
-parity has not been established**. No output is qualified for a physical machine controller.
+M15’s planned first milling workflow is implemented and its four-strategy Fusion comparison
+gate passes. See the [requirement-to-evidence audit](cam-acceptance.md) for scope, tests and
+recorded limitations. This is not parity with all Fusion CAM features. No output is qualified
+for a physical machine controller.
 
 ## Architecture and commands
 
@@ -201,12 +203,12 @@ The original drilling fixture now contains the plate top, hole wall and cone, re
 plane-only protected target. Tests cover boundary clearance, shifted-hole and through gouges,
 sloping surfaces, overlapping projected targets and large-coordinate precision. A native CAD
 drilled body also passes create/generate/simulate/post/save/reopen through registered commands.
-This does not establish qualification of arbitrary non-height-field solids or Fusion parity.
+This does not establish qualification of arbitrary non-height-field solids.
 Native CAD pocket and contour workflows also pass through durable sketch-profile references,
 ramp entry, generation, simulation, posting and save/reopen. All four analytic strategies now
 require passing finished-dimension checks; independent point probes supplement those certificates.
 The Fusion oracle requires the same dimensional checks for both programs. Current acceptance
-evidence and the remaining finite gates are:
+evidence and supported limits are:
 
 - Nine analytic recipes / fourteen operation stages cover concave regions, two islands, a narrow
   channel, allowances, multiple depths/tools, shifted origins and blind/through drilling. Deliberate
@@ -237,12 +239,12 @@ evidence and the remaining finite gates are:
   reselection, line-linked fixture collisions and correction, simulation cancellation and stale
   feed edits followed by regeneration. Preparation cancellation is covered by an engine regression;
   it was not manually clicked during that walkthrough.
-- Finish the original requirement-to-evidence audit after the export timing assessment. Do not
-  treat generic requests for broader coverage as an unlimited gate or expand into later milestones.
+- The [completed acceptance audit](cam-acceptance.md) maps the original requirements to
+  implementation and concrete assertions, including multi-operation ordering and native saving.
 
-M15 remains in progress while these concrete acceptance items are open. The available passing
-reference corpus is evidence for its recorded fixtures, not qualification of arbitrary parts or
-physical controllers.
+The first milling milestone is complete within these declared limits. The passing reference
+corpus is evidence for its recorded fixtures, not qualification of arbitrary parts or physical
+controllers.
 
 ## Reproducible comparisons
 
@@ -346,8 +348,8 @@ The oracle refuses an unignored in-repository destination. Commit only original 
 code and independently authored expectations. No vendor post source, templates or assets are
 part of SolveCraft. Local references for facing, contouring, pocketing and drilling now pass
 input reconciliation, setup values, both programs' clearance and dimensional checks, and all
-three NC/stock comparisons (4/4). This closes the initial four-strategy oracle gate, not the
-remaining milestone acceptance gates. The contour, pocket and drill exports use the maximum
+three NC/stock comparisons (4/4). Together with the [acceptance audit](cam-acceptance.md),
+this closes the planned first milling milestone. The contour, pocket and drill exports use the maximum
 Stock Accuracy setting after replay to completion; the original coarser exports and their
 failed/inconclusive comparisons remain in ignored local storage. Numeric Fusion resolution is
 recorded as not reported, without substituting the independent verifier's resolution. Acceptance
@@ -435,7 +437,8 @@ A second probe reused the UI scheduler with a four-ms target and one batch per a
 The largest observed batch was 4.9 ms; no batch exceeded 16 ms. These are local observations,
 not performance guarantees or complete browser acceptance: the probe excludes CAD snapshot
 preparation, the rendered application, export serialization, concurrent jobs and hostile-size
-inputs. The remaining atomic work listed above still needs worst-case timing coverage. Unit
+inputs. Later primitive/export probes below cover representative accepted-size inputs; their
+remaining atomic latencies are explicit limits in the acceptance audit. Unit
 regressions verify exact synchronous/cooperative mesh agreement, early/mid/late cancellation,
 round-robin fairness, completed-job termination and a poll cap if the host clock stalls.
 
@@ -486,10 +489,10 @@ On the same local probe, maximum scheduler batches for those three large cases w
 4.2 and 4.2 ms respectively; none exceeded 16 ms. These are measured observations, not hard
 deadlines.
 
-One setup or operation is still encoded atomically. This change does not close timing acceptance
-for unusually large reference lists, CAD tessellation, a single offset query or direct synchronous
-exports. The probe isolates hashing from those stages and does not establish whole-application
-latency guarantees.
+One setup or operation is still encoded atomically. This hashing probe alone does not measure
+large reference lists, CAD tessellation, a single offset query or direct synchronous exports.
+The subsequent primitive/export probes cover those cases and record remaining atomic limits.
+These measurements do not establish whole-application latency guarantees.
 
 ### NC round-trip responsiveness and limits
 
@@ -554,7 +557,8 @@ bounds. The algorithm fingerprint advances to `cam/18` because tessellation can 
 ordering. A local instrumented prototype reduced the radius-5000 case from about 1089.8 ms to
 96.5 ms with the same 28,382 triangles and 0.00100715 mm maximum measured radial chord error.
 Its segment visits fell from 352,784,748 to 1,462,907. This optimization does not make shell
-meshing incremental; remaining atomic latency and direct exports are still acceptance work.
+meshing incremental; its remaining atomic latency is recorded below. Incremental exports are
+covered by the subsequent acceptance checks.
 
 The uninstrumented production release-Wasm follow-up measured 10.3 / 27.2 / 90.8 ms for radii
 10 / 500 / 5000 mm, with the same triangle counts and radial errors as the fixed-tolerance
@@ -585,3 +589,10 @@ program is still11,999,980bytes. Toolpath JSON shrinks from41,002,015 to15,201,0
 whitespace removal; semantic equivalence is asserted against the original serializer. Evidence:
 `target/cam-web-probe/exports-baseline.json` and `exports-incremental.json`. These timings exclude
 file-system publication and are machine-specific; command freshness checks still govern publication.
+
+
+The final native save retry used a regular disposable app bundle. The actual system Save dialog
+created `posted.nc` (146,348 bytes), identical to the registered-command NC export. Job status
+confirmed a fresh verified job, passing clearance/dimensions and idle export after UI collection.
+Post-save screenshot capture remained unavailable; the result is established by the output file
+and job state. Evidence: `target/cam-native-audit/save-acceptance.json`.

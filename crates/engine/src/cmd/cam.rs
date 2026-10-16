@@ -402,6 +402,44 @@ mod tests {
         assert_eq!(s.execute("cam.job.status", &json!({"job":id})).unwrap()["stale"], false);
     }
     #[test]
+    fn operation_order_survives_reopen_undo_redo_and_controls_generated_sequence() {
+        let mut s = configured();
+        let mut second = s.doc.manufacturing.operations[0].clone();
+        second.id = 2;
+        second.name = "Second facing pass".into();
+        second.feed += 25.;
+        s.execute("cam.operation.put", &json!({"operation":second})).unwrap();
+        s.execute("cam.program.put", &json!({"program":{"id":1,"name":"Ordered milling","setup":1,"operations":[1,2]}})).unwrap();
+        let job = s.execute("cam.generate", &json!({"program":1})).unwrap()["job"].clone();
+        for invalid in [json!([1, 1]), json!([2]), json!([1, 3])] {
+            let before = s.doc.clone();
+            assert!(s.execute("cam.operation.order", &json!({"program":1,"operations":invalid})).is_err());
+            assert_eq!(s.doc, before);
+        }
+        s.execute("cam.operation.order", &json!({"program":1,"operations":[2,1]})).unwrap();
+        assert_eq!(s.execute("cam.job.status", &json!({"job":job})).unwrap()["stale"], true);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.manufacturing.programs[0].operations, vec![1, 2]);
+        assert_eq!(s.execute("cam.job.status", &json!({"job":job})).unwrap()["stale"], false);
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.doc.manufacturing.programs[0].operations, vec![2, 1]);
+        assert_eq!(s.execute("cam.job.status", &json!({"job":job})).unwrap()["stale"], true);
+        let doc = crate::io::read_design(&crate::io::write_design(&s.doc)).unwrap();
+        let mut reopened = Session::new(doc);
+        let id = reopened.execute("cam.generate", &json!({"program":1})).unwrap()["job"].as_u64().unwrap();
+        let state = jobs::job(&reopened, id).unwrap().state().unwrap();
+        let path = match state {
+            jobs::JobState::Generated(path) => Some(path),
+            _ => None,
+        }
+        .unwrap();
+        let mut sequence = path.blocks.iter().map(|b| b.operation).collect::<Vec<_>>();
+        sequence.dedup();
+        assert_eq!(sequence, vec![2, 1]);
+        assert_eq!(reopened.doc.manufacturing.programs[0].operations, vec![2, 1]);
+    }
+
+    #[test]
     fn referenced_tool_delete_rolls_back() {
         let mut s = configured();
         let d = s.doc.clone();
