@@ -216,11 +216,11 @@ These gates must be closed before calling M15 complete or claiming Fusion machin
 
 Run `cargo xtask cam-validate`. Original analytic recipes generate input snapshots, canonical paths,
 NC, stock, setup sheets, validation JSON and an HTML report under ignored `target/cam-validation/`.
-Eight recipes cover the four initial strategies, a rounded concave pocket with two islands,
+Nine recipes cover the four initial strategies, a rounded concave pocket with two islands,
 a four-operation facing → roughing → finishing → peck-drilling program with multiple tools and
-a shifted G55 setup, two clamped through holes, and an external square-boss contour. The harness
+a shifted G55 setup, two clamped through holes, an external square-boss contour and a narrow capsule channel. The harness
 verifies prefixes of the actual complete program after every operation, including roughing
-allowance, coolant transitions and conventional finishing. All thirteen
+allowance, coolant transitions and conventional finishing. All fourteen
 stages require protected-surface, dimensional, point-probe and independent exported-STL checks.
 The new target surfaces have independently calculated volume expectations; deleting islands,
 omitting finishing, choosing the wrong tool or changing the work offset must fail. Reports link
@@ -242,6 +242,16 @@ boundary, four depth passes, tangential leads, ramp entry, 0.2 mm roughing allow
 conventional finish. Wrong-side cutting and omitted finishing cannot pass. The final external
 contour uses 243,154 cells in the current native run, below the unchanged 250,000-cell default;
 larger jobs can still return inconclusive when their declared budgets are exhausted.
+
+The narrow-channel recipe has a 2.2 mm width, 10 mm between semicircle centers and a 1 mm
+cut depth in a 20 × 20 × 6 mm plate. Its R1.1 ends use 64 original polygon segments per
+semicircle; a 2 mm cutter must finish the floor and both walls while preserving the surrounding
+plate. An independent polygon-area formula checks target volume, and point probes check both
+ends, the center and protected stock. Negative regressions reject a 2.4 mm cutter, detect uncut
+material in a 1.6 mm neck between accessible R2 lobes, and reject a 5 mm lead that gouges the
+original target. The lead failure retains its operation/motion/NC-line attribution. These cases
+exercise the unchanged dimensional, clearance and posting gates; they are original analytic
+evidence and do not count as additional Fusion reference captures.
 
 Run `cargo xtask cam-oracle --dir plan/fusion/cam/oracle` for local Fusion packages. The harness
 requires separate `face`, `contour`, `pocket`, `drill` directories. Missing evidence is a failure
@@ -340,6 +350,19 @@ passes clearance and finished-dimension checks for each case. Native-posted cont
 drill files match their command exports byte for byte. Playback, final-stock display and stale-post
 rejection were also checked. Local artifacts and screenshots are in ignored
 `target/cam-native-acceptance/`; this is SolveCraft evidence, not a Fusion comparison.
+
+A second disposable native-window walkthrough checks recovery. A missing profile produces a
+reselection error; selecting the original profile and using the operation editor's **Use selected
+sketch profile** and **Save** restores generation and passing simulation. A clamp intersecting
+the pocket produces a cutter/fixture error attributed to motion 7 and NC line 20; **Locate issue**
+seeks that motion. Moving the same associated clamp clear restores passing clearance and dimensions.
+Cancelling active simulation through **Cancel job** leaves the job cancelled and blocks posting,
+including after later jobs finish. Editing feed in the operation dialog marks the result stale;
+posting rejects it, and regeneration/simulation passes. Geometry, deliberately broken references,
+profile selection and fixture correction were arranged through registered commands; editor actions,
+generation, simulation, cancellation and issue location used native UI input. Evidence is local in
+`target/cam-native-recovery/`. Preparation cancellation is covered by engine regressions, not this
+native walkthrough.
 
 Interactive Save, Save As and Open use the same picker/background-loading flows as the toolbar;
 JSON commands remain dialog-free. Keyboard shortcuts use the modifier state on each key event,
