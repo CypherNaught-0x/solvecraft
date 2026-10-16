@@ -94,8 +94,16 @@ fn supplied_archives_recover_with_both_preferences() {
             if session.doc.features.is_empty() {
                 assert!(!result["warnings"].as_array().unwrap().is_empty());
             }
-            let known_empty = path.file_name().is_some_and(|n| n == "Gridfinity Storage Box Shelves (Parametric) V1.0.f3d");
-            assert!(known_empty || !session.model.state().bodies.is_empty(), "lost previously recoverable bodies: {} / {preference}", path.display());
+            assert!(!session.model.state().bodies.is_empty(), "no recovered geometry: {} / {preference}", path.display());
+            if path.file_name().is_some_and(|n| n == "Gridfinity Storage Box Shelves (Parametric) V1.0.f3d") {
+                assert_eq!(session.model.state().bodies.len(), 6, "retain every recovered Gridfinity body");
+                assert_eq!(result["representation"], "native_bodies");
+                assert!(session.doc.import_warnings.iter().any(|warning| warning.contains("without historical topology")));
+                assert!(
+                    session.doc.import_warnings.iter().any(|warning| warning.contains("open body")),
+                    "known incomplete shells must remain explicit"
+                );
+            }
             let volume: f64 = session.model.state().bodies.iter().map(|b| b.mesh().measure().volume).sum();
             if path.file_name().is_some_and(|n| n == "Minimal.f3d") {
                 let measured: f64 = session.model.state().bodies.iter().map(|b| solidcraft_engine::kernel::measure(&b.body).unwrap().volume).sum();

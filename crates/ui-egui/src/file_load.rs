@@ -995,6 +995,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn open_and_insert_keep_step_options_alongside_f3d_preference() {
+        for kind in [Kind::Open, Kind::Insert] {
+            let mut request = Request::new("part.step", kind);
+            request.options = serde_json::from_value(json!({"up": "y", "names": "instance"})).unwrap();
+            let (command, params) = request.command();
+            assert_eq!(command, if request.insert() { "file.insert_step" } else { "doc.open" });
+            assert_eq!(params["path"], "part.step");
+            assert_eq!(params["up"], "y");
+            assert_eq!(params["names"], "instance");
+        }
+        let mut request = Request::new("part.f3d", Kind::Open);
+        request.preference = Some("editability".into());
+        let (command, params) = request.command();
+        assert_eq!(command, "doc.open");
+        assert_eq!(params, json!({"path": "part.f3d", "f3d_preference": "editability"}));
+    }
+
+    #[test]
     fn f3d_control_keeps_preference_without_opening_a_dialog() {
         for preference in ["strict", "editability", "correctness"] {
             let mut app = SolveApp::new(Session::default(), Default::default());

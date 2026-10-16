@@ -208,6 +208,7 @@ impl Sketch {
                 edge_name: None,
                 edge_circle: vec![],
                 auto_face: false,
+                join_arcs: false,
                 lost: false,
             });
             id

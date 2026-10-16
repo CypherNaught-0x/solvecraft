@@ -106,7 +106,7 @@ mod tests {
                 if reversed {
                     sections.reverse();
                 }
-                let body = if chord { crate::loft_circular_chord(&sections) } else { crate::loft(&sections) }.unwrap();
+                let body = if chord { crate::loft_circular_chord(&sections) } else { crate::loft_uniform(&sections) }.unwrap();
                 let m = crate::measure(&body).unwrap();
                 let volume = expected * std::f64::consts::PI;
                 assert!((m.volume - volume).abs() < volume * 1e-3, "{chord}/{reversed}: {} != {volume}", m.volume);

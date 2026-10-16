@@ -238,7 +238,7 @@ pub(super) fn output_operations(
     Ok(groups)
 }
 
-fn feature_source(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<(u64, Vec<u64>)> {
+pub(super) fn feature_source(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<(u64, Vec<u64>)> {
     require_class(classes, id, "5A1BF548-241F-46FD-9FB5-E4B05126EB9D", 1)?;
     let mut r = payload(records.primary(id)?, id)?;
     zeros(&mut r, 6)?;
@@ -282,7 +282,7 @@ fn feature_source(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u6
     Ok((feature, bodies))
 }
 
-fn owner_tail(r: &mut Reader<'_>, owner: u64) -> Result<()> {
+pub(super) fn owner_tail(r: &mut Reader<'_>, owner: u64) -> Result<()> {
     r.at = r.bytes.len().checked_sub(11).filter(|at| *at >= r.at).ok_or_else(|| invalid("truncated mirror evaluation data"))?;
     if r.reference()? != owner {
         return Err(invalid("inconsistent mirror evaluation back-reference"));
@@ -291,7 +291,7 @@ fn owner_tail(r: &mut Reader<'_>, owner: u64) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::f3d::import_tests::{Fixture, common, fixture};
     use crate::f3d::relationship_tests::{reference, refs, string, u32, u64, wide};
@@ -402,7 +402,7 @@ mod tests {
         assert!(consumed.design().history().is_err());
     }
 
-    fn authored_feature(suppressed: bool) -> Fixture {
+    pub(in crate::f3d) fn authored_feature(suppressed: bool) -> Fixture {
         let mut f = authored(suppressed);
         f.0.get_mut(&910).unwrap().2[45] = 1;
         let mut outputs = Vec::new();
@@ -462,7 +462,7 @@ mod tests {
         }
     }
 
-    fn authored_output() -> Fixture {
+    pub(in crate::f3d) fn authored_output() -> Fixture {
         let mut f = authored_feature(false);
         f.0.get_mut(&910).unwrap().2[45] = 2; // body selection
         let mut b = vec![0; 6];

@@ -32,6 +32,7 @@ pub(super) fn refs(b: &mut Vec<u8>, ids: &[u64]) {
 pub(super) fn fixture(construction: bool, curve_tag: u64) -> Design {
     let mut d = Design {
         recovery: None,
+        archive: None,
         path: "test".into(),
         build: 1,
         layout: 8,

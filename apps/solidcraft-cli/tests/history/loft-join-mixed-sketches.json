@@ -163,7 +163,8 @@
         "operation": "join",
         "targets": [
           "Body1"
-        ]
+        ],
+        "interpolation": "uniform"
       }
     }
   ],

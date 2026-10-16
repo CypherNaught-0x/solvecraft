@@ -38,24 +38,108 @@ fn validate_groups(
     identity: Option<&str>,
     operations: &BTreeSet<u64>,
 ) -> Result<()> {
+    let (_, actual) = resolve_groups(records, classes, feature, label, identity)?;
+    if &actual != operations {
+        return Err(invalid("whole-body label belongs to another operation"));
+    }
+    Ok(())
+}
+
+/// Historical selector aliases must explicitly converge to the same body.
+/// Merely sharing an operation or having similar geometry is insufficient.
+pub(super) fn validate_aliases(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, feature: u64, label: u64, aliases: &[u32]) -> Result<()> {
+    if aliases.is_empty() {
+        return Ok(());
+    }
+    let selected = resolve_groups(records, classes, feature, label, None)?;
+    for alias in aliases {
+        if resolve_groups(records, classes, feature, u64::from(*alias), None)? != selected {
+            return Err(invalid("whole-body recipe aliases select different bodies"));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn output_groups(
+    records: &Records<'_>,
+    classes: &BTreeMap<u64, &Class>,
+    feature: u64,
+    label: u64,
+    handle: u64,
+) -> Result<(u64, BTreeSet<u64>)> {
+    require_class(classes, handle, "D26351F0-5940-4D23-AA20-2C35475A6D9E", 2)?;
+    let mut r = payload(records.primary(handle)?, handle)?;
+    zeros(&mut r, 6)?;
+    let identity = r.wide_string()?;
+    resolve_groups(records, classes, feature, label, Some(&identity))
+}
+
+pub(super) fn resolve_groups(
+    records: &Records<'_>,
+    classes: &BTreeMap<u64, &Class>,
+    feature: u64,
+    label: u64,
+    identity: Option<&str>,
+) -> Result<(u64, BTreeSet<u64>)> {
     let labels = super::side_roles::label_table(records, classes, feature)?;
-    let id = *labels.get(&label).ok_or_else(|| invalid("missing whole-body feature label"))?;
+    let mut id = *labels.get(&label).ok_or_else(|| invalid("missing whole-body feature label"))?;
+    let owned: BTreeSet<_> = labels.values().copied().collect();
+    let mut visited = BTreeSet::new();
+    let mut operations: Option<BTreeSet<u64>> = None;
+    let pattern = classes.get(&feature).is_some_and(|c| c.id == super::circular_patterns::CLASS && c.version == 0);
+    loop {
+        if visited.len() >= 64 || !visited.insert(id) {
+            return Err(invalid("cyclic or excessive whole-body label replacements"));
+        }
+        // Editing an extrusion's selected profile can replace its body label.
+        // The old selector retains its identity; both records must still belong
+        // to this feature and exactly the same operation group.
+        let expected = if visited.len() == 1 { identity } else { None };
+        let (replacement, actual) = read_record(records, classes, id, expected, pattern)?;
+        if operations.as_ref().is_some_and(|ops| if pattern { !ops.is_subset(&actual) } else { ops != &actual }) {
+            return Err(invalid("whole-body replacement changes operation groups"));
+        }
+        operations = Some(actual.clone());
+        let Some(next) = replacement else { return Ok((id, actual)) };
+        if !owned.contains(&next) {
+            return Err(invalid("whole-body replacement belongs to another feature"));
+        }
+        id = next;
+    }
+}
+
+fn read_record(
+    records: &Records<'_>,
+    classes: &BTreeMap<u64, &Class>,
+    id: u64,
+    identity: Option<&str>,
+    pattern: bool,
+) -> Result<(Option<u64>, BTreeSet<u64>)> {
     require_class(classes, id, BODY, 4)?;
     let mut r = payload(records.primary(id)?, id)?;
-    zeros(&mut r, 7)?;
+    zeros(&mut r, 6)?;
+    let replacement = match r.bytes.get(r.at) {
+        Some(0) => {
+            r.take(1)?;
+            None
+        }
+        Some(1) => Some(r.reference()?),
+        _ => return Err(invalid("unsupported whole-body replacement reference")),
+    };
     let actual = r.wide_string()?;
     if actual.is_empty() || identity.is_some_and(|identity| identity != actual) {
         return Err(invalid("empty or inconsistent whole-body identity"));
     }
     zeros(&mut r, 4)?;
-    if r.u32()? as usize != operations.len() {
+    let count = r.u32()?;
+    if !(1..=64).contains(&count) {
         return Err(invalid("unsupported whole-body label group"));
     }
     let mut seen = BTreeSet::new();
-    for _ in operations {
-        names(&mut r, records.design.layout)?;
+    for _ in 0..count {
+        names(&mut r, records.design.layout, pattern)?;
         let operation = r.u64()?;
-        if !operations.contains(&operation) || !seen.insert(operation) {
+        if operation == 0 || !seen.insert(operation) {
             return Err(invalid("whole-body label belongs to another operation"));
         }
         zeros(&mut r, 1)?;
@@ -73,14 +157,15 @@ fn validate_groups(
         _ => return Err(invalid("unsupported whole-body recipe reference")),
     }
     zeros(&mut r, 1)?;
-    finish(&r)
+    finish(&r)?;
+    Ok((replacement, seen))
 }
 
 // These cached member labels are consumed and checked structurally. They never
 // choose geometry: the feature table, body-label class and operation own the link.
-fn names(r: &mut Reader<'_>, layout: u32) -> Result<()> {
+fn names(r: &mut Reader<'_>, layout: u32, repeated: bool) -> Result<()> {
     let values = match layout {
-        4 => {
+        4 | 5 => {
             let n = r.count(4)?;
             if !(1..=1024).contains(&n) {
                 return Err(invalid("whole-body member count exceeds budget"));
@@ -115,7 +200,7 @@ fn names(r: &mut Reader<'_>, layout: u32) -> Result<()> {
     for value in values {
         let id =
             value.parse::<u64>().ok().filter(|id| *id != 0 && id.to_string() == value).ok_or_else(|| invalid("invalid whole-body member label"))?;
-        if !unique.insert(id) {
+        if !unique.insert(id) && !repeated {
             return Err(invalid("duplicate whole-body member label"));
         }
     }
@@ -123,12 +208,12 @@ fn names(r: &mut Reader<'_>, layout: u32) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::f3d::import_tests::{Fixture, fixture};
     use crate::f3d::relationship_tests::{reference, string, u32, u64, wide};
 
-    fn authored(legacy: bool) -> Fixture {
+    pub(in crate::f3d) fn authored(legacy: bool) -> Fixture {
         let mut f = fixture(false);
         let bytes = &mut f.0.get_mut(&9).unwrap().2;
         let at = bytes.len() - 59;
@@ -168,9 +253,13 @@ mod tests {
     }
 
     fn resolve(f: Fixture, legacy: bool, operation: u64, label: u64) -> Result<()> {
+        resolve_layout(f, if legacy { 4 } else { 8 }, operation, label)
+    }
+
+    fn resolve_layout(f: Fixture, layout: u32, operation: u64, label: u64) -> Result<()> {
         let mut d = f.design();
-        if legacy {
-            d.layout = 4;
+        d.layout = layout;
+        if layout <= 5 {
             d.classes.push(Class {
                 id: "A0A15D26-1F3B-4120-A3F1-9CDDA189AB74".into(),
                 parent: String::new(),
@@ -200,6 +289,100 @@ mod tests {
         }
     }
 
+    fn replacement(f: &mut Fixture, from: u64, to: u64) {
+        let mut link = vec![0; 6];
+        reference(&mut link, to);
+        f.0.get_mut(&from).unwrap().2.splice(..7, link);
+    }
+
+    fn with_replacement(legacy: bool) -> Fixture {
+        let mut f = authored(legacy);
+        let body = f.0[&902].2.clone();
+        f.put(903, BODY, 4, body, None);
+        let table = &mut f.0.get_mut(&901).unwrap().2;
+        table[6..10].copy_from_slice(&2_u32.to_le_bytes());
+        let mut entry = Vec::new();
+        reference(&mut entry, 903);
+        u64(&mut entry, 209);
+        table.splice(table.len() - 8..table.len() - 8, entry);
+        replacement(&mut f, 902, 903);
+        f
+    }
+
+    #[test]
+    fn replaced_body_labels_require_same_feature_operation_and_acyclic_links() {
+        resolve_layout(with_replacement(true), 5, 8001, 208).unwrap();
+        for legacy in [false, true] {
+            resolve(with_replacement(legacy), legacy, 8001, 208).unwrap();
+            let mut cycle = with_replacement(legacy);
+            replacement(&mut cycle, 903, 902);
+            assert!(resolve(cycle, legacy, 8001, 208).is_err());
+            let mut self_link = authored(legacy);
+            replacement(&mut self_link, 902, 902);
+            assert!(resolve(self_link, legacy, 8001, 208).is_err());
+            let mut foreign = with_replacement(legacy);
+            let bytes = foreign.0[&903].2.clone();
+            foreign.put(904, BODY, 4, bytes, None);
+            replacement(&mut foreign, 902, 904);
+            assert!(resolve(foreign, legacy, 8001, 208).is_err());
+            let mut wrong_operation = with_replacement(legacy);
+            let bytes = &mut wrong_operation.0.get_mut(&903).unwrap().2;
+            let at = bytes.windows(8).position(|b| b == 8001_u64.to_le_bytes()).unwrap();
+            bytes[at..at + 8].copy_from_slice(&8002_u64.to_le_bytes());
+            assert!(resolve(wrong_operation, legacy, 8001, 208).is_err());
+            let mut wrong_class = with_replacement(legacy);
+            wrong_class.0.get_mut(&903).unwrap().0 = "335CC7BD-BBE5-40AA-9E8C-5EC99D427A3A".into();
+            assert!(resolve(wrong_class, legacy, 8001, 208).is_err());
+            for id in [902, 903] {
+                for keep in 0..with_replacement(legacy).0[&id].2.len() {
+                    let mut f = with_replacement(legacy);
+                    f.0.get_mut(&id).unwrap().2.truncate(keep);
+                    assert!(resolve(f, legacy, 8001, 208).is_err(), "{legacy}/{id}/{keep}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn body_recipe_aliases_must_converge_on_one_terminal_record() {
+        let check = |f: Fixture, aliases: &[u32]| {
+            let d = f.design();
+            let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+            validate_aliases(&Records::new(&d), &classes, 9, 208, aliases)
+        };
+        check(with_replacement(false), &[209]).unwrap();
+        assert!(check(with_replacement(false), &[210]).is_err());
+        let mut independent = with_replacement(false);
+        // Identical operation groups and geometry labels do not establish identity.
+        independent.0.get_mut(&902).unwrap().2.splice(..17, [0; 7]);
+        assert!(check(independent, &[209]).is_err());
+        let mut cycle = with_replacement(false);
+        replacement(&mut cycle, 903, 902);
+        assert!(check(cycle, &[209]).is_err());
+    }
+
+    #[test]
+    fn whole_body_replacement_depth_is_bounded() {
+        for count in [64, 65] {
+            let mut f = authored(false);
+            let body = f.0[&902].2.clone();
+            let mut table = vec![0; 6];
+            u32(&mut table, count);
+            for i in 0..count {
+                let id = 902 + u64::from(i);
+                f.put(id, BODY, 4, body.clone(), None);
+                reference(&mut table, id);
+                u64(&mut table, 208 + u64::from(i));
+                if i > 0 {
+                    replacement(&mut f, id - 1, id);
+                }
+            }
+            u64(&mut table, 900);
+            f.0.get_mut(&901).unwrap().2 = table;
+            assert_eq!(resolve(f, false, 8001, 208).is_ok(), count == 64);
+        }
+    }
+
     #[test]
     fn packed_member_labels_reject_invalid_offsets_duplicates_and_budgets() {
         let parse = |text: &str, offsets: &[u32]| {
@@ -209,7 +392,7 @@ mod tests {
             for n in offsets {
                 u32(&mut bytes, *n);
             }
-            names(&mut Reader { bytes: &bytes, at: 0 }, 8)
+            names(&mut Reader { bytes: &bytes, at: 0 }, 8, false)
         };
         assert!(parse("193", &[0, 2, 3]).is_ok());
         for (text, offsets) in [

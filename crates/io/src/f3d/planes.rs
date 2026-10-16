@@ -1,4 +1,4 @@
-//! Offset-plane dependencies verified by signed, chained and XZ Fusion controls.
+//! Construction-plane dependencies and certified native sketch face attachments.
 use super::history::{empty, finish, payload, references, require_class, zeros};
 use super::*;
 use solidcraft_geom::{Plane, Vec3};
@@ -57,6 +57,26 @@ pub(super) struct Definition {
 }
 
 pub(super) fn definition(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<Definition> {
+    let mut definition = raw_definition(records, classes, id, owner, false)?;
+    definition.base = tracked_plane(records, classes, definition.base, owner)?;
+    Ok(definition)
+}
+
+/// A sketch attached to a body face carries both a plane selector and a body
+/// relationship. Require those two explicit identities to agree.
+pub(super) fn face_definition(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64, body: u64) -> Result<Definition> {
+    let definition = raw_definition(records, classes, id, owner, true)?;
+    if definition.extra.is_some() || definition.distance.is_some() {
+        return Err(invalid("unsupported face-attached sketch offset"));
+    }
+    let face = super::loft_faces::face(records, classes, definition.base, owner)?;
+    if face.body != body {
+        return Err(invalid("sketch support body disagrees with its face selector"));
+    }
+    Ok(definition)
+}
+
+fn raw_definition(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64, attached: bool) -> Result<Definition> {
     let version = classes
         .get(&id)
         .filter(|class| class.id == DEFINITION && matches!(class.version, 8 | 15))
@@ -67,10 +87,13 @@ pub(super) fn definition(records: &Records<'_>, classes: &BTreeMap<u64, &Class>,
     let extra = if version == 8 {
         // Original layout-5 offset planes have no extra-offset slot; the
         // current public-API resave adds the version-15 header and null slot.
-        zeros(&mut r, 24)?;
+        plane_header(&mut r, 31, &[18], attached)?;
         None
     } else {
-        zeros(&mut r, 36)?;
+        // Current files have two observed face marker placements, including
+        // legacy attachments after resaving. Both retain the same following fields;
+        // the explicit face/body identities and placement are checked below.
+        plane_header(&mut r, 36, &[11, 19], attached)?;
         if r.take(2)? != [1, 0] {
             return Err(invalid("unsupported plane definition header"));
         }
@@ -83,7 +106,9 @@ pub(super) fn definition(records: &Records<'_>, classes: &BTreeMap<u64, &Class>,
             _ => return Err(invalid("unsupported plane extra offset")),
         }
     };
-    zeros(&mut r, 7)?;
+    if version >= 15 {
+        zeros(&mut r, 7)?;
+    }
     let mut matrix = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
     match r.take(1)? {
         [1] => {}
@@ -110,12 +135,51 @@ pub(super) fn definition(records: &Records<'_>, classes: &BTreeMap<u64, &Class>,
     let bases = references(&mut r)?;
     let [base] = bases.as_slice() else { return Err(invalid("unsupported plane base references")) };
     zeros(&mut r, 2)?;
-    evaluation_tail(&mut r, classes, owner, 60)?;
-    let base = tracked_plane(records, classes, *base, owner)?;
-    Ok(Definition { base, distance, extra, plane })
+    let tail = if attached && version == 8 { 59 } else { 60 };
+    evaluation_tail(&mut r, classes, owner, tail)?;
+    Ok(Definition { base: *base, distance, extra, plane })
 }
 
-fn evaluation_tail(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>, owner: u64, length: usize) -> Result<()> {
+fn plane_header(r: &mut Reader<'_>, length: usize, flags: &[usize], attached: bool) -> Result<()> {
+    let bytes = r.take(length)?;
+    if bytes.iter().all(|b| *b == 0) {
+        return Ok(());
+    }
+    if attached {
+        for flag in flags {
+            let mut face = vec![0; length];
+            let field = face.get_mut(*flag..*flag + 8).ok_or_else(|| invalid("invalid plane header schema"))?;
+            field.copy_from_slice(&1_f64.to_le_bytes());
+            if bytes == face {
+                return Ok(());
+            }
+        }
+    }
+    Err(invalid("unsupported plane definition header"))
+}
+
+/// Keep the sketch's in-plane frame relative to the certified source face.
+/// Cached coordinates validate placement, but never select or replace a face.
+pub(super) fn attach_sketch(
+    doc: &solidcraft_doc::Document,
+    state: &solidcraft_doc::ModelState,
+    mut anchor: solidcraft_doc::FaceAnchor,
+    sketch: Plane,
+) -> Result<solidcraft_doc::PlaneRef> {
+    anchor.coordinates = [0., 0.];
+    anchor.x_axis = [1., 0.];
+    let canonical = doc.resolve_face_anchor(&anchor, 0, state).map_err(|e| invalid(&e.to_string()))?;
+    let delta = sketch.origin - canonical.origin;
+    if sketch.normal().dot(canonical.normal()) < 1. - 1e-8 || delta.dot(canonical.normal()).abs() > 1e-7 {
+        return Err(invalid("sketch placement disagrees with its source face"));
+    }
+    anchor.coordinates = [delta.dot(canonical.x), delta.dot(canonical.y)];
+    anchor.x_axis = [sketch.x.dot(canonical.x), sketch.x.dot(canonical.y)];
+    anchor.validate().map_err(|e| invalid(&e.to_string()))?;
+    Ok(solidcraft_doc::PlaneRef::Face { plane: sketch, at: sketch.origin, name: Some(anchor.target.name.clone()), anchor: Some(Box::new(anchor)) })
+}
+
+pub(super) fn evaluation_tail(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>, owner: u64, length: usize) -> Result<()> {
     for id in references(r)? {
         if !classes.contains_key(&id) {
             return Err(invalid("missing plane evaluation reference"));
@@ -129,6 +193,12 @@ fn evaluation_tail(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>, owner: u
 }
 
 pub(super) fn tracked_plane(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<u64> {
+    let entity = tracked_entity(records, classes, id, owner)?;
+    geometry_version(classes, entity)?;
+    Ok(entity)
+}
+
+pub(super) fn tracked_entity(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<u64> {
     require_class(classes, id, "5A1BF548-241F-46FD-9FB5-E4B05126EB9D", 1)?;
     let mut r = payload(records.primary(id)?, id)?;
     empty(&mut r)?;
@@ -162,7 +232,6 @@ pub(super) fn tracked_plane(records: &Records<'_>, classes: &BTreeMap<u64, &Clas
     zeros(&mut r, 2)?;
     let entity = r.u64()?;
     finish(&r)?;
-    geometry_version(classes, entity)?;
     Ok(entity)
 }
 
@@ -218,4 +287,8 @@ fn geometry_version(classes: &BTreeMap<u64, &Class>, id: u64) -> Result<u32> {
 
 pub(super) fn same_surface(a: Plane, b: Plane) -> bool {
     (a.origin - b.origin).len() < 1e-7 && (a.normal() - b.normal()).len() < 1e-9
+}
+
+pub(super) fn same_support_plane(a: Plane, b: Plane) -> bool {
+    (a.origin - b.origin).dot(a.normal()).abs() < 1e-7 && (a.normal() - b.normal()).len() < 1e-9
 }

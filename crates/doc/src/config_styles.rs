@@ -125,7 +125,7 @@ impl Document {
         match (certificate, &feature.kind) {
             (FaceCertificate::Box { .. }, FeatureKind::Box { operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => true,
             (FaceCertificate::CylinderCap { .. }, FeatureKind::Cylinder { operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => true,
-            (FaceCertificate::ExtrudeCap { sketch, .. }, FeatureKind::Extrude { sketch: current, extent, operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => sketch == current && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.)),
+            (FaceCertificate::ExtrudeCap { sketch, .. }, FeatureKind::Extrude { sketch: current, extent, operation: crate::Operation::NewBody | crate::Operation::Join | crate::Operation::Cut, .. }) => sketch == current && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.)),
             (FaceCertificate::ExtrudeSide { sketch, curve }, FeatureKind::Extrude { sketch: current, extent, operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {
                 sketch == current && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.))
                     && self.feature(*sketch).is_some_and(|feature| matches!(&feature.kind, FeatureKind::Sketch { sketch, .. } if sketch.curves.iter().any(|candidate| candidate.id == *curve && !candidate.construction && matches!(candidate.kind, solidcraft_sketch::CurveKind::Line { .. } | solidcraft_sketch::CurveKind::Circle { .. } | solidcraft_sketch::CurveKind::Arc { .. }))))
@@ -156,11 +156,11 @@ impl Document {
                 (super::FaceCertificate::CylinderCap { high }, FeatureKind::Cylinder { operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {
                     role == super::cylinder_cap_role(*high)
                 }
-                (super::FaceCertificate::ExtrudeCap { sketch, high, outer, holes }, FeatureKind::Extrude { sketch: producer_sketch, extent, operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {
+                (super::FaceCertificate::ExtrudeCap { sketch, high, outer, holes }, FeatureKind::Extrude { sketch: producer_sketch, extent, operation: crate::Operation::NewBody | crate::Operation::Join | crate::Operation::Cut, .. }) => {
                     sketch == producer_sketch && extent.taper.as_ref().is_none_or(|angle| self.eval(angle, crate::expr::Kind::Angle).is_ok_and(|v| v == 0.))
                         && role == format!("cap:{}:{}", if *high { "high" } else { "low" }, super::cap_key(outer, holes))
                 }
-                (super::FaceCertificate::ExtrudeTravelCap { sketch, end, outer, holes }, FeatureKind::Extrude { sketch: producer_sketch, operation: crate::Operation::NewBody | crate::Operation::Join, .. }) => {
+                (super::FaceCertificate::ExtrudeTravelCap { sketch, end, outer, holes }, FeatureKind::Extrude { sketch: producer_sketch, operation: crate::Operation::NewBody | crate::Operation::Join | crate::Operation::Cut, .. }) => {
                     sketch == producer_sketch && self.extrusion_cap_high(target.origin_feature, *end).is_ok()
                         && role == format!("cap:{}:{}", if *end { "end" } else { "start" }, super::cap_key(outer, holes))
                 }

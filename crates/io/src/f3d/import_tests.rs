@@ -13,6 +13,7 @@ impl Fixture {
     pub(super) fn design(self) -> Design {
         let mut d = Design {
             recovery: None,
+            archive: None,
             path: "original".into(),
             build: 1,
             layout: 8,

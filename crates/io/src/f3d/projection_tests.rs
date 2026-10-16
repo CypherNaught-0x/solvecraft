@@ -143,3 +143,46 @@ fn damaged_projection_relationships_never_fall_back_to_cached_geometry() {
         }
     }
 }
+
+#[test]
+fn legacy_single_component_identity_keeps_projection_ownership_checks() {
+    for version in [18, 23] {
+        let mut f = projected_circle();
+        f.0.get_mut(&3).unwrap().1 = version;
+        let mut doc = f.design().to_document("Single root projection").unwrap();
+        doc.change_param("d7", "40 mm", None, None).unwrap();
+        volume(&doc, 400. * std::f64::consts::PI * 17.);
+        let reopened = crate::read_design(&crate::write_design(&doc)).unwrap();
+        assert_eq!(doc, reopened);
+
+        let mut f = projected_circle();
+        f.0.get_mut(&3).unwrap().1 = version;
+        f.put(999, "E03784ED-5E19-4E14-B9F2-3B07017018CD", version, vec![], None);
+        assert!(f.design().to_document("Assembly must not flatten").is_err());
+
+        let mut f = projected_circle();
+        f.0.get_mut(&3).unwrap().1 = version;
+        let secondary = f.0.get_mut(&170).unwrap().3.as_mut().unwrap();
+        let n = secondary.len();
+        secondary[n - 10..n - 2].copy_from_slice(&999_u64.to_le_bytes());
+        assert!(f.design().to_document("Foreign owner must not flatten").is_err());
+    }
+    for version in [0, 17, 19, 24] {
+        let mut f = projected_circle();
+        f.0.get_mut(&3).unwrap().1 = version;
+        assert!(f.design().to_document("Unknown component generation").is_err());
+    }
+}
+
+#[test]
+fn projection_creation_flag_keeps_links_and_rejects_unknown_values() {
+    let expected = projected_circle().design().to_document("Projection flag").unwrap();
+    let mut automatic = projected_circle();
+    automatic.0.get_mut(&180).unwrap().2[21] = 1;
+    assert_eq!(automatic.design().to_document("Projection flag").unwrap(), expected);
+    for flag in [2, 127, 255] {
+        let mut damaged = projected_circle();
+        damaged.0.get_mut(&180).unwrap().2[21] = flag;
+        assert!(damaged.design().to_document("Invalid projection flag").is_err());
+    }
+}

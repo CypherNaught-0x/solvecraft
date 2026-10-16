@@ -8,7 +8,11 @@ fn recipes() -> Vec<PathBuf> {
     let mut paths: Vec<_> =
         std::fs::read_dir(dir).unwrap().map(|p| p.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
     paths.sort();
-    assert_eq!(paths.len(), 130);
+    assert_eq!(paths.len(), 178);
+    if let Some(case) = solidcraft_engine::geom::env::var("HISTORY_CASE") {
+        paths.retain(|path| path.file_stem().is_some_and(|name| name == case.as_str()));
+        assert_eq!(paths.len(), 1, "HISTORY_CASE must select one existing recipe");
+    }
     paths
 }
 
@@ -30,7 +34,7 @@ fn expected_volume(value: &Value) -> f64 {
 
 fn volume(s: &mut Session, want: f64, label: &str) -> Value {
     for result in &s.model.results {
-        assert!(result.error.is_none(), "{label}: {result:?}");
+        assert!(result.error.is_none(), "{label}: feature {} ({}): {:?}", result.name, result.id, result.error);
     }
     let measure = s.execute("inspect.measure", &json!({})).unwrap();
     let got = measure["total"]["volume_mm3"].as_f64().unwrap();
@@ -70,12 +74,19 @@ fn bounds(measure: &Value, expected: &Value, label: &str) {
     }
     if let Some(tolerance) = expected["volume_tolerance_mm3"].as_f64() {
         let actual = measure["total"]["volume_mm3"].as_f64().unwrap();
-        assert!((actual - expected_volume(expected)).abs() < tolerance, "{label}: precise removal volume");
+        assert!(
+            (actual - expected_volume(expected)).abs() < tolerance,
+            "{label}: precise removal volume {actual} != {} (tolerance {tolerance})",
+            expected_volume(expected)
+        );
     }
     if let Some(count) = expected.get("body_count") {
         assert_eq!(&measure["body_count"], count, "{label}: body count");
     }
     let Some(bounds) = expected["bounds"].as_array() else { return };
+    // Curved-face measurement bounds come from the display tessellation. Keep
+    // exact bounds as the default; curved fixtures can state their chord tolerance.
+    let tolerance = expected["bounds_tolerance_mm"].as_f64().unwrap_or(1e-5);
     for (end, key) in [(0, "min"), (1, "max")] {
         for axis in 0..3 {
             let value = measure["bodies"]
@@ -85,7 +96,7 @@ fn bounds(measure: &Value, expected: &Value, label: &str) {
                 .map(|b| b["bbox"][key][axis].as_f64().unwrap())
                 .reduce(|a, b| if end == 0 { a.min(b) } else { a.max(b) })
                 .unwrap();
-            assert!((value - bounds[end][axis].as_f64().unwrap()).abs() < 1e-5, "{label}: bounds {end}/{axis}: {value}");
+            assert!((value - bounds[end][axis].as_f64().unwrap()).abs() < tolerance, "{label}: bounds {end}/{axis}: {value}");
         }
     }
 }
@@ -122,6 +133,13 @@ fn recipe_structure(session: &Session) -> Value {
     for feature in value["features"].as_array_mut().unwrap() {
         let id = feature["id"].as_u64().unwrap();
         feature.as_object_mut().unwrap().remove("shell_piece_order");
+        // The new convention only changes symmetric distance extents. Compare
+        // old one-sided fixtures with new command output without rewriting them.
+        if let Some(extent) = feature.get_mut("extent").and_then(Value::as_object_mut)
+            && extent.get("direction").and_then(Value::as_str) != Some("symmetric")
+        {
+            extent.remove("convention");
+        }
         for key in ["face_names", "edge_names"] {
             if let Some(names) = feature.get_mut(key) {
                 unmark(names);
@@ -166,6 +184,29 @@ fn recipe_structure(session: &Session) -> Value {
 }
 
 #[test]
+fn legacy_offset_expression_history_still_edits_and_reopens() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/history/offset-circle-ring.json");
+    let recipe = recipe(&path);
+    let native = path.parent().unwrap().join("legacy/offset-circle-ring.solidcraft");
+    let mut s = Session::default();
+    s.execute("doc.open", &json!({"path":native})).unwrap();
+    let expected = &recipe["expected"];
+    let original = expected_volume(expected);
+    bounds(&volume(&mut s, original, "legacy offset"), expected, "legacy offset");
+    for edit in recipe["edits"].as_array().unwrap() {
+        s.execute(edit["command"].as_str().unwrap(), &edit["params"]).unwrap();
+        let expected_volume = expected_volume(edit);
+        bounds(&volume(&mut s, expected_volume, "legacy offset edit"), edit, "legacy offset edit");
+        let bytes = solidcraft_engine::io::write_design_container(&s.doc).unwrap();
+        let mut reopened = Session::new(solidcraft_engine::io::read_design(&bytes).unwrap());
+        assert_eq!(s.doc, reopened.doc);
+        bounds(&volume(&mut reopened, expected_volume, "legacy offset reopen"), edit, "legacy offset reopen");
+        s.execute("edit.undo", &json!({})).unwrap();
+        bounds(&volume(&mut s, original, "legacy offset undo"), expected, "legacy offset undo");
+    }
+}
+
+#[test]
 fn simple_history_files_replay_reopen_edit_and_undo() {
     for path in recipes() {
         let label = path.display().to_string();
@@ -205,6 +246,7 @@ fn simple_history_files_replay_reopen_edit_and_undo() {
         let packaged = solidcraft_engine::io::write_design_container(&s.doc).unwrap();
         assert_eq!(solidcraft_engine::io::read_design(&packaged).unwrap(), *s.doc, "{label}: container preserves history");
         for edit in recipe["edits"].as_array().unwrap() {
+            let label = format!("{label}: edit {} {}", edit["command"], edit["params"]);
             s.execute(edit["command"].as_str().unwrap(), &edit["params"]).unwrap();
             let edited_volume = expected_volume(edit);
             bounds(&volume(&mut s, edited_volume, &label), edit, &label);

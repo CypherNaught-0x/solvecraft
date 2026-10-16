@@ -86,9 +86,19 @@ pub struct Profile {
     piece_holes: Option<Vec<Vec<ProfilePiece>>>,
     #[serde(skip)]
     circle_partitions: Arc<BTreeMap<String, CirclePartition>>,
+    #[serde(skip)]
+    analytic_geometry: Arc<BTreeMap<ProfilePiece, Seg2>>,
 }
 
 impl Profile {
+    /// Exact source-directed graph geometry, certified during graph construction.
+    /// This transient certificate cannot be supplied by a serialized profile.
+    pub fn piece_geometry(&self, piece: &ProfilePiece) -> Option<Seg2> {
+        let key = ProfilePiece { reversed: false, ..piece.clone() };
+        let segment = *self.analytic_geometry.get(&key)?;
+        Some(if piece.reversed { segment.reversed() } else { segment })
+    }
+
     /// Exact analytic graph pieces, including oriented holes. Uncertified or
     /// sampled geometry never acquires this identity from serialized input.
     pub fn piece_boundaries(&self) -> Option<(Vec<ProfilePiece>, Vec<Vec<ProfilePiece>>)> {
@@ -994,6 +1004,17 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
             }
         }
     }
+    // Preserve analytic carriers before pruning/restoring graph edges. Share one
+    // bounded map across all faces, including isolated circles and dangling cuts.
+    let mut analytic_geometry: BTreeMap<_, _> = edges.iter().filter_map(|edge| Some((edge.analytic.clone()?, edge.seg))).collect();
+    for (boundary, _, _, _, pieces) in &loops {
+        if let (Some(pieces), Some(Seg2::Arc { center, radius, start, .. })) = (pieces, boundary.segs.first())
+            && let [piece] = pieces.as_slice()
+        {
+            analytic_geometry.insert(piece.clone(), Seg2::Arc { center: *center, radius: *radius, start: *start, sweep: TAU });
+        }
+    }
+    let analytic_geometry = Arc::new(analytic_geometry);
     let n = nodes.len();
     // One edge where pieces overlap, then prune dangling edges.
     let mut alive = without_overlaps(&edges, tol);
@@ -1203,6 +1224,7 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
                 holes.sort();
             }
             Profile {
+                analytic_geometry: Arc::clone(&analytic_geometry),
                 circle_partitions: Arc::clone(&circle_partitions),
                 piece_outer: piece_outer.clone(),
                 piece_holes,
@@ -1435,6 +1457,29 @@ pub fn merge_regions(regions: &[Region2]) -> Vec<Region2> {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod whole_boundary_tests {
     use super::*;
+
+    #[test]
+    fn analytic_piece_geometry_is_transient_and_preserves_directions() {
+        let mut sketch = Sketch::new();
+        sketch.add_circle(Vec2::ZERO, 30., None, Some("circle")).unwrap();
+        for divided in [false, true] {
+            if divided {
+                sketch.add_line(Vec2::new(-50., 0.), Vec2::new(50., 0.), None, None, Some("divider")).unwrap();
+            }
+            for profile in find_profiles(&sketch) {
+                let (outer, holes) = profile.piece_boundaries().unwrap();
+                assert!(holes.is_empty());
+                let roundtrip: Profile = serde_json::from_value(serde_json::to_value(&profile).unwrap()).unwrap();
+                for piece in outer {
+                    let segment = profile.piece_geometry(&piece).unwrap();
+                    let reversed = profile.piece_geometry(&ProfilePiece { reversed: !piece.reversed, ..piece.clone() }).unwrap();
+                    assert!(segment.start().dist(reversed.end()) < 1e-9);
+                    assert!(segment.end().dist(reversed.start()) < 1e-9);
+                    assert!(roundtrip.piece_geometry(&piece).is_none());
+                }
+            }
+        }
+    }
 
     #[test]
     fn circle_quadrants_resolve_exact_and_rotated_seams() {

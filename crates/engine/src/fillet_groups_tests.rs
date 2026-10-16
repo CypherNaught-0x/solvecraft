@@ -88,6 +88,7 @@ fn invalid_fillet_groups_fail_atomically_instead_of_reassigning_radii() {
         json!({"edge_sets":[{"edges":[[0,0,20]],"radius":2},{"edges":[],"radius":3}]}),
         json!({"fit":"reduce","edge_sets":[{"edges":[[0,0,20]],"radius":2},{"edges":[[20,30,20]],"radius":3}]}),
         json!({"radius":2,"edge_sets":[{"edges":[[0,0,20]],"radius":2},{"edges":[[20,30,20]],"radius":3}]}),
+        json!({"corner":"g2","edge_sets":[{"edges":[[0,0,20]],"radius":2},{"edges":[[20,30,20]],"radius":3}]}),
     ] {
         assert!(s.execute("solid.fillet", &p).is_err(), "{p}");
         assert_eq!(s.doc.to_json(), original);

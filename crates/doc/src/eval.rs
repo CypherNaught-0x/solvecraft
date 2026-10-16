@@ -1810,9 +1810,9 @@ fn fill_void_holes(st: &ModelState, r: &Region2, op: Operation, targets: &[Strin
 /// amount, when the space they grow into is already material (join) or empty (cut). `probe`
 /// maps a sketch point to the world points where the tool would be (along the extrude, around
 /// the revolve). Loops of lines and arcs are adjusted: a line moves out, an arc keeps its centre
-/// and changes its radius (a rounded corner of a face cut whole, #1275). Arcs move only where
-/// both of their ends meet tangent neighbours that move with them; otherwise the loop is left
-/// as it is.
+/// and changes its radius (a rounded corner of a face cut whole, #1275). Tangent neighbours
+/// move together. A concave join arc can also shrink into existing material between two
+/// unchanged lines; its endpoints are the intersections with those lines.
 fn grow_profile_for_coplanar(st: &ModelState, r: &Region2, op: Operation, targets: &[String], probe: &dyn Fn(Vec2) -> Vec<Vec3>) -> Region2 {
     use solidcraft_geom::Seg2;
     if !matches!(op, Operation::Cut | Operation::Join) {
@@ -1893,7 +1893,15 @@ fn grow_profile_for_coplanar(st: &ModelState, r: &Region2, op: Operation, target
             starts.push(corner + out * g1);
             continue;
         }
-        let (Seg2::Line { a: a0, b: b0 }, Seg2::Line { a: a1, b: b1 }) = (*prev, *cur) else { return r.clone() };
+        let (Seg2::Line { a: a0, b: b0 }, Seg2::Line { a: a1, b: b1 }) = (*prev, *cur) else {
+            if op == Operation::Join
+                && let Some(point) = crate::coplanar_growth::concave_line_corner(prev, cur, g0, g1, corner)
+            {
+                starts.push(point);
+                continue;
+            }
+            return r.clone();
+        };
         let (Some(d0), Some(d1)) = ((b0 - a0).normalized(), (b1 - a1).normalized()) else { return r.clone() };
         let (p0, p1) = (a0 + Vec2::new(d0.y, -d0.x) * g0, a1 + Vec2::new(d1.y, -d1.x) * g1);
         let den = d0.cross(d1);
@@ -1909,7 +1917,22 @@ fn grow_profile_for_coplanar(st: &ModelState, r: &Region2, op: Operation, target
         let (Some(&a), Some(&b), Some(&g)) = (starts.get(i), starts.get((i + 1) % n), grow.get(i)) else { return r.clone() };
         out.push(match *seg {
             Seg2::Line { .. } => Seg2::Line { a, b },
-            Seg2::Arc { center, radius, start, sweep } => Seg2::Arc { center, radius: radius + g * sweep.signum(), start, sweep },
+            Seg2::Arc { center, radius, start, sweep } => {
+                let new_radius = radius + g * sweep.signum();
+                let radial_start = center + Vec2::from_angle(start) * new_radius;
+                let radial_end = center + Vec2::from_angle(start + sweep) * new_radius;
+                if a.dist(radial_start) < 1e-10 && b.dist(radial_end) < 1e-10 {
+                    Seg2::Arc { center, radius: radius + g * sweep.signum(), start, sweep }
+                } else {
+                    let a0 = (a - center).y.atan2((a - center).x);
+                    let a1 = (b - center).y.atan2((b - center).x);
+                    let angle = ((a1 - a0) * sweep.signum()).rem_euclid(std::f64::consts::TAU) * sweep.signum();
+                    if !angle.is_finite() || angle.abs() < 1e-9 || (angle - sweep).abs() > 0.5 {
+                        return r.clone();
+                    }
+                    Seg2::Arc { center, radius: radius + g * sweep.signum(), start: a0, sweep: angle }
+                }
+            }
             _ => return r.clone(),
         });
     }
@@ -2819,7 +2842,7 @@ fn feature_tools_with_constructor(
             };
             let target_height = extent
                 .target_height(doc, vals, f.component, st, &ss.plane)?
-                .or_else(|| extent.to.map(|p| height_at(&tst, to_face, &ss.plane, centre, p)));
+                .or_else(|| extent.to.map(|p| height_at(&tst, to_face, &ss.plane, centre, p.0)));
             let d = match target_height {
                 Some(h) => {
                     let off = match &extent.to_offset {
@@ -2984,10 +3007,17 @@ fn feature_tools_with_constructor(
             if untrimmed {
                 *constructor = Some(ExtrudeConstructor { plane: ss.plane, interval: (lo + off, hi + off) });
             }
-            // A Join can extend into its target without moving its exposed
-            // end. Certify matching source curves and only nominal caps below;
-            // the constructor above still requires the whole tool untrimmed.
-            if matches!(operation, Operation::NewBody | Operation::Join) && taper.is_none() {
+            // Join/Cut tools can extend into or beyond their target without
+            // moving the exposed end. Only nominal caps receive certificates;
+            // Cut walls remain uncertified because the Boolean reverses them.
+            // The constructor above still requires the whole tool untrimmed.
+            // Sheet machining validates a whole raw prism (caps and walls).
+            // Partial cap certificates would mix raw and certified families and
+            // hide its exact depth/footprint from the flat-material validator.
+            if matches!(operation, Operation::NewBody | Operation::Join | Operation::Cut)
+                && taper.is_none()
+                && !(sheet && *operation == Operation::Cut)
+            {
                 let bodies: Vec<Body> = tools.iter().map(|t| t.body.clone()).collect();
                 let cap_bindings = match thin {
                     Some(thin) => Some(crate::config::thin_extrude_cap_bindings(&thin.curves, regions.len(), &bodies)),
@@ -3003,7 +3033,7 @@ fn feature_tools_with_constructor(
                             .into_iter()
                             .flatten()
                             .map(|source| match source {
-                                Some(kernel::FaceSource::ExtrudeSide { segment, .. }) if cap_bindings.is_some() => {
+                                Some(kernel::FaceSource::ExtrudeSide { segment, .. }) if cap_bindings.is_some() && *operation != Operation::Cut => {
                                     source_curves.as_ref().and_then(|curves| curves.find(segment))
                                 }
                                 _ => None,
@@ -3162,7 +3192,7 @@ fn feature_tools_with_constructor(
             regions.iter().zip(bodies).map(|(r, body)| Ok(tool(r, kernel::transform_matrix(&body, m)?, Some(&body)))).collect()
         }
         FeatureKind::Loft { sections, interpolation, .. } if sections.iter().any(|s| s.point.is_some()) => {
-            if !interpolation.is_uniform() {
+            if matches!(interpolation, crate::LoftInterpolation::CircularChord) {
                 return Err(DocError::Invalid("circular chord loft cannot contain point sections".into()));
             }
             // A profile lofted to a sketch point (an apex).
@@ -3177,7 +3207,9 @@ fn feature_tools_with_constructor(
             let id = pt.point.as_deref().unwrap_or_default();
             let q = ps.sketch.points.iter().find(|p| p.id == id).ok_or_else(|| DocError::Unknown(format!("point `{id}` in {}", ps.name)))?;
             let body = kernel::loft_to_point(&plane, &r.outer, ps.plane.to_world(q.pos))?;
-            Ok(vec![crate::lineage::ProfileRoles::swept(if prof.face.is_none() { st.sketch(prof.sketch) } else { None }, Some(&r)).tool(body, None)])
+            Ok(vec![
+                crate::lineage::ProfileRoles::swept(if prof.face.is_none() { st.sketch(prof.sketch.0) } else { None }, Some(&r)).tool(body, None),
+            ])
         }
         FeatureKind::Coil { base, axis, diameter, pitch, turns, section_size, section, position, start_angle, clockwise, .. } => {
             let base = &point(vals, base)?;
@@ -3230,7 +3262,8 @@ fn feature_tools_with_constructor(
                 }
             }
             let body = match interpolation {
-                crate::LoftInterpolation::Uniform => kernel::loft(&secs)?,
+                crate::LoftInterpolation::Uniform => kernel::loft_uniform(&secs)?,
+                crate::LoftInterpolation::ChordLength => kernel::loft(&secs)?,
                 crate::LoftInterpolation::CircularChord => kernel::loft_circular_chord(&secs)?,
             };
             if sketches.len() == secs.len() {
@@ -3670,7 +3703,7 @@ fn pattern_transforms(doc: &Document, vals: &BTreeMap<String, Value>, st: &Model
                 out.push(m);
             }
         }
-        crate::PatternKind::Circular { origin, axis, count: c, angle, alignment, reversed } => {
+        crate::PatternKind::Circular { origin, axis, count: c, angle, alignment, reversed, symmetric } => {
             let n = count(c)?;
             let total = val(vals, angle, Kind::Angle)?;
             let full = (total.abs() - std::f64::consts::TAU).abs() < 1e-9;
@@ -3681,8 +3714,17 @@ fn pattern_transforms(doc: &Document, vals: &BTreeMap<String, Value>, st: &Model
             } else {
                 0.0
             };
-            for i in 1..n {
-                out.push(rotation(origin.0, axis.0, step * alignment.multiplier(i, *reversed)));
+            if *symmetric {
+                for i in 0..n {
+                    let offset = i as i64 - (n / 2) as i64;
+                    if offset != 0 {
+                        out.push(rotation(origin.0, axis.0, step * offset as f64));
+                    }
+                }
+            } else {
+                for i in 1..n {
+                    out.push(rotation(origin.0, axis.0, step * alignment.multiplier(i, *reversed)));
+                }
             }
         }
     }

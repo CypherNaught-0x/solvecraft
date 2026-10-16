@@ -24,6 +24,10 @@ const MAX_CHAIN: usize = 4000;
 #[path = "project_order.rs"]
 mod order;
 
+#[path = "project_arcs.rs"]
+mod arcs;
+pub use arcs::join_face_arcs;
+
 /// A resolved link: its geometry in sketch coordinates and the (possibly moved) reference.
 #[derive(Clone, Debug)]
 pub struct Resolved {
@@ -500,9 +504,31 @@ pub fn resolve_anchored_face(doc: &Document, st: &ModelState, plane: &Plane, kin
     resolve_face_indices(st, plane, kind, &body.name, &indices)
 }
 
+/// Resolve a live face outline with circular carriers preserved before seam
+/// removal. Existing projections keep their saved decomposition unless they
+/// explicitly opt into joined arcs.
+pub fn resolve_joined_face(doc: &Document, st: &ModelState, plane: &Plane, anchor: &crate::FaceAnchor) -> Result<Resolved> {
+    let body = st.body(&anchor.target.body).ok_or_else(|| lost("anchored projection body"))?;
+    let indices = doc.configuration_face_indices(body, &anchor.target)?;
+    let mut result = resolve_face_indices_in(st, plane, LinkKind::Project, &body.name, &indices, true)?;
+    result.geom = join_face_arcs(result.geom)?;
+    Ok(result)
+}
+
 /// Project explicitly selected current face indices, without claiming persistent provenance.
 /// Callers retaining a link must supply their own replay identity policy.
 pub fn resolve_face_indices(st: &ModelState, plane: &Plane, kind: LinkKind, body_name: &str, indices: &[usize]) -> Result<Resolved> {
+    resolve_face_indices_in(st, plane, kind, body_name, indices, false)
+}
+
+fn resolve_face_indices_in(
+    st: &ModelState,
+    plane: &Plane,
+    kind: LinkKind,
+    body_name: &str,
+    indices: &[usize],
+    preserve_circles: bool,
+) -> Result<Resolved> {
     let body = st.body(body_name).ok_or_else(|| lost("projection body"))?;
     let mesh = body.mesh();
     if mesh.triangles.len() > 2_000_000 || indices.len() > 10_000 {
@@ -530,9 +556,22 @@ pub fn resolve_face_indices(st: &ModelState, plane: &Plane, kind: LinkKind, body
         } else {
             order::family_edges(&mesh, &selected, plane)?
         };
+        if preserve_circles && mesh.edges.len().saturating_mul(edges.len()) > 2_000_000 {
+            return Err(DocError::Invalid("circular face projection work limit exceeded".into()));
+        }
         for edge in edges {
             if let Some(points) = mesh.edges.get(edge) {
-                geometry.extend(fit_world(plane, points));
+                let circular = if preserve_circles {
+                    solidcraft_kernel::guard("circular face projection", || Ok(solidcraft_kernel::edge_circle(&body.body, edge)))?
+                        .and_then(|circle| arcs::project_circle(plane, circle, points))
+                } else {
+                    None
+                };
+                if let Some(curve) = circular {
+                    geometry.push(curve);
+                } else {
+                    geometry.extend(fit_world(plane, points));
+                }
             }
         }
     }
@@ -719,7 +758,9 @@ fn refresh_links_in(
                     l.face_name.as_ref() == Some(&anchor.target.name) && matches!(&l.source,LinkSource::Face {body,..} if *body==anchor.target.body)
                 })
                 .ok_or_else(|| lost("exact auto-projected attachment"))
-                .and_then(|anchor| resolve_anchored_face(doc, st, plane, l.kind, anchor))
+                .and_then(|anchor| {
+                    if l.join_arcs { resolve_joined_face(doc, st, plane, anchor) } else { resolve_anchored_face(doc, st, plane, l.kind, anchor) }
+                })
         } else if let Some((body, index, at)) = named_face {
             resolve_named_face(st, plane, l.kind, &body, index, at)
         } else if let Some((body, index, at)) = named_edge {
@@ -727,6 +768,12 @@ fn refresh_links_in(
         } else {
             resolve(doc, vals, st, plane, l.kind, &source)
         };
+        let resolved = resolved.and_then(|result| {
+            if l.join_arcs && (!l.auto_face || l.kind != LinkKind::Project || l.edge_name.is_some() || !l.edge_circle.is_empty()) {
+                return Err(DocError::Invalid("joined arcs require an anchored face projection".into()));
+            }
+            Ok(result)
+        });
         match resolved {
             Ok(r) => {
                 // An edge link saved without a name takes the name of the edge it was found

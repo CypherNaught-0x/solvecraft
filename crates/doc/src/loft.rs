@@ -20,7 +20,7 @@ impl LoftSection {
             (plane, profiles.into_iter().map(|p| p.region).collect::<Vec<_>>())
         } else {
             let sketch =
-                state.sketch(self.sketch).ok_or_else(|| DocError::Unknown(format!("loft sketch {} must precede its feature", self.sketch)))?;
+                state.sketch(self.sketch.0).ok_or_else(|| DocError::Unknown(format!("loft sketch {} must precede its feature", self.sketch)))?;
             (sketch.plane, crate::select_profiles(sketch, &self.profiles)?)
         };
         let mut regions = crate::sketch::merge_regions(&regions);
@@ -28,9 +28,6 @@ impl LoftSection {
             return Err(DocError::Invalid("each loft section must be one connected profile".into()));
         }
         let region = regions.pop().ok_or_else(|| DocError::Invalid("empty loft section".into()))?;
-        if !region.holes.is_empty() {
-            return Err(DocError::Invalid("loft sections with holes are not supported yet".into()));
-        }
         Ok((plane, region))
     }
 }
@@ -73,7 +70,7 @@ mod tests {
         let mut doc = Document::new("Interpolation compatibility");
         doc.add_feature(
             FeatureKind::Loft {
-                sections: (1..=3).map(|sketch| LoftSection { sketch, profiles: ProfileSel::All, point: None, face: None }).collect(),
+                sections: (1..=3).map(|sketch| LoftSection { sketch: sketch.into(), profiles: ProfileSel::All, point: None, face: None }).collect(),
                 interpolation: LoftInterpolation::Uniform,
                 operation: Operation::NewBody,
                 targets: vec![],
@@ -82,7 +79,8 @@ mod tests {
         )
         .unwrap();
         let mut old: serde_json::Value = serde_json::from_str(&doc.to_json()).unwrap();
-        assert!(old["features"][0].get("interpolation").is_none());
+        assert_eq!(old["features"][0]["interpolation"], "uniform");
+        old["features"][0].as_object_mut().unwrap().remove("interpolation");
         old["format"] = serde_json::json!("solidcraft-f3d-dev/18");
         doc.features[0].shell_piece_order = true;
         assert_eq!(Document::from_json(&old.to_string()).unwrap(), doc);
@@ -93,5 +91,39 @@ mod tests {
         assert_eq!(Document::from_json(&changed.to_json()).unwrap(), changed);
         old["features"][0]["interpolation"] = serde_json::json!("unknown");
         assert!(Document::from_json(&old.to_string()).is_err());
+    }
+
+    #[test]
+    fn omitted_interpolation_distinguishes_upstream_and_development_files() {
+        let mut doc = Document::new("Loft defaults");
+        doc.add_feature(
+            FeatureKind::Loft {
+                sections: (1..=3).map(|sketch| LoftSection { sketch: sketch.into(), profiles: ProfileSel::All, point: None, face: None }).collect(),
+                interpolation: LoftInterpolation::ChordLength,
+                operation: Operation::NewBody,
+                targets: vec![],
+            },
+            None,
+        )
+        .unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&doc.to_json()).unwrap();
+        assert_eq!(value["features"][0]["interpolation"], "chord_length");
+        assert_eq!(Document::from_json(&doc.to_json()).unwrap(), doc);
+        value["features"][0].as_object_mut().unwrap().remove("interpolation");
+        for (tag, want) in [
+            ("solidcraft/21", LoftInterpolation::ChordLength),
+            ("solidcraft/22", LoftInterpolation::ChordLength),
+            ("solidcraft/23", LoftInterpolation::ChordLength),
+            ("solidcraft/24", LoftInterpolation::ChordLength),
+            ("solidcraft-f3d-dev/18", LoftInterpolation::Uniform),
+            ("solidcraft-f3d-dev/23", LoftInterpolation::Uniform),
+            ("solidcraft-f3d-dev/29", LoftInterpolation::Uniform),
+            ("solidcraft-f3d-dev/30", LoftInterpolation::Uniform),
+        ] {
+            value["format"] = serde_json::json!(tag);
+            let migrated = Document::from_json(&value.to_string()).unwrap();
+            assert!(matches!(migrated.features[0].kind, FeatureKind::Loft { interpolation, .. } if interpolation == want), "{tag}");
+            assert_eq!(Document::from_json(&migrated.to_json()).unwrap(), migrated);
+        }
     }
 }

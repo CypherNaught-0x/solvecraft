@@ -1,9 +1,11 @@
 # Native F3D investigation
 
-Status: bounded archive inspection and **editable import of verified layout-8
-circle/line/arc sketches, offset construction planes and one-sided-extrusion history**. General F3D history support remains
-incomplete; the three larger supplied designs and the additional knob/clamp archives
-do not import yet.
+Status: bounded archive inspection, **editable reconstruction of verified history
+schemas**, and explicit partial recovery. Eight of the 17 supplied designs currently
+pass complete editable import; all 17 recover geometry with either recovery preference.
+Gridfinity recovers six bodies with open-shell diagnostics; their mass properties
+are not reliable. General F3D history and final-shape fidelity
+remain incomplete. See [current coverage and failures](f3d-reference-evaluation.md).
 The project owner authorized clean-room investigation on 2026-10-11 as an
 exception to AGENTS.md's public-specification requirement. Only the supplied
 files and locally generated controlled variants were observed through Fusion's
@@ -16,7 +18,7 @@ object index against its bulk records, leaving the current design untouched:
 cargo run --profile ci -p solidcraft-cli -- exec file.inspect_f3d '{"path":"/path/to/part.f3d"}'
 ```
 
-`doc.open` reconstructs supported sketches, constraints, offset planes and extrusions and
+Strict `doc.open` reconstructs supported sketches, constraints, offset planes and extrusions and
 regenerates the model before replacing the current document. Unsupported schemas
 or regeneration failures leave the current document/model/undo state intact.
 An imported document is unsaved with no source path: saving it uses a new
@@ -1537,12 +1539,32 @@ B7F34 label table to an ABA79 whole-body record (version 4), whose stored operat
 must agree. A circle's common label 4 or a rectangle's common label 7 is never
 inferred from its geometry. Authored tests deliberately use label 208.
 
-Whole-body records retain a checked member-label list. Layout 4 stores strings
+Whole-body records retain a checked member-label list. Layouts 4 and 5 store strings
 individually; layout 8 stores concatenated text and an offset table. Both encodings
 are bounded, validate canonical labels and reject duplicates, invalid offsets,
 unknown layouts and truncation. Their optional cached recipe reference must have
 the expected class; it never chooses a nearby body. A local test checks the first
 compound target in the original adapter and its unchanged public-API resave.
+
+The optional reference after the six-byte whole-body prefix identifies a
+replacement label after a profile edit. Six local controls change a rectangular
+extrusion into either triangular half, change pattern count and extrusion depth,
+then restore the rectangle. The old label points to the replacement while the
+pattern retains its original selector. Every linked record must be a version-4
+whole-body record in the same producer's label table with exactly the same
+operation groups. The selected identity is checked on the original record;
+replacement identities may differ. Cycles, foreign labels, malformed records and
+chains longer than 64 records are rejected. Layout-5 member lists are also checked
+against the original Round archive. Native controls check analytic volumes and
+instance centroids through height/count/angle edits and container reopening.
+
+Round now recovers its circular pattern after Fillet1: eight editable features,
+the insert body, and ten rounded grip bodies. Its regression checks source width,
+fillet radius, negative extrusion depth and grip count edits. Final Combine
+reconstruction remains part of the full-import acceptance gate. The independent
+`mixed-profile-fillet-pattern` saved example exercises the same feature sequence
+with analytic volume, bounds, centroid, suppression, count edits and undo; it
+brings the original saved-history suite to 146 designs.
 
 Twenty-one additional public-API controls cover a joined cap, same-position and
 offset joins from separate sketches, and triangle, pentagon and eight-line polygon
@@ -2299,3 +2321,686 @@ corpus in both modes, checks regeneration and save/reopen volume stability, and
 prints feature/body counts plus warnings. An empty recovery is explicitly marked;
 it is not counted as a complete geometry import. The separate strict acceptance
 gate remains the test for complete editable history.
+
+
+## Grouped profile selections
+
+A version-one profile tracking region contains its combined loop list followed
+by a counted list of selected member regions, each with its own loop list. These
+are bounded together: at most 128 selected members and 20,000 recorded curve
+pieces, with existing per-loop and hole limits. Inspection exposes `region_members`
+alongside the combined `regions` boundaries.
+
+Each member resolves through its directed source-curve pieces. Where the native
+partition is boundary-local, it translates to the exact region or connected union
+of regions of the complete regenerated sketch. The importer rejects overlapping
+or missing members, then
+checks that their merged region matches the separately stored combined boundary.
+The combined boundary is certified by inside/outside propagation across analytic
+graph edges: named directed edges separate membership, unnamed shared edges cancel,
+and unnamed unshared edges border the exterior. Hole loops are checked separately.
+No point sampling or area ranking chooses the result. The saved feature retains
+ordinary editable full-sketch piece selections, so no new document-format version
+is needed.
+
+Original authored records and native two-circle controls cover unions, lenses,
+separated crescents, explicit holes, hole filling, changed dimensions and reopening.
+The original `grouped-profile-union.solidcraft` example adds analytic union volume
+and bounds checks to the saved-history suite. Its bounds tolerance is 0.01 mm because
+`inspect.measure` uses a curved display mesh; other fixtures keep their existing
+bounds tolerances.
+
+This does not resolve stale or remapped native selections. In the supplied clamp,
+Fusion's current selected profile boundaries differ from the stored tracking record
+even though the source sketch line coordinates agree. The importer rejects that
+mismatch; the opt-in native clamp prefix acceptance test remains failing. Further
+controlled selection edits are needed to establish the persistent remapping schema.
+
+The supplied Eye archive has a related stale selection: its second extrusion's
+tracking boundary names two curve identities absent from the current sketch.
+Recomputation and resaving preserve those references; explicitly reselecting the
+same current circle writes a new single-circle boundary without changing the
+source model's feature health or final volume. This observation does not establish
+a general remapping rule. The explicit current-snapshot path documented below
+now resolves Eye. Other missing identities remain unsupported, and errors
+identify the owning feature, profile, tracking record, region/member, sketch and
+curve piece. The importer does not choose a replacement region by size or order.
+
+## Selections retained across sketch subdivisions
+
+Controlled before/after archives retain identical tracking boundaries when an
+added line divides a selected lens or an added circle creates an interior disk.
+Both resulting regions remain selected. Explicitly reselecting them writes new
+member groups with the same combined boundary. The import preserves this filled
+union, rather than discarding the new interior region.
+
+The sketch graph retains transient, non-serialized analytic geometry for its
+directed pieces. A boundary-only source graph resolves the recorded identity;
+each source span then maps to a contiguous, complete sequence of full-graph spans
+on the same named carrier. Graph membership propagation selects their interior,
+and an independent merged-boundary comparison checks the resulting shape and
+explicit holes. The fast complete-region path still accepts an unrelated free-form
+face elsewhere in the sketch. Refinement of an uncertified graph remains unsupported.
+Refinement is bounded by 100,000 face-edge incidences and two million span comparisons,
+in addition to existing persisted selection limits.
+
+Nested components can express compound holes as adjacent loops. Opposite shared
+spans cancel within a face. Persisted selections permit a span twice only when it
+appears with opposite directions in two distinct hole loops; repetitions involving
+the outer loop, matching directions or a third occurrence remain invalid. Every
+selection must still match an exact regenerated profile.
+
+Original field-authored tests check divided lenses, explicit annular holes,
+source/height edits and container reopening. Six opt-in native before/after/reselected
+controls check analytic lens volume and editable height. The original
+`subdivided-profile-lens.solidcraft` fixture adds source diameter, height and internal
+divider edits to the 134-design saved-history suite. It renders as one filled lens
+extrusion. The clamp's piece scopes and later unsupported feature families remain
+unresolved; these controls do not establish complete corpus import.
+
+
+## Circular patterns
+
+The native circular-pattern feature (`11F1A5CE-2B57-4476-8480-6994621493C9`,
+version 0) now retains count and angle parameter bindings, body or feature source
+relationships, symmetry, current instance identities and its tracked root axis.
+Root-axis geometry, name and origin-group ownership must agree. Display extents
+never select an axis. The current and legacy axis-selector generations are read
+separately, and legacy pattern headers preserve their versioned padding.
+
+Separate body copies and distance-extrusion feature copies become editable
+`Pattern` features. Source count, angle and dimensions remain live expressions.
+Symmetric distributions leave the seed fixed and allocate half the instance
+indices on its negative side; for even counts that side has one additional
+instance. A full circle omits the duplicate endpoint. Negative angles reverse
+rotation. The circular-pattern dialog and command retain the symmetry setting.
+Format 30 prevents older readers from silently discarding that setting.
+
+Count reductions leave operation slots after their instance objects disappear.
+The topology-operation reader accepts those missing objects only when the
+circular pattern certifies an inactive slot. Recreated instances can retain a
+retirement marker; the current slot and reciprocal operation indexes must agree.
+The returned ownership map contains only existing objects. Neither the number of
+historical operation slots nor the retirement list determines the pattern count.
+
+Twelve local native controls cover body/feature sources, count changes, partial
+and full sweeps, symmetry, signed angles and a different axis. They check analytic
+cylinder volumes and centroids. Legacy and resaved Round/Style 7 pattern records
+also decode. Original field-authored tests cover truncated and inconsistent
+relationships, count edits, source height edits and reopening. The original
+`circular-symmetric-body` and `circular-symmetric-feature` saved recipes exercise
+volume, bounds, center of mass, count/sweep/height edits, reopening and undo.
+
+This does not yet establish complete Round or Style 7 import. Modified/composite
+body sources, downstream Combine references to multiple pattern outputs,
+non-root construction axes, individually suppressed instances and additional
+feature kinds still require reconstruction. Those cases remain explicit errors
+in strict import and reported omissions in recovery mode.
+
+After integrating upstream's symmetric-extrusion convention, native full-length
+extents use `total_distance` and native half-length extents use `legacy_per_side`.
+The source distance expression remains unchanged, including downstream parameter
+references. Earlier saved extents without a convention retain their existing
+per-side interpretation. Original saved examples and local native controls check
+both modes through signed distance edits, diameter edits, volume and reopening.
+
+
+### Rectangular cap projections after a circular cut
+
+Whole-face projections can now retain four rectangular boundary edges and one
+circular hole after a single untapered extrusion cut. The importer checks the
+base and cut operation owners, the seven-term face incidence tree, the circular
+side label, the cached boundary identities and all five mapping targets. It
+then creates live links to named edges of the evaluated cut body. Boolean cuts
+retain the body creator ID, so the intervening timeline is checked separately
+for unsupported body modifications.
+
+Six local controls cover top and bottom cap selections, a diameter change and a
+base-height change. Each imports six editable features and passes analytic volume
+checks before and after changing the diameter to 10 mm and the height to 19 mm,
+then saving and reopening. Expected total volume is
+`(30 * 20 - pi * radius^2) * (base_height + 5)` cubic millimetres.
+An independently authored record test checks cap roles, distinct owners, closed
+outer incidence, every truncation boundary and trailing data. Native exports and
+API measurements remain outside the repository. This is a narrow supported case;
+multiple cuts, filleted caps and arbitrary composite faces remain unsupported.
+
+
+### Coincident circle references in selected profiles
+
+Native selected boundaries may name the same directed partition twice through
+two coincident full-circle sources, such as a projected hole and a drawn circle.
+The document evaluator accepts this only when both references have the same
+piece/count/direction and local seam, and both live circles coincide within
+1e-9 mm. References without their matching source, opposite directions,
+different counts, construction curves and differing seams remain invalid.
+Selection still requires an exact regenerated profile identity after removing
+these redundant references; proximity does not choose a region.
+
+Boundary-scoped native selections are translated to full-sketch partitions,
+then both circle IDs are retained in the saved selection. Regeneration checks
+the coincidence again: removing or separating either circle reports a lost
+profile instead of silently discarding its dependency. Circle comparisons and
+expanded reference counts are bounded by explicit work and document limits.
+The existing piece-reference file schema is unchanged.
+
+Round now recovers its first six features, including the grip extrusion as a
+second solid. Its native regression checks both bodies against analytic volumes,
+grip-width and extrusion-depth edits, and reopening. A combined diameter/width
+edit can move its underconstrained rectangle past a dividing line; that changes
+the partition topology and remains an explicit selection error. Later fillet,
+circular-pattern and combine reconstruction is still incomplete.
+
+The original `coincident-profile-lens` SolidCraft example brings the saved suite
+to 137 designs. It uses two radius-30 circles at one center and a radius-30 circle
+40 mm away, with the duplicate references preserved on the selected lens.
+Volume is the analytic two-circle intersection area times height. Shared diameter
+and height edits, undo, serialization and reopening pass; parser/evaluator tests
+also reject source separation and inconsistent duplicate references.
+
+## Blends on signed extrusions — 2026-10-15
+
+Straight-edge fillets and chamfers now accept a nonzero negative distance on
+one-sided, zero-offset, untapered extrusion sources. Native face label 1 stays
+on the sketch plane; label 2 is the travel cap, which maps to the document's
+`bottom` role for negative distance and `top` for positive distance. Treating
+label 2 as always `top` lost the far-cap edge even after allowing negative depths.
+The explicit producer, operation, source-curve and edge-incidence checks remain.
+
+Eighteen local positive/negative controls cover vertical, sketch-plane and travel
+cap edges for constant fillets and equal-distance chamfers, including changed
+negative source depth. Tests check independent analytic removed volume and
+centroid, parameter changes, undo, persistent references and container reopening.
+Six original `signed-extrude-*` examples bring the regular saved suite to 143.
+The rendered negative-depth origin-cap fillet has one continuous rounded edge
+and closed faces. Native archives and measurements remain outside the repository.
+
+Round advances from `unsupported blend source extent` to `missing side-role
+sketch line`: its mixed line/circle source boundary still needs explicit side
+identity support. Complete editable corpus acceptance remains 4/17.
+
+## Straight blend sides in mixed profiles — 2026-10-15
+
+Extrusion side labels can reference a line interval split by a circle rather
+than a complete polygon side. The reader now retains that explicit piece/count
+and one or two source neighbors at each endpoint. For mixed profiles, attachment
+requires the named piece on the selected combined boundary, the same certified
+region in the full and boundary-scoped graphs, and matching endpoint-neighbor
+sets. Coincident circle aliases remain separate required neighbors. Unowned
+curves, wrong partitions, omitted aliases and nonincident neighbors are rejected.
+Only straight side carriers use this path; circular side selection is not inferred.
+
+Round's two vertical grip fillets now retain their persistent edge references.
+Its native regression checks seven reconstructed features, analytic body volumes,
+radius, negative-depth and grip-width edits, and container reopening. The next
+native failure is the circular pattern's historical flags, followed by Combine.
+Twenty-four local mixed-profile fillet/chamfer controls cover both extrusion
+signs, reversed rectangle drawing direction, changed blend size and source depth.
+Their removed volumes and centroids are checked analytically with a fine mesh:
+the ordinary measurement chord tolerance is too coarse for the smallest corner
+removals beside the much larger circle. The native files stay outside the repo.
+Two original mixed-profile examples expand the saved history suite to 145.
+
+
+### Patterned Combine selections and historical aliases
+
+Combine now resolves ordinary circular body-pattern copies by the explicitly
+owned source operation, main pattern operation and live instance operation.
+The generated-body index follows source order and then instance order; native
+output-handle registration order does not choose geometry. Feature-pattern and
+symmetric-pattern output selectors remain outside this new decoding path.
+
+A body selector can retain several labels for one operation. Each alias must
+converge through bounded, acyclic, feature-owned replacement links to the same
+terminal body and operation groups. Pattern replacements may add contributor
+groups, but cannot discard existing groups. Cached pattern member names can
+repeat after blends; they are parsed and bounded, never used to select geometry.
+Every added contributor must resolve to an earlier, unsuppressed imported fillet
+or chamfer acting on the selected seed body. Unknown or unrelated contributors
+are rejected.
+
+Historical Combine lists may retain deleted pattern copies as one null handle.
+These are omitted only when the pattern's operation map explicitly certifies a
+retired instance and no live operation owner remains. A missing handle for a live
+instance, or a retired target, remains an error. Selected live handles still have
+to agree with the Combine's consumed-body list.
+
+Ten local native controls cover four-instance cuts with kept/consumed tools,
+source-profile replacement, a fillet inserted before a pre-existing pattern,
+height edits and container reopening. All use independent analytic volumes and
+centroids. Field-authored tests cover registration-order changes, wrong identity
+and ownership, aliases, replacement contributors, retired/live mismatches,
+truncation and budgets. Two original `combine-circular-pattern-*` saved examples
+bring the editable-history suite to 148; no native archive is committed.
+
+The original Round file now imports all nine features and reopens as one solid,
+raising complete baseline corpus acceptance to 5/17. Radius, grip-depth and
+profile-width edits pass the opt-in complete-Round regression, including
+analytic volume and container reopening. Pattern-count edits of the final
+Combine and the remaining twelve archives are not established by these checks.
+
+Two kernel issues affected deeper patterned grips. The prism route previously
+searched only the first eight planar face normals, which could all be wall
+directions. It now filters normals by the cap/wall parallel-or-perpendicular
+condition with bounded work before attempting reconstruction. Also, projecting
+shared cap stations could produce picometre-length edges. Splitting now uses
+physical segment length and the existing sewing tolerance when separating
+stations. An original `combine-circular-small-grips` recipe exercises ten
+filleted grips joined to shallower stock, with analytic volume, centroid and
+depth/radius edits. It brings the saved history suite to 149 designs.
+
+## Current snapshots for stale profile tracking
+
+On desktop, a profile whose tracking names a deleted sketch curve can resolve
+its explicitly referenced current snapshot instead. The reader follows the
+profile handle through the archive's ordered identity table to a named ASM
+root body. A single face and loop must carry curve tags that resolve back to
+the source sketch. These tags select editable curve pieces; cached coordinates
+are not substituted for the source geometry. Unsupported compound selections,
+ambiguous identities, broken ownership and malformed topology remain errors.
+Empty, unused snapshot maps do not block a different selected map.
+
+An original byte-authored fixture verifies analytic volume, diameter and height
+edits, and save/reopen. Negative cases cover wrong source identities, cycles,
+inconsistent links, malformed piece tags and truncated streams. The local Eye
+archive's stale second-extrusion profile now resolves to its surviving full
+circle. Its six features open and reopen with positive solid volume, bringing
+complete baseline corpus acceptance to 6/17. Arbitrary native parameter edits
+and the remaining eleven complete-history imports are not established by this
+baseline check.
+
+## Circular cap blends and historical operation owners
+
+Constant-radius fillets and equal-distance chamfers now reconstruct verified
+full circular extrusion-cap selections. The native recipe must identify the
+producing operation, cap and complete source circle. Regenerated semicircular
+edges are validated together as one closed circle before their persistent names
+are retained. Partial source boundaries and ambiguous ownership remain explicit errors.
+
+Twenty-four local Fusion controls cover both cap ends, fillet and chamfer,
+diameter, height, blend size, suppression and restoration. Tests compare analytic
+volume and center of mass, edit imported parameters and reopen saved containers.
+Two original `circular-blend-*-bottom` saved examples additionally check edits,
+undo and reopening, bringing the saved-history collection to 151 designs.
+
+Topology-operation indexes can retain deleted historical owners. Forward and
+reverse maps must still agree; missing owners are removed from the live selection
+index only after framing and retirement validation. They cannot resolve a live
+selection. Contradictory retirement of an existing unrelated owner remains an
+error. This allows Style 7 to reach its later compound blend selection; it does
+not establish complete import of that file. Complete corpus acceptance remains
+6/17 after these changes.
+
+## Asymmetric circular chamfers
+
+Verified complete circular cap selections now preserve two-distance and
+distance-and-angle chamfers, including flipped sides. The oriented native recipe
+identifies the primary setback face; it is not inferred from a cached coordinate
+or the world-space position of the cap. The negative-travel origin recipe swaps
+its two incident labels and the corresponding oriented branch. Both must agree.
+
+The kernel rebuilds a complete circular cap with independent radial and axial
+setbacks, retaining face history and refusing incomplete loops or setbacks beyond
+the cap/wall. For these circular loops, side one is the planar cap; `flip` selects
+the wall. Straight-edge chamfers retain their existing face convention. Native
+orientation is translated into this convention while retaining parameter bindings.
+
+Seventy-two local Fusion controls cover both caps, flipped sides, both modes,
+size/diameter/height changes, suppression, restoration, rotated cylinders and
+negative travel. Tests also edit imported parameters and reopen saved containers.
+Cap radius and wall contact height are checked directly, in addition to analytic
+volume and centroid, so exchanged setbacks cannot pass within volume tolerances.
+Original byte-authored tests check oriented recipe branches, truncations and
+independent imported dimensions. Two original saved examples add unequal circular
+bevels to the 153-design collection.
+
+Style 5 now passes its asymmetric chamfer and stops later at Extrude5's selection:
+container 1115 refers to a body-face selector 1118 rather than a sketch profile.
+That face-based extrusion is the next decoding task; complete import is not yet
+established for Style 5.
+
+## Face-based extrusion follow-up
+
+Native extrusions can now select a verified circular body cap. The imported
+history includes a linked helper sketch on a persistent face anchor, followed
+by the ordinary editable extrusion. Two-term trimmed-cap recipes retain both
+the original extrusion operation and the chamfer boundary operation; import
+requires the chamfer to select that producer's complete circular cap edge.
+Unbounded cap attachments also resolve certified caps created by face extrusions
+without requiring a nonexistent native sketch-profile record.
+
+Style 5 now imports Extrude5 in editability recovery: five SolidCraft features
+(the original sketch, extrusion, chamfer, linked helper sketch and new extrusion),
+one body and zero evaluation errors. Its next failure is Sketch4's projected
+boundary, whose side term carries two operation values. This is still an
+incomplete design. The strict corpus remains 6/17, with the same six passing
+files as the upstream recheck.
+
+All **78 local face-extrusion controls pass** analytic volume and centroid
+checks, named-parameter edits and reopening after the circular-cap cut fix.
+The 12 previously failing chamfer-cap cuts now use exact boundary topology when
+the tool and opening share a complete circular cap on a convex coaxial body.
+Tool padding outside the body is clipped to the opening plane, with composed
+face history; validity, meshing and Boolean result checks still apply. Off-axis,
+through-body and unsupported boundary cases use the existing Boolean paths.
+This fixes the controlled cuts, but does not establish complete import of the
+supplied corpus; compound projected boundaries remain unsupported.
+
+## Face-cap projections and explicit extrusion targets
+
+Circular cap projection records now require the face selector and edge tracker
+to agree on their producer, cap, boundary roles and opaque legacy lineage tokens.
+The importer retains the live projected circle and its face attachment. Explicit
+extrusion target containers select the intended existing body even when several
+independent bodies are active; foreign, consumed and forward targets are refused.
+
+All 132 local cap-projection controls pass analytic volume, centroid, body count,
+parameter edits and container reopening. These cover plain and chamfered top and
+bottom caps, face New Body/Join/Cut operations and a subsequent separate or joined
+extrusion. A coplanar Cut may widen its tool and consequently lose its exact
+sketch-boundary certificate. In that case the importer uses the explicit current
+Boolean-history end-cap role, verifies its nominal plane and reversed orientation,
+and retains the history anchor. It does not search for the nearest face. Ambiguous
+roles, stale geometry, foreign targets and unsupported extents are rejected.
+
+The original saved-history suite contains 163 examples, including two plain-cut
+cap projections with analytic volume, centroid, bounds, edits, suppression, undo
+and reopening checks. Original record and history tests cover invalid selectors
+and cut-end resolution without shipping native commercial CAD exports.
+
+Style 5 now reconstructs Sketch4's linked projection. Its Extrude6 checkpoint
+decodes but fails during a union along coincident cylindrical walls; full strict
+import also encounters an unsupported composite face selector at Sketch5. This
+remains incomplete. See `f3d-upstream-recheck.md` for supplied-file acceptance.
+
+## Composite cap outline projections
+
+Merged extrusion caps can now retain a live projected outline containing lines
+and circular arcs. Finite edge recipes retain their incident face terms, endpoint
+incidence, virtual seams and opaque intersection signatures. Every endpoint must
+join exactly two edges in one connected loop. The sketch's mapped trackers must
+agree with the cached curve identities and the composite cap contributors.
+
+A bounded selector may describe topology modified by later timeline features.
+Its complete incidence graph is validated, but that later boundary is not used
+to reconstruct an earlier sketch. The mapped original outline must match every
+curve of the regenerated cap. No nearest-body or nearest-edge selection is used.
+The resulting auto-projected face link uses the optional `join_arcs` flag to join
+degree-two circular seam pieces on each recompute. Existing links default to false
+and keep their previous decomposition. Branches and different circles remain
+separate; work and input sizes are bounded.
+
+Style 5 retains Sketch5 and Extrude7 with no regeneration errors in editability
+recovery. Saved history reopens with the link
+intact. Increasing Height from 9 to 10 mm moves the sketch by 1 mm and increases
+volume by the analytic radius-14 cylinder increment (within 0.03 mm³ in the local
+check). Subsequent blend support is described below; this is not a complete import.
+
+Original tests project the cap of the partial-cylinder-wall example, extrude it
+one millimetre and verify its analytic area/volume after diameter, height and
+depth edits and container reopening. Field-authored incidence tests reject
+truncated records, excessive counts, duplicate edges and incompatible endpoint
+signatures.
+
+### Rounded cap boundaries across evaluation generations
+
+A single extrusion cap rounded by decoded fillets can also retain a live outline.
+Its selector, cached edges and mapped sketch trackers must each form one complete
+cycle. Opaque intersection signatures identify shared vertices exactly within
+each graph. Across evaluation generations, a cyclic bijection preserves every
+incident face term and seam while allowing the opaque signature values to change.
+The comparison is bounded to 128 edges and uses quadratic work. Plain extrusion
+caps stay on their stricter decoder; the fallback requires additional provenance
+on the selected body. A rounded cap requires a decoded fillet. An unrounded joined
+cap instead requires the current body to be the exact shared result of its cap
+producer's successful, non-stale evaluation. A later modifier cannot silently
+disappear from this provenance check.
+
+The extrusion's construction certificate identifies the cap after a fillet has
+replaced its raw history alias. Its live attachment must equal the sketch support,
+and every regenerated line or arc must match one mapped curve. Geometry cannot
+substitute for a missing or ambiguous identity, and matching incidence cannot
+excuse different geometric boundaries.
+
+Style 1 now retains Sketch7 and Extrude6 after Fillet1. The local check verifies
+eight linked outline curves, container reopening, an edited fillet radius and a
+one-millimetre base-height increase with the analytic cylinder-volume increment.
+Later unsupported features are still reported as omissions. An original
+circle/strip grip regression uses analytic tangent points and checks live links,
+volume and plane movement after edits and reopening. Negative cases cover missing
+spans, absent modifier provenance, another cap on the same body, shifted geometry,
+duplicate edges and inconsistent intersection signatures.
+
+### Joined asymmetric chamfers and multiple profile regions
+
+Finite joined edges retain their ordered native endpoint cycles in addition to
+unordered topology. Two opposite three-face cycles identify the primary setback
+face. For orthogonal planar sides, that identity maps to the kernel's face ranking
+and the native flip flag. Mixed rankings in one group remain refused. An original
+joined-wing regression checks top and bottom edges, both flip settings, unequal
+setbacks, edited distances, reopening, analytic removed volume and first moments.
+It also checks the actual setback edges so exchanging the distances cannot pass
+only because the removed volume is unchanged.
+
+A cut can replace a cap's history alias while retaining its extrusion certificate.
+The blend resolver can use that certificate for a single named cap; it never picks
+an unrelated coplanar face. Multiple selected profile regions are checked against
+their declared atomic members before one unique interval certificate is accepted.
+Projected arcs retain their native curve identities and finite angular domain;
+the opposite portion of the same circle is not an endpoint neighbor. Original
+rectangles and crescent profiles cover duplicate regions, missing arc identities
+and foreign endpoint neighbors.
+
+The local Style 3 prefix check verifies both Chamfer2 primary caps and its two
+cut-profile intervals. It does not yet certify the complete chamfer: the regenerated
+cut wall's exact face history and asymmetric curved-edge geometry remain to be
+resolved. These omissions continue to be reported during recovery.
+
+### Curved stations retain Boolean history
+
+Stepped prism cuts now retain exact wall provenance when adjacent walls meet
+along a curve certified to lie at one height. Previously every curved wall join
+was treated as crossing every height, which discarded the whole result history.
+The certificate checks positive rational control bounds over the entire curve;
+equal endpoint heights are insufficient. Ambiguous or over-budget curves retain
+the conservative behavior.
+
+An original cylinder-and-grip regression cuts two disconnected crescents and
+checks complete source history, valid solids and analytic volume, including a
+rotated placement and changed cut radius. An overlapping join also leaves internal
+wall boundaries without caps at their heights. These certified boundaries now
+participate in the slab partition, within the existing 64-level and work limits.
+Unknown or excessive boundaries retain conservative provenance behavior.
+
+The local Style 3 cut now preserves its exact history and both circular source
+faces. Its two symmetric finite arcs must be resolved as a complete group;
+unequal curved-edge chamfer geometry that consumes the whole wall remains
+unfinished, so complete Chamfer2 is not yet enabled.
+
+### Joined cap projections with short circular edges
+
+Style 3 now retains Sketch6's four-edge outline and the following circular-strip
+cut, Extrude6. Some of its circular edge pieces have only two display samples;
+fitting those samples produces chords. Joined-face projections now query the
+underlying kernel curve's circular carrier and directed span, check agreement
+with the display samples, and preserve the arc before joining seam pieces.
+Kernel queries are guarded and their aggregate edge work is bounded. Tilted or
+noncircular curves retain the existing projection path, and links without the
+`join_arcs` option retain their prior decomposition.
+
+The local native check covers diameter, width, base height, grip height and inset
+edits, live links and container reopening. Fine tessellation agrees with the
+analytic cylinder-plus-circular-strip volume within 0.05 mm³ in both cases.
+Original regressions cover unrounded joined caps, stale producer results, hidden
+later fillets, live radius and plane changes, short circular spans, reversed
+orientation, major arcs, full circles and inconsistent carrier samples. Later
+chamfers and other unsupported features remain explicit omissions.
+
+## Straight tip blends on joined extrusion caps
+
+Finite straight cap/side edges can now resolve across multiple joined extrusion
+contributors. Every native face term maps through its earlier feature's exact
+cap or sketch-side lineage. Both endpoint face sets must match, and distinct
+native faces cannot collapse to one current face. The importer validates body
+ownership, selector framing and supported cache classes; cache coordinates
+never choose the edge. Contributors produced by earlier fillets still require
+further decoding.
+
+Style 5 retains Fillet3 in addition to Sketch5 and Extrude7. This remains a
+partial import; the combined rounds described below also retain Fillet1. The original
+`partial-cylinder-tip-fillet` example checks analytic removal, radius and source
+height edits, suppression, undo and container reopening. A fine mesh at the same
+chord tolerance on both sides verifies the small removed volume; the general
+measurement API adapts to curvature and must not be differenced at two different
+resolutions for such a small operation. Unit tests reject wrong owners, truncated
+records, incorrect cache classes and collapsed endpoint face identities.
+
+## Circular and intersection blend selections
+
+Closed edge identities retain one seam vertex and their opaque intersection
+signatures; finite spans retain both endpoints. A native cylinder or chamfer can
+map to several exact kernel face pieces. The topology lookup accepts those curved
+faces without treating them as planar sketch supports, and rejects geometric
+fallback names. Native chamfer output labels retain their explicit group mapping.
+A circular side extruded from a face follows its owned boundary tracker back to
+the source cap and chamfer, then to the complete live projected circle.
+
+Selection requires a unique line or circular arc with the expected endpoint face
+sets, or a complete circular chain between two face families. Closed chains must
+cover exactly one circle without overlapping arcs, missing pieces or extra
+incident faces. Opaque signatures are retained, not used as geometric picks;
+ambiguous surface intersections remain unsupported. Original tests verify the
+selected circles and wing intersections against analytic geometry through source
+diameter edits, and reject incomplete rings and collapsed face families.
+
+All five Style 5 Fillet1 selectors now resolve to seven current edges (two closed
+rings each span two kernel pieces). Fillet1 now regenerates as an editable feature,
+and Fillet6 now regenerates too, bringing the partial history to twelve features
+and two omission warnings.
+Fillet6's thirteen native edges now resolve to seventeen distinct kernel spans,
+including the tapered endpoint. Sketch2's projected boundary and its dependent
+Extrude2 remain unsupported. On upstream 0.13.1, recovery opens in 23.28 seconds
+and preserves its history and measured mesh volume (6892.271 mm³) on reopening.
+This establishes a reproducible partial import, not final-source shape fidelity.
+
+The rolling-ball builder accepts a collapsed endpoint only when all three
+support contacts agree within the construction accuracy. Resampling starts
+from the already computed ball centre. A straight strip between two planes
+does not interpolate through a curved neighbour, and each fitted supporting
+surface is cut to the same interval as its contact curves. Keeping neighbouring
+surface regions had allowed meshing to project into the wrong region and turn
+triangles over on narrow strips. Original analytic tests cover the contacts,
+surface interval, editable radius, source height and mesh-volume origin invariance.
+
+
+Concave cylinder/wing root fillets can now grow a planar end face beyond its old
+boundary when the continued seam stays in empty space without crossing another
+boundary. Two concave rounds can also meet at a corner by intersecting their
+oriented strips. Separate edge groups are rebuilt sequentially with preserved
+lineage; each later selection must still lie on the current body. Mixed convex/
+concave corners, three concave strips and paired concave chamfers remain refused.
+Original saved fixtures check analytic added volume, combined corner/ring rounds,
+editable radii, source-height changes and reopening. This remains a partial native
+import, not complete history or proof of source-shape fidelity.
+
+### Fillet-generated faces and seam subdivisions
+
+Fillet output labels use the feature's explicit B7F34 table and its owned
+tracking records. The source edge is resolved in the evaluated state immediately
+before that fillet, and must match one of its persisted input edge names. A
+subsequent feature follows the resulting verified blend-face lineage. References
+to later features, other bodies, unsupported radius groups, missing lineage and
+tracking nesting deeper than sixteen are refused.
+
+Some old trackers retain one negative operation qualifier. It is retained as
+metadata and accepted only when the operation index explicitly marks it retired,
+it has no live owner, and exactly one current input selector of the producing
+fillet has the same complete edge and endpoint graph without the qualifier.
+Current selectors themselves do not accept that normalization. In Style 5, both
+qualified tracker records are otherwise byte-identical to their current inputs.
+
+Adjacent faces on the same analytic carrier can form one native fillet face.
+Expansion requires verified lineage from selected inputs of that same fillet;
+it cannot cross into another producer. A finite native edge can span several
+kernel seam pieces, including spline intersections. The pieces must form exactly
+one connected, unbranched chain with two certified endpoints. Interior nodes may
+touch only the two logical incident faces. Disconnected cycles, gaps, duplicate
+spans, branches and collapsed native face identities remain errors.
+
+Version-two `2319971D` cached spline envelopes are bounded and validated for
+degree, finite coordinates, ordered knots, matching array lengths, positive
+weights and a valid parameter interval. Their coordinates never select an edge.
+The original touching-tip fixture checks analytic removal and edits across the
+radius at which the two round carriers meet. A separate original corner fixture
+checks noncircular intersection selection and endpoint rejection.
+
+### Retired circular-cap selectors
+
+A bounded circular-face selector may retain a retired operation while its cached
+boundary and mapped sketch entity carry the same current extrusion-edge identity.
+The importer validates the entire bounded-face and tracked-edge incidence records,
+the explicit retirement list, current operation/producer ownership, the finite
+closed-circle cache and both trackers. A missing operation alone is insufficient,
+and a live boundary operation cannot be discarded. The projected circle is rebuilt
+from the exact named extrusion edge and compared with the target sketch geometry;
+cached coordinates never become the source of editable geometry.
+
+This completes decoding and regeneration of Style 5's fourteen features, including
+Sketch2 and its dependent Extrude2. Its strict import and container reopening pass
+without omissions. The final 10 x 10 x 7 mm square pocket removes 700.003 mm³;
+changing InsertDepth to 5 mm restores 200.000 mm³, matching analytic expectations.
+Three original synthetic tests cover live source-diameter edits, a downstream
+extrusion, save/reopen, truncated and mutated records, mismatched trackers, missing
+retirement and stale target geometry. The ordinary I/O suite passes 316 tests;
+I/O all-target Clippy and its WebAssembly build pass.
+
+Complete-history acceptance is now 7/17, with ten unsupported histories remaining.
+Style 5's regenerated volume is 6208.832 mm³; native-body recovery reports about
+6868.534 mm³ and carries conversion-loss warnings. The pocket checks establish
+that final operation's dimensions, not full source-shape fidelity. The discrepancy
+remains under investigation. See [the current recheck](f3d-upstream-recheck.md).
+
+### Live chamfer-cap projections
+
+A circular cap bounded by a live chamfer requires matching selector, cached-edge
+and mapped-sketch incidence. Its output label resolves through the chamfer's
+explicit label table and input tracker, then through the exact selected edge in
+the model state before the chamfer. Labels are not assigned by numeric order or
+by choosing the nearest circle. This supports a single chamfer group that bevels
+both ends of a cylinder while preserving which end supplies each projection.
+
+Composite selectors can also reference a cut's nominal cap when the cut explicitly
+targets the same body. Its normal reverses on the retained solid; producer identity
+and the exact nominal plane still have to agree. These changes reconstruct all
+eight features of Style 6, including its final fillet, without recovery warnings.
+
+Original tests cover live diameter and bevel edits, dependent extrusion volume,
+container reopening, truncated records, conflicting trackers, swapped end labels,
+unselected source edges and cut-cap ownership/normal checks. The two
+`paired-chamfer-projection-*` saved examples use cylinder/frustum formulas for
+volume and first moments, with edits, suppression and reopening. The post-rebase
+I/O suite passes 321 tests; 34 local-native opt-in tests are excluded from that count.
+
+### Face-selected fillet records
+
+Constant-radius fillet groups can carry an edge selection, a face selection, or
+both. Versions 9 and 10 of the group record now decode those optional containers
+separately. A null edge slot is valid when the face slot is present; an empty
+group, an invalid reference, a wrong container class or a mismatched feature
+container list is rejected. Multiple groups retain their individual radius,
+weight and tangent-chain settings. Inspection exposes `face_container` alongside
+the nullable edge `container`.
+
+This identifies the previously rejected face inputs in Style 2's Fillet7 and the
+adapter's face-only fillet. It does not yet reconstruct those features. Editable
+face fillets need a persistent face selection whose current boundary is rebuilt
+after upstream edits. Until that is implemented, import reports
+`fillet face selections require live boundary reconstruction`; it does not
+silently omit the face input and fillet only the explicit edges.
+
+Two original synthetic tests cover both record versions, face-only and mixed
+inputs, truncation, invalid flags, aliased containers and wrong classes. Two
+local opt-in tests check the supplied records and eight controlled archives.
+The face controls contain two byte-identical bounded selection identities for
+one selected face; equality is checked across the complete identity graph.
+The ordinary I/O suite passes 323 tests, with 36 local opt-in tests excluded.

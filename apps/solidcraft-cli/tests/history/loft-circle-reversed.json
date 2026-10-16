@@ -89,7 +89,8 @@
             "sketch": "Lower section"
           }
         ],
-        "name": "Transition"
+        "name": "Transition",
+        "interpolation": "uniform"
       }
     }
   ],

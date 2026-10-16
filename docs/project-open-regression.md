@@ -55,3 +55,24 @@ licences, layers, workspace Clippy, WASM and all 23 test binaries, including 521
 engine, 161 kernel, 249 UI and 68 scenario tests. The isolated opening test finished
 in 0.96 seconds (1.4 seconds including runner overhead). The local F3D corpus and
 eight controlled Fusion export comparisons also passed after upstream integration.
+
+## Rebase check — 2026-10-15
+
+On upstream `9935133b` plus the F3D branch, the performance guard passed in
+2.32 seconds for opening and display preparation. After rebasing onto
+`2e7f4171`, it passes in 8.99 seconds under concurrent compilation and corpus
+tests: 58 features, 14 bodies and 14,898 triangles. These runs are not a controlled
+timing comparison. Refresh recomputes no features and reuses the cached meshes;
+the source fixture remains unchanged. The 20-second deadline is unchanged.
+
+The final rebase onto `16c49c3e` passes the same guard in 3.37 seconds, with the
+same body and triangle counts. All 130 authored editable-history fixtures and
+the legacy-offset case also pass on that base. Timing differences between these
+runs reflect uncontrolled machine load and are not claimed as additional fixes.
+
+Fillet 105 now succeeds alongside 102/103. The test pins the remaining failures
+individually: 104 exceeds neighbouring-face clearance, 106/108 encounter edge
+chain junctions, and 107/109 exceed a corner radius. These are explicit remaining
+geometry limitations, not complete feature regeneration. The successful opening
+guard does not establish complete F3D support; see the remaining import failures in
+[F3D rebase validation](f3d-reference-evaluation.md#upstream-rebase-validation--2026-10-15).

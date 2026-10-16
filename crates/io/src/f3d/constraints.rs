@@ -81,8 +81,12 @@ impl Design {
             "sketch constraints",
             graphs.into_iter().map(|graph| {
                 let geometry = &graph.geometry;
-                if graph.support.is_some() {
-                    return Err(invalid("sketch container relationships are not supported yet"));
+                // Constraint semantics do not depend on the support face. The
+                // importer separately validates and preserves its live attachment.
+                if graph.support.is_some_and(|id| {
+                    !classes.get(&id).is_some_and(|c| c.id == "D3937028-C20C-4E65-B010-94AD418A5C20" && matches!(c.version, 18 | 19))
+                }) {
+                    return Err(invalid("unsupported sketch support body"));
                 }
                 let offsets = offsets::ordered(
                     graph.auxiliary.iter().map(|id| offsets::decode(&records, &classes, &graph, *id, self.layout)).collect::<Result<Vec<_>>>()?,

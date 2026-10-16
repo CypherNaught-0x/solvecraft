@@ -226,6 +226,137 @@ fn grouped_fillets_preserve_native_radius_parameters_and_source_edits() {
 }
 
 #[test]
+#[ignore = "requires local mixed-circle/line blend controls"]
+fn native_mixed_profile_blends_preserve_selected_corners_and_edits() {
+    use solidcraft_engine::io;
+    let dir = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
+    for sign in [1., -1.] {
+        for reverse in [0, 1] {
+            for mode in ["fillet", "chamfer"] {
+                let check = |s: &mut Session, size: f64, height: f64, label: &str| {
+                    // Integral of top - lower circle over [-5,5].
+                    let r: f64 = 30.;
+                    let half: f64 = 5.;
+                    let top: f64 = -25.;
+                    let area = 2. * half * top + half * (r * r - half * half).sqrt() + r * r * (half / r).asin();
+                    let moment = (top * top - r * r) * half + half.powi(3) / 3.;
+                    let quarter = std::f64::consts::PI / 4.;
+                    let (cut, inset) = if mode == "fillet" {
+                        (2. * size * size * (1. - quarter), size * (5. / 6. - quarter) / (1. - quarter))
+                    } else {
+                        (size * size, size / 3.)
+                    };
+                    let want = (area - cut) * height.abs();
+                    volume(s, want / 1000., label);
+                    // The large circular carrier sets inspect.measure's chord
+                    // tolerance; certify the smaller corner removal separately
+                    // with a fixed fine chord tolerance in millimetres.
+                    let state = s.model.state();
+                    let [body] = state.bodies.as_slice() else { panic!("{label}: one solid") };
+                    let m = body.body.tessellate(1e-5).unwrap().measure();
+                    assert!(
+                        (m.volume - want).abs() < cut * height.abs() * 0.005 + 0.01,
+                        "{label}: removed material, actual={}, expected={want}",
+                        m.volume
+                    );
+                    for (axis, want) in [0., (moment - cut * (top - inset)) / (area - cut), height / 2.].into_iter().enumerate() {
+                        let got = [m.centroid.x, m.centroid.y, m.centroid.z][axis];
+                        assert!((got - want).abs() < 2e-3, "{label}: centroid {axis}: {got} != {want}");
+                    }
+                    assert!(s.model.results.iter().all(|r| r.warning.is_none()));
+                };
+                for (suffix, size, height) in [("baseline", 2., 40. * sign), ("size1", 1., 40. * sign), ("height50", 2., 50. * sign)] {
+                    let name = format!("mixed-{mode}-{sign}-{reverse}-{suffix}");
+                    let mut s = Session::default();
+                    s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+                    assert_eq!(s.doc.features.len(), 3);
+                    assert_eq!(s.doc.features[2].edge_names.len(), 2);
+                    check(&mut s, size, height, &name);
+                    let before = s.doc.to_json();
+                    for (feature, expression, size, height) in
+                        [(2, "1.5 mm".into(), 1.5, height), (1, format!("{} mm", 60. * sign), size, 60. * sign)]
+                    {
+                        let parameter = s.doc.features[feature].param_names[0].clone();
+                        s.execute("parameters.change", &json!({"name":parameter,"expression":expression})).unwrap();
+                        check(&mut s, size, height, &name);
+                        let bytes = io::write_design_container(&s.doc).unwrap();
+                        let mut reopened = Session::new(io::read_design(&bytes).unwrap());
+                        assert_eq!(s.doc, reopened.doc);
+                        check(&mut reopened, size, height, &name);
+                        s.execute("edit.undo", &json!({})).unwrap();
+                        assert_eq!(s.doc.to_json(), before);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires local signed-extrusion fillet and chamfer controls"]
+fn native_signed_extrusion_blends_preserve_caps_and_edits() {
+    use solidcraft_engine::{doc::FeatureKind, io};
+    let dir = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
+    for sign in [1., -1.] {
+        for mode in ["fillet", "chamfer"] {
+            for location in ["vertical", "origin", "end"] {
+                let check = |s: &mut Session, size: f64, height: f64, label: &str| {
+                    let length = if location == "vertical" { height.abs() } else { 20. };
+                    let (area, inset) = if mode == "fillet" {
+                        let quarter = std::f64::consts::PI / 4.;
+                        (size * size * (1. - quarter), size * (5. / 6. - quarter) / (1. - quarter))
+                    } else {
+                        (size * size / 2., size / 3.)
+                    };
+                    let whole = 600. * height.abs();
+                    let removed = area * length;
+                    let want = whole - removed;
+                    let m = volume(s, want / 1000., label);
+                    assert!((m["total"]["volume_mm3"].as_f64().unwrap() - want).abs() < removed * 0.005 + 0.01, "{label}: removed volume");
+                    let center = [10., 15., height / 2.];
+                    let cut_center = match location {
+                        "vertical" => [inset, inset, height / 2.],
+                        "origin" => [10., inset, height.signum() * inset],
+                        _ => [10., inset, height - height.signum() * inset],
+                    };
+                    for axis in 0..3 {
+                        let want = (whole * center[axis] - removed * cut_center[axis]) / (whole - removed);
+                        let actual = m["bodies"][0]["center_of_mass"][axis].as_f64().unwrap();
+                        assert!((actual - want).abs() < 2e-4, "{label}: axis {axis} center {actual} != {want}");
+                    }
+                    assert!(s.model.results.iter().all(|r| r.warning.is_none()), "{label}: persistent edge fallback");
+                };
+                for (suffix, height) in [("baseline", 40. * sign), ("height50", 50. * sign)] {
+                    if sign > 0. && suffix != "baseline" {
+                        continue;
+                    }
+                    let name = format!("signed-{mode}-{sign}-{location}-{suffix}");
+                    let mut s = Session::default();
+                    s.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})).unwrap_or_else(|e| panic!("{name}: {e}"));
+                    assert_eq!(s.doc.features.len(), 3);
+                    let feature = &s.doc.features[2];
+                    assert!(matches!(&feature.kind, FeatureKind::Fillet { .. }) == (mode == "fillet"));
+                    assert_eq!(feature.edge_names.len(), 1);
+                    check(&mut s, 2., height, &name);
+                    let before = s.doc.to_json();
+                    for (index, expression, size, height) in [(2, "4 mm".into(), 4., height), (1, format!("{} mm", 60. * sign), 2., 60. * sign)] {
+                        let parameter = s.doc.features[index].param_names[0].clone();
+                        s.execute("parameters.change", &json!({"name":parameter,"expression":expression})).unwrap();
+                        check(&mut s, size, height, &name);
+                        let bytes = io::write_design_container(&s.doc).unwrap();
+                        let mut reopened = Session::new(io::read_design(&bytes).unwrap());
+                        assert_eq!(s.doc, reopened.doc);
+                        check(&mut reopened, size, height, &name);
+                        s.execute("edit.undo", &json!({})).unwrap();
+                        assert_eq!(s.doc.to_json(), before);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires local constant-radius fillet controls"]
 fn constant_fillets_retain_selected_edges_radius_and_source_edits() {
     use solidcraft_engine::doc::{Document, FeatureKind};
@@ -397,7 +528,7 @@ fn combine_modified_and_mirrored_sources_remain_editable() {
 
 fn volume(s: &mut Session, want_cm3: f64, label: &str) -> Value {
     for r in &s.model.results {
-        assert!(r.error.is_none(), "{label}: {r:?}");
+        assert!(r.error.is_none(), "{label}: feature {} ({}): {:?}", r.name, r.id, r.error);
     }
     let measure = s.execute("inspect.measure", &json!({})).unwrap();
     let got = measure["total"]["volume_mm3"].as_f64().unwrap();
@@ -1862,4 +1993,191 @@ fn imported_history_survives_container_save_reopen_edit_and_json_export() {
     assert_eq!(reopened.path.as_deref(), path.to_str());
     assert_eq!(std::fs::read(&source).unwrap(), original);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "requires local face-extrusion controls"]
+fn native_face_extrusions_keep_cap_boundary_edits_and_reopen() {
+    let dir = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
+    let rows: Value = serde_json::from_slice(&std::fs::read(dir.join("fusion-face-extrude-measurements.json")).unwrap()).unwrap();
+    let verify = |session: &mut Session, name: &str, row: &Value| {
+        let param = |key: &str| row["parameters"].as_array().unwrap().iter().find(|p| p["name"] == key).unwrap()["value"].as_f64().unwrap() * 10.;
+        let r = param("d1") / 2.;
+        let height = param("d2");
+        let chamfer = name.contains("-chamfer-");
+        let (cap, wall) = if !chamfer {
+            (0., 0.)
+        } else if name.contains("-bottom-") {
+            (param("d5"), param("d4"))
+        } else {
+            (param("d4"), param("d5"))
+        };
+        let distance = if name.ends_with("-suppressed") { 0. } else { param(if chamfer { "d6" } else { "d4" }) };
+        let pi = std::f64::consts::PI;
+        let expected = pi * r * r * height - pi * wall * (r * cap - cap * cap / 3.) + pi * (r - cap).powi(2) * distance;
+        assert!((row["volume_cm3"].as_f64().unwrap() * 1000. - expected).abs() < expected * 1e-6, "analytic control {name}");
+        let measured = volume(session, expected / 1000., name);
+        assert_eq!(measured["body_count"], row["body_count"], "{name}");
+        let removed = pi * wall * (r * cap - cap * cap / 3.);
+        let depth = if chamfer { wall * (r * cap / 3. - cap * cap / 12.) / (r * cap - cap * cap / 3.) } else { 0. };
+        let top = name.contains("-top-");
+        let removed_z = if top { height - depth } else { depth };
+        let added_z = if top { height + distance / 2. } else { -distance / 2. };
+        let moment = pi * r * r * height * height / 2. - removed * removed_z + pi * (r - cap).powi(2) * distance * added_z;
+        let total = measured["total"]["volume_mm3"].as_f64().unwrap();
+        for (axis, want) in [0., 0., moment / expected].into_iter().enumerate() {
+            let got: f64 = measured["bodies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|body| body["volume_mm3"].as_f64().unwrap() * body["center_of_mass"][axis].as_f64().unwrap())
+                .sum::<f64>()
+                / total;
+            assert!((got - want).abs() < 0.02, "{name}: center axis {axis}: {got} != {want}");
+        }
+        assert_eq!(session.doc.features.len(), row["timeline"].as_array().unwrap().len() + 1, "one linked helper sketch: {name}");
+        let bytes = solidcraft_engine::io::write_design_container(&session.doc).unwrap();
+        let mut reopened = Session::new(solidcraft_engine::io::read_design(&bytes).unwrap());
+        volume(&mut reopened, expected / 1000., name);
+        assert_eq!(reopened.doc, session.doc);
+    };
+    let mut failures = Vec::new();
+    for (name, row) in rows.as_object().unwrap() {
+        let mut session = Session::default();
+        if let Err(error) = session.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})) {
+            failures.push(format!("{name}: {error}"));
+            continue;
+        }
+        verify(&mut session, name, row);
+        if !name.ends_with("-baseline") {
+            continue;
+        }
+        let chamfer = name.contains("-chamfer-");
+        let mut edits = vec![
+            ("diameter60", "d1", "60 mm"),
+            ("height50", "d2", "50 mm"),
+            ("distance", if chamfer { "d6" } else { "d4" }, if name.contains("-cut-") { "-8 mm" } else { "20 mm" }),
+        ];
+        if chamfer {
+            edits.push(("blend4", "d4", "4 mm"));
+        }
+        for (suffix, parameter, expression) in edits {
+            let mut edited = Session::new((*session.doc).clone());
+            edited.execute("parameters.change", &json!({"name":parameter,"expression":expression})).unwrap();
+            let changed = name.replace("baseline", suffix);
+            verify(&mut edited, &changed, &rows[&changed]);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+#[ignore = "requires local face-projection controls"]
+fn native_face_cap_projections_preserve_lineage_edits_and_reopen() {
+    let dir = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
+    let mut combined = serde_json::Map::new();
+    for name in ["fusion-face-projection-measurements.json", "fusion-face-projection-joined-measurements.json"] {
+        let rows: Value = serde_json::from_slice(&std::fs::read(dir.join(name)).unwrap()).unwrap();
+        combined.extend(rows.as_object().unwrap().clone());
+    }
+    assert_eq!(combined.len(), 132);
+    let rows = Value::Object(combined);
+    let verify = |session: &mut Session, name: &str, row: &Value| {
+        let param = |key: &str| row["parameters"].as_array().unwrap().iter().find(|p| p["name"] == key).unwrap()["value"].as_f64().unwrap() * 10.;
+        let r = param("d1") / 2.;
+        let height = param("d2");
+        let chamfer = name.contains("-chamfer-");
+        let (cap, wall) = if !chamfer {
+            (0., 0.)
+        } else if name.contains("-bottom-") {
+            (param("d5"), param("d4"))
+        } else {
+            (param("d4"), param("d5"))
+        };
+        let distance = if name.ends_with("-suppressed") { 0. } else { param(if chamfer { "d6" } else { "d4" }) };
+        let pi = std::f64::consts::PI;
+        let expected = pi * r * r * height - pi * wall * (r * cap - cap * cap / 3.) + pi * (r - cap).powi(2) * (distance + 7.);
+        assert!((row["volume_cm3"].as_f64().unwrap() * 1000. - expected).abs() < expected * 1e-6, "analytic control {name}");
+        if name.starts_with("face-projection-joined-") && name.contains("-new-") {
+            use solidcraft_engine::doc::{FeatureKind, Operation};
+            let parent =
+                session.doc.features.iter().rev().find(|f| matches!(f.kind, FeatureKind::Extrude { operation: Operation::NewBody, .. })).unwrap();
+            let FeatureKind::Extrude { operation: Operation::Join, targets, .. } = &session.doc.features.last().unwrap().kind else {
+                panic!("joined projection")
+            };
+            assert_eq!(targets, &parent.body_names, "explicit target must preserve the unrelated first body: {name}");
+        }
+        let measured = volume(session, expected / 1000., name);
+        assert_eq!(measured["body_count"], row["body_count"], "{name}");
+        let removed = pi * wall * (r * cap - cap * cap / 3.);
+        let depth = if chamfer { wall * (r * cap / 3. - cap * cap / 12.) / (r * cap - cap * cap / 3.) } else { 0. };
+        let top = name.contains("-top-");
+        let removed_z = if top { height - depth } else { depth };
+        let added_z = if top { height + distance / 2. } else { -distance / 2. };
+        let projected_z = if top { height + distance + 3.5 } else { -distance - 3.5 };
+        let moment = pi * r * r * height * height / 2. - removed * removed_z + pi * (r - cap).powi(2) * (distance * added_z + 7. * projected_z);
+        let total = measured["total"]["volume_mm3"].as_f64().unwrap();
+        for (axis, want) in [0., 0., moment / expected].into_iter().enumerate() {
+            let got: f64 = measured["bodies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|body| body["volume_mm3"].as_f64().unwrap() * body["center_of_mass"][axis].as_f64().unwrap())
+                .sum::<f64>()
+                / total;
+            assert!((got - want).abs() < 0.02, "{name}: center axis {axis}: {got} != {want}");
+        }
+        assert_eq!(session.doc.features.len(), row["timeline"].as_array().unwrap().len() + 1, "one linked helper sketch: {name}");
+        let bytes = solidcraft_engine::io::write_design_container(&session.doc).unwrap();
+        let mut reopened = Session::new(solidcraft_engine::io::read_design(&bytes).unwrap());
+        volume(&mut reopened, expected / 1000., name);
+        assert_eq!(reopened.doc, session.doc);
+    };
+    let mut failures = Vec::new();
+    for (name, row) in rows.as_object().unwrap() {
+        eprintln!("BEGIN face projection {name}");
+        let mut session = Session::default();
+        if let Err(error) = session.execute("doc.open", &json!({"path":dir.join(format!("{name}.f3d"))})) {
+            failures.push(format!("{name}: {error}"));
+            continue;
+        }
+        verify(&mut session, name, row);
+        if !name.ends_with("-baseline") {
+            continue;
+        }
+        let chamfer = name.contains("-chamfer-");
+        let mut edits = vec![
+            ("diameter60", "d1", "60 mm"),
+            ("height50", "d2", "50 mm"),
+            ("distance", if chamfer { "d6" } else { "d4" }, if name.contains("-cut-") { "-8 mm" } else { "20 mm" }),
+        ];
+        if chamfer {
+            edits.push(("blend4", "d4", "4 mm"));
+        }
+        for (suffix, parameter, expression) in edits {
+            let mut edited = Session::new((*session.doc).clone());
+            edited.execute("parameters.change", &json!({"name":parameter,"expression":expression})).unwrap();
+            let changed = name.replace("baseline", suffix);
+            verify(&mut edited, &changed, &rows[&changed]);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+#[ignore = "requires local Style 5 timeline checkpoints"]
+fn native_style5_projected_cap_checkpoint_preserves_history() {
+    let dir = std::path::PathBuf::from(solidcraft_engine::geom::env::var_os("F3D_PROBES").unwrap());
+    let mut before = Session::default();
+    before.execute("doc.open", &json!({"path":dir.join("legacy-face-projection-Extrude5.f3d")})).unwrap();
+    let measured = before.execute("inspect.measure", &json!({})).unwrap();
+    let expected = measured["total"]["volume_mm3"].as_f64().unwrap() / 1000.;
+    let mut projected = Session::default();
+    projected.execute("doc.open", &json!({"path":dir.join("legacy-face-projection-Sketch4.f3d")})).unwrap();
+    volume(&mut projected, expected, "Style 5 projected cap");
+    assert_eq!(projected.doc.features.len(), before.doc.features.len() + 1);
+    let bytes = solidcraft_engine::io::write_design_container(&projected.doc).unwrap();
+    let mut reopened = Session::new(solidcraft_engine::io::read_design(&bytes).unwrap());
+    assert_eq!(projected.doc, reopened.doc);
+    volume(&mut reopened, expected, "Reopened Style 5 projected cap");
 }

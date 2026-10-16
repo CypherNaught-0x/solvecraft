@@ -44,7 +44,8 @@ impl Design {
         self.recover_records(
             "parameter",
             class.objects.iter().map(|id| {
-                let mut p = decode(records.primary(*id)?, class.version)?;
+                let mut p =
+                    decode(records.primary(*id)?, class.version).map_err(|e| invalid(&format!("parameter {id} (v{}): {e}", class.version)))?;
                 if p.id != *id {
                     return Err(invalid("invalid parameter identity"));
                 }
@@ -112,6 +113,9 @@ fn decode(bytes: &[u8], version: u32) -> Result<Parameter> {
         // Deleting a dimension still referenced by other expressions can
         // convert it to an unbound UserParameter, retaining its model name.
         [0, 0, favorite @ (0 | 1), 1, 0] if version == 9 => (false, *favorite != 0, true, true),
+        // The legacy v6 converted form has already removed its binding. An
+        // unchanged modern resave retains the conversion flag and expression.
+        [0, 0, favorite @ (0 | 1), 1, 0] if version == 6 && binding.is_none() => (false, *favorite != 0, true, true),
         _ => return Err(invalid("unsupported parameter expression metadata")),
     };
     let retired_binding = if converted { binding.take() } else { None };
@@ -271,6 +275,56 @@ mod tests {
             d.layout = layout;
             assert_eq!(d.parameters().is_ok(), accepted, "layout {layout}, version {version}");
         }
+    }
+
+    #[test]
+    fn legacy_converted_parameters_keep_unbound_expression_identity() {
+        let convert = |version, bound: bool| {
+            let mut bytes = authored(version, !bound, false, true);
+            let flags = if version == 6 { 7 } else { 12 };
+            let mut r = Reader { bytes: &bytes, at: 14 + 4 + flags };
+            r.wide_string().unwrap();
+            r.u32().unwrap();
+            r.take(if bound { 11 } else { 1 }).unwrap();
+            r.wide_string().unwrap();
+            let at = r.at + if version == 6 { 0 } else { 5 };
+            bytes[at + 3] = 1;
+            bytes[at + 4] = 0;
+            bytes
+        };
+        let legacy = convert(6, false);
+        let old = decode(&legacy, 6).unwrap();
+        assert_eq!(old, decode(&convert(9, false), 9).unwrap());
+        assert_eq!(old.expression, "60 mm");
+        assert!(old.binding.is_none() && old.owner.is_none() && old.favorite && !old.driven);
+        assert!(decode(&convert(6, true), 6).is_err());
+        for keep in 0..legacy.len() {
+            assert!(decode(&legacy[..keep], 6).is_err(), "prefix {keep}");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the local original and modern-resaved clamp archives"]
+    fn native_legacy_converted_parameter_matches_unchanged_resave() {
+        let root = std::path::PathBuf::from(solidcraft_geom::env::var_os("F3D_PROBES").unwrap());
+        let parameter = |path: &str| {
+            let bytes = std::fs::read(root.join(path)).unwrap();
+            let designs = super::super::read_f3d(&bytes).unwrap();
+            if path.starts_with("additional-corpus/") {
+                return designs[0].parameters().unwrap().into_iter().find(|p| p.name == "d157").unwrap();
+            }
+            // The resave also introduces unrelated thread parameters with an
+            // unsupported flag. Compare this converted record independently;
+            // this is not an assertion that the resaved design fully imports.
+            let records = Records::new(&designs[0]);
+            decode(records.primary(8749).unwrap(), 9).unwrap()
+        };
+        let original = parameter("additional-corpus/clamp/Modular Clamp V1 - Parametrized.f3d");
+        let resaved = parameter("clamp-modern-resave.f3d");
+        assert_eq!(original, resaved);
+        assert!(original.binding.is_none() && original.owner.is_none());
+        assert_eq!(original.expression, "( Clamp_Width - Chamfer_Small * 2 ) / 2");
+        assert!((original.value - 1.55).abs() < 1e-10);
     }
 
     #[test]

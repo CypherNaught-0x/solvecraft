@@ -52,13 +52,19 @@ fn check_basin() {
     assert!(session.model.param_errors.is_empty());
     assert_eq!(session.model.results.len(), 58);
     assert!(session.model.results.iter().all(|r| !r.skipped));
-    // The left/right floor fillets (102/103) now succeed. Pin the six remaining
-    // nonplanar-end failures so fast failed evaluation cannot count as success.
+    // The floor fillets 102/103 and fillet 105 now succeed. Pin the five remaining
+    // geometry limitations so fast failed evaluation cannot count as success.
     let errors: Vec<_> = session.model.results.iter().filter_map(|r| r.error.as_ref().map(|e| (r.id, e.as_str()))).collect();
-    assert_eq!(errors.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [104, 105, 106, 107, 108, 109]);
-    assert!(
-        errors.iter().all(|(_, e)| *e == "not supported yet: the faces at the edge ends must be planar"),
-        "unexpected feature failures: {errors:?}"
+    assert_eq!(
+        errors,
+        [
+            (104, "not supported yet: the blend is larger than the neighbouring faces; the largest radius that fits is 1 mm"),
+            (106, "not supported yet: a vertex of the edge chain where other faces meet"),
+            (107, "not supported yet: the blend is larger than a corner radius (site 1257)"),
+            (108, "not supported yet: a vertex of the edge chain where other faces meet"),
+            (109, "not supported yet: the blend is larger than a corner radius (site 1257)"),
+        ],
+        "unexpected feature failures"
     );
     let world = session.world_state();
     assert_eq!(world.bodies.len(), 14);

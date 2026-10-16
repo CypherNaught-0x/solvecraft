@@ -12,14 +12,22 @@ mod archive;
 #[cfg(test)]
 mod attribute_tests;
 mod attributes;
+mod blend_sides;
 mod body_labels;
 mod body_projections;
+mod chamfer_circle_projections;
 mod chamfers;
 mod circles;
+mod circular_patterns;
 mod combines;
+mod composite_blends;
+mod composite_projections;
 mod constraints;
 mod construction_points;
+mod cut_face_projections;
 mod entity;
+mod extrusion_targets;
+mod face_cap_projections;
 mod fillets;
 #[cfg(test)]
 mod geometric_tests;
@@ -44,18 +52,27 @@ mod planes;
 mod points;
 #[cfg(test)]
 mod polygon_tests;
+#[cfg(not(target_arch = "wasm32"))]
+mod profile_cache;
+mod profile_groups;
+mod profile_selection;
 mod profiles;
 #[cfg(test)]
 mod projection_tests;
 mod projections;
 #[cfg(test)]
 mod radial_tests;
+mod recipe_incidence;
 mod recovery;
+mod retired_circle_projections;
 #[cfg(test)]
 mod round_profile_tests;
 mod side_roles;
+#[cfg(test)]
+mod symmetric_extent_tests;
 pub use chamfers::ChamferSet;
 pub use circles::{SketchArc, SketchCircle};
+pub use circular_patterns::CircularPattern;
 pub use constraints::{CurveRelation, LinearOrientation, SketchConstraint, SketchConstraintGraph, SketchConstraints};
 pub use entity::EntityMetadata;
 pub use fillets::FilletSet;
@@ -92,6 +109,8 @@ pub struct Record {
 #[derive(Debug)]
 pub struct Design {
     recovery: Option<std::cell::RefCell<Vec<String>>>,
+    /// Shared compressed source for lazily resolving native selection snapshots.
+    archive: Option<std::sync::Arc<[u8]>>,
     pub path: String,
     pub build: u32,
     pub layout: u32,
@@ -320,7 +339,7 @@ fn index(path: String, metadata: Vec<u8>, bulk: Vec<u8>) -> Result<Design> {
     if r.at != metadata.len() {
         return Err(invalid("unsupported metadata trailer"));
     }
-    Ok(Design { recovery: None, path, build, layout, classes, roots, records, metadata, bulk })
+    Ok(Design { recovery: None, archive: None, path, build, layout, classes, roots, records, metadata, bulk })
 }
 
 /// Inspect native object indexes without extracting files or evaluating geometry.
@@ -359,6 +378,10 @@ pub fn read_f3d(bytes: &[u8]) -> Result<Vec<Design>> {
     }
     if designs.is_empty() {
         return Err(invalid("no native design streams"));
+    }
+    let archive: std::sync::Arc<[u8]> = bytes.into();
+    for design in &mut designs {
+        design.archive = Some(archive.clone());
     }
     Ok(designs)
 }

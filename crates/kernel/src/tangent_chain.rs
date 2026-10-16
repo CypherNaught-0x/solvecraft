@@ -41,6 +41,7 @@ fn resolve(body: &Body, seeds: &[Vec3]) -> Result<Vec<Vec3>> {
     let polylines = body.edges(tolerance)?;
     let mut selected = HashSet::new();
     let mut todo = VecDeque::new();
+    let mut smooth = HashMap::new();
     for point in seeds {
         if ![point.x, point.y, point.z].iter().all(|x| x.is_finite()) {
             return Err(invalid("invalid tangent-chain seed"));
@@ -66,7 +67,14 @@ fn resolve(body: &Body, seeds: &[Vec3]) -> Result<Vec<Vec3>> {
                 return Err(invalid("degenerate tangent-chain endpoint"));
             }
             for (_, direction) in ends.iter().filter(|(i, _)| *i == index) {
-                let mut continuations = ends.iter().filter(|(i, d)| *i != index && direction.dot(*d) < -1. + 1e-8);
+                // A curve can continue smoothly into an internal surface seam.
+                // Only corners belong to a blend chain. Keep explicit seeds so
+                // selecting a smooth edge still produces the ordinary refusal.
+                let mut continuations = ends.iter().filter(|(i, d)| {
+                    *i != index
+                        && direction.dot(*d) < -1. + 1e-8
+                        && !*smooth.entry(*i).or_insert_with(|| edges.get(*i).is_some_and(|e| crate::blend::tangent_faces(&body.solid, e)))
+                });
                 let next = continuations.next();
                 if continuations.next().is_some() {
                     return Err(invalid("ambiguous tangent-chain branch"));
@@ -119,5 +127,18 @@ mod tests {
         for seeds in [vec![], vec![Vec3::new(f64::NAN, 0., 0.)], vec![Vec3::new(100., 100., 100.)], vec![Vec3::ZERO; 1001]] {
             assert!(tangent_edge_points(&body, &seeds).is_err());
         }
+    }
+
+    #[test]
+    fn an_explicit_smooth_seed_is_not_silently_removed() {
+        let body = crate::cylinder(Vec3::ZERO, Vec3::Z, 10., 40.).unwrap();
+        let edges = Body::unique_edges(&body.solid);
+        let seam = edges.iter().find(|e| (e.front().point().z - e.back().point().z).abs() > 39.).unwrap();
+        let curve = seam.oriented_curve();
+        let (a, b) = curve.range_tuple();
+        let p = crate::body::from_p3(curve.subs((a + b) * 0.5));
+        let chain = tangent_edge_points(&body, &[p]).unwrap();
+        assert_eq!(chain, [p]);
+        assert!(crate::fillet(&body, &chain, 1.).is_err());
     }
 }

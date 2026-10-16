@@ -12,6 +12,10 @@ pub(super) struct Projection {
 pub(super) enum Source {
     Sketch { geometry: u64, tag: u64 },
     Body(super::body_projections::Edge),
+    CutBody(super::cut_face_projections::Projection),
+    FaceCap(super::face_cap_projections::Projection),
+    ChamferCap(super::chamfer_circle_projections::Projection),
+    Composite(super::composite_projections::Projection),
 }
 
 pub(super) struct Geometry<'a> {
@@ -23,7 +27,7 @@ pub(super) struct Geometry<'a> {
 
 pub(super) struct Entities {
     pub points: Vec<(u64, usize, u64)>,
-    pub curve: (u64, usize),
+    pub curves: Vec<(u64, usize)>,
 }
 
 impl Geometry<'_> {
@@ -132,28 +136,51 @@ impl Geometry<'_> {
         c.fixed = fixed;
         Ok(Entities {
             points: point_ids.into_iter().zip(indices).zip(source_points).map(|((id, index), source)| (id, index, source)).collect(),
-            curve: (p.target, *curve),
+            curves: vec![(p.target, *curve)],
         })
     }
 }
 
-pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<Projection> {
-    require_class(classes, id, CLASS, 4)?;
+pub(super) fn version(classes: &BTreeMap<u64, &Class>, id: u64) -> Result<u32> {
+    classes
+        .get(&id)
+        .filter(|c| c.id == CLASS && matches!(c.version, 1 | 3 | 4))
+        .map(|c| c.version)
+        .ok_or_else(|| invalid("unsupported projection class or version"))
+}
+
+pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id: u64, owner: u64) -> Result<Vec<Projection>> {
+    let version = version(classes, id)?;
+    if !matches!(version, 1 | 4) {
+        return Err(invalid("unsupported projection record layout"));
+    }
     let mut r = payload(records.primary(id)?, id)?;
     empty(&mut r)?;
     zeros(&mut r, 2)?;
-    r.take(3)?; // evaluation state
+    if version == 4 {
+        r.take(3)?; // evaluation state
+    }
     if r.take(1)? != [1] {
         return Err(invalid("unsupported projection mapping flag"));
     }
     let mapping = r.reference()?;
-    zeros(&mut r, 1)?;
-    let tolerance = f64::from_bits(r.u64()?);
-    if !tolerance.is_finite() || tolerance <= 0. || r.u32()? != 3 || r.reference()? != owner {
+    if version == 4 {
+        // Automatic face-boundary projections and explicit projections both
+        // retain the same selector/tracker relationship and linked entities.
+        if !matches!(r.take(1)?, [0] | [1]) {
+            return Err(invalid("unsupported projection creation flag"));
+        }
+        let tolerance = f64::from_bits(r.u64()?);
+        if !tolerance.is_finite() || tolerance <= 0. {
+            return Err(invalid("invalid projection tolerance"));
+        }
+    }
+    let mode = r.u32()?;
+    if !matches!((version, mode), (1, 1) | (4, 1 | 3)) || r.reference()? != owner {
         return Err(invalid("unsupported sketch projection mode or owner"));
     }
     let container = r.reference()?;
-    r.take(42)?; // evaluation metadata, distinct from geometric relationships
+    r.take(if version == 1 { 41 } else { 42 })?; // inherited evaluation metadata
     if r.reference()? != owner {
         return Err(invalid("inconsistent projection owner"));
     }
@@ -162,11 +189,21 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id:
     let mut r = payload(records.primary(mapping)?, mapping)?;
     empty(&mut r)?;
     zeros(&mut r, 2)?;
-    if r.u32()? != 1 {
-        return Err(invalid("multi-entity projection mapping is not supported yet"));
+    let count = r.count(19)?;
+    if count == 0 || count > 1024 {
+        return Err(invalid("unsupported projection mapping count"));
     }
-    let tracking = r.reference()?;
-    let target = r.u64()?;
+    let mut mappings = Vec::new();
+    let mut trackers = BTreeSet::new();
+    let mut targets = BTreeSet::new();
+    for _ in 0..count {
+        let tracking = r.reference()?;
+        let target = r.u64()?;
+        if !trackers.insert(tracking) || !targets.insert(target) || !classes.contains_key(&target) {
+            return Err(invalid("duplicate or missing projection mapping"));
+        }
+        mappings.push((tracking, target));
+    }
     if r.u64()? != 1 {
         return Err(invalid("unsupported projection mapping state"));
     }
@@ -184,9 +221,50 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id:
         return Err(invalid("projection container belongs to another feature"));
     }
     finish(&r)?;
-    let source = if classes.get(selected).is_some_and(|c| c.id == super::body_projections::SELECTOR) {
-        Source::Body(super::body_projections::selector(records, classes, *selected, owner)?)
-    } else {
+    if classes.get(selected).is_some_and(|c| c.id == super::body_projections::SELECTOR) {
+        // Edge and bounded-face recipes have disjoint, fully validated grammars.
+        // A face may map one circular boundary or four rectangular boundaries.
+        let mut edges = match super::body_projections::selector(records, classes, *selected, owner) {
+            Ok(edge) => vec![edge],
+            Err(edge_error) => match super::body_projections::face_edges(records, classes, *selected, owner) {
+                Ok(edges) => edges,
+                Err(face_error) => {
+                    let chamfer_error = match super::chamfer_circle_projections::decode(records, classes, *selected, owner, &mappings) {
+                        Ok(projections) => return Ok(projections),
+                        Err(error) => error,
+                    };
+                    let retired_error = match super::retired_circle_projections::decode(records, classes, *selected, owner, &mappings) {
+                        Ok(projections) => return Ok(projections),
+                        Err(error) => error,
+                    };
+                    return super::face_cap_projections::decode(records, classes, *selected, owner, &mappings).or_else(|cap_error| {
+                        super::cut_face_projections::decode(records, classes, *selected, owner, &mappings).or_else(|cut_error| {
+                            super::composite_projections::decode(records, classes, *selected, owner, &mappings).map_err(|composite_error| {
+                                invalid(&format!("unsupported projected body selection: {edge_error}; {face_error}; {chamfer_error}; {retired_error}; {cap_error}; {cut_error}; {composite_error}"))
+                            })
+                        })
+                    });
+                }
+            },
+        };
+        let mut projections = Vec::new();
+        for (tracking, target) in mappings {
+            let identity = tracking_identity(records, classes, tracking, "4B31DA1B-FCD6-4527-BC3E-BE1FBAF867FE", 1)?;
+            let recipe = super::body_projections::identity(records, classes, identity, true)?;
+            let index =
+                edges.iter().position(|edge| edge.recipe == recipe).ok_or_else(|| invalid("projected face mapping disagrees with its boundary"))?;
+            projections.push(Projection { target, source: Source::Body(edges.remove(index)) });
+        }
+        if !edges.is_empty() {
+            return Err(invalid("incomplete projected face boundary"));
+        }
+        return Ok(projections);
+    }
+    let [(tracking, target)] = mappings.as_slice() else { return Err(invalid("missing projection mapping")) };
+    if version == 4 && mode != 3 {
+        return Err(invalid("unsupported sketch-curve projection mode"));
+    }
+    let (geometry, tag) = {
         require_class(classes, *selected, "5A1BF548-241F-46FD-9FB5-E4B05126EB9D", 1)?;
         let mut r = payload(records.primary(*selected)?, *selected)?;
         empty(&mut r)?;
@@ -198,22 +276,13 @@ pub(super) fn decode(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, id:
             return Err(invalid("projection selector belongs to another feature"));
         }
         finish(&r)?;
-        let (geometry, tag) = source_identity(records, classes, identity)?;
-        Source::Sketch { geometry, tag }
+        source_identity(records, classes, identity)?
     };
-    let (tracking_class, tracking_version) = match &source {
-        Source::Sketch { .. } => ("CB4F4CC2-9D6F-48BA-9B1F-20C1992C9C9C", 2),
-        Source::Body(_) => ("4B31DA1B-FCD6-4527-BC3E-BE1FBAF867FE", 1),
-    };
-    let tracked_identity = tracking_identity(records, classes, tracking, tracking_class, tracking_version)?;
-    let agrees = match &source {
-        Source::Sketch { geometry, tag } => source_identity(records, classes, tracked_identity)? == (*geometry, *tag),
-        Source::Body(edge) => super::body_projections::identity(records, classes, tracked_identity, true)? == edge.recipe,
-    };
-    if !agrees {
+    let tracked_identity = tracking_identity(records, classes, *tracking, "CB4F4CC2-9D6F-48BA-9B1F-20C1992C9C9C", 2)?;
+    if source_identity(records, classes, tracked_identity)? != (geometry, tag) {
         return Err(invalid("projection mapping disagrees with its source selector"));
     }
-    Ok(Projection { target, source })
+    Ok(vec![Projection { target: *target, source: Source::Sketch { geometry, tag } }])
 }
 
 pub(super) fn tracking_identity(
@@ -267,6 +336,70 @@ pub(super) fn source_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Cl
 mod identity_tests {
     use super::*;
     use crate::f3d::import_tests::Fixture;
+
+    #[test]
+    #[ignore = "requires a local native projection archive"]
+    fn inspect_native_bounded_projection_graph() {
+        let path = std::env::var("SOLIDCRAFT_PROJECTION_ARCHIVE").unwrap();
+        let bytes = std::fs::read(path).unwrap();
+        let designs = read_f3d(&bytes).unwrap();
+        let design = &designs[0];
+        let records = Records::new(design);
+        let classes = design.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+        let history = design.history().unwrap();
+        let name = std::env::var("SOLIDCRAFT_PROJECTION_FEATURE").unwrap_or_else(|_| "Sketch7".into());
+        let feature = history.iter().find(|f| f.name == name).unwrap();
+        let HistoryKind::Sketch { placement, .. } = &feature.kind else { panic!("sketch") };
+        for id in &placement.projections {
+            let v = version(&classes, *id).unwrap();
+            let mut r = payload(records.primary(*id).unwrap(), *id).unwrap();
+            empty(&mut r).unwrap();
+            zeros(&mut r, 2).unwrap();
+            if v == 4 {
+                r.take(3).unwrap();
+            }
+            assert_eq!(r.take(1).unwrap(), [1]);
+            let mapping = r.reference().unwrap();
+            if v == 4 {
+                r.take(9).unwrap();
+            }
+            let mode = r.u32().unwrap();
+            assert_eq!(r.reference().unwrap(), feature.id);
+            let container = r.reference().unwrap();
+            let mut r = payload(records.primary(container).unwrap(), container).unwrap();
+            empty(&mut r).unwrap();
+            zeros(&mut r, 2).unwrap();
+            let selected = references(&mut r).unwrap();
+            for selector in selected {
+                let v = super::super::loft_faces::selector_version(&classes, selector).unwrap();
+                let mut r = payload(records.primary(selector).unwrap(), selector).unwrap();
+                zeros(&mut r, if v == 2 { 7 } else { 8 }).unwrap();
+                let identity = r.reference().unwrap();
+                let graph = super::super::recipe_incidence::identity(&records, &classes, identity, true).unwrap();
+                println!("SELECT projection={id} mode={mode} selector={selector} terms={:?} edges={}", graph.terms, graph.edges.len());
+                assert_eq!(r.u32().unwrap(), 1);
+                r.wide_string().unwrap();
+                r.wide_string().unwrap();
+                assert_eq!(r.u32().unwrap(), 2);
+                zeros(&mut r, 4).unwrap();
+                for cached in references(&mut r).unwrap() {
+                    println!("CACHE {cached}: {:?}", super::super::composite_projections::cached_identity(&records, &classes, cached));
+                }
+            }
+            let mut r = payload(records.primary(mapping).unwrap(), mapping).unwrap();
+            empty(&mut r).unwrap();
+            zeros(&mut r, 2).unwrap();
+            for _ in 0..r.count(19).unwrap() {
+                let tracker = r.reference().unwrap();
+                let target = r.u64().unwrap();
+                let identity = tracking_identity(&records, &classes, tracker, "4B31DA1B-FCD6-4527-BC3E-BE1FBAF867FE", 1).unwrap();
+                println!(
+                    "MAP target={target} identity={identity}: {:?}",
+                    super::super::recipe_incidence::identity(&records, &classes, identity, false)
+                );
+            }
+        }
+    }
 
     #[test]
     fn persistent_curve_identity_is_scoped_to_a_supported_sketch_generation() {

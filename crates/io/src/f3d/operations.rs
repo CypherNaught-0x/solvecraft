@@ -9,6 +9,10 @@ impl Design {
     /// Map kernel operation tags to native feature records. Populated native
     /// indexes must agree; no ownership is inferred from geometry or order.
     pub fn operation_owners(&self) -> Result<BTreeMap<u64, u64>> {
+        self.operation_index().map(|(owners, _)| owners)
+    }
+
+    pub(super) fn operation_index(&self) -> Result<(BTreeMap<u64, u64>, BTreeSet<u64>)> {
         let class = self.classes.iter().find(|c| c.id == CLASS).ok_or_else(|| invalid("missing topology operation map"))?;
         if !matches!(class.version, 0 | 1) || class.objects.len() != 1 {
             return Err(invalid("unsupported topology operation map version or count"));
@@ -21,15 +25,26 @@ impl Design {
         zeros(&mut r, 2)?;
         let mut features = BTreeSet::new();
         let mut owners = BTreeMap::new();
+        let mut pattern_instances = BTreeMap::new();
+        if self.classes.iter().any(|c| c.id == super::circular_patterns::CLASS) {
+            for entry in self.timeline()?.into_iter().filter(|e| e.class == super::circular_patterns::CLASS) {
+                let HistoryKind::CircularPattern(pattern) = entry.feature?.kind else { return Err(invalid("missing circular-pattern ownership")) };
+                for (tag, instance) in pattern.operation_instances {
+                    if pattern_instances.insert(tag, instance).is_some() {
+                        return Err(invalid("duplicate circular-pattern operation owner"));
+                    }
+                }
+            }
+        }
         let forward_count = if class.version == 1 { r.count(12)? } else { 0 };
         for _ in 0..forward_count {
             let feature = r.u64()?;
-            if !classes.contains_key(&feature) || !features.insert(feature) {
+            if !features.insert(feature) {
                 return Err(invalid("missing or duplicate topology operation feature"));
             }
             for _ in 0..r.count(8)? {
                 let tag = r.u64()?;
-                if tag == 0 || owners.insert(tag, feature).is_some() {
+                if tag == 0 || feature == 0 || owners.insert(tag, feature).is_some() {
                     return Err(invalid("duplicate or empty topology operation tag"));
                 }
             }
@@ -38,7 +53,7 @@ impl Design {
         for _ in 0..r.count(16)? {
             let tag = r.u64()?;
             let feature = r.u64()?;
-            if tag == 0 || !classes.contains_key(&feature) || reverse.insert(tag, feature).is_some() {
+            if tag == 0 || feature == 0 || reverse.insert(tag, feature).is_some() {
                 return Err(invalid("invalid reverse topology operation ownership"));
             }
         }
@@ -48,17 +63,37 @@ impl Design {
         if forward_count != 0 && reverse != owners {
             return Err(invalid("inconsistent topology operation ownership"));
         }
+        for (tag, instance) in &pattern_instances {
+            if let Some(instance) = instance
+                && reverse.get(tag) != Some(instance)
+            {
+                return Err(invalid("circular-pattern operation disagrees with its current instance"));
+            }
+        }
         let mut retired = BTreeSet::new();
         for _ in 0..r.count(8)? {
             let tag = r.u64()?;
-            if tag == 0 || reverse.contains_key(&tag) || !retired.insert(tag) {
+            // Recreating an instance can reuse its stable operation slot even
+            // while that slot remains in the retired list. Only the certified
+            // pattern's current instance relationship can authorize that overlap.
+            let pattern_slot = pattern_instances.get(&tag).is_some_and(|instance| match instance {
+                Some(instance) => reverse.get(&tag) == Some(instance),
+                None => reverse.get(&tag).is_none_or(|owner| !classes.contains_key(owner)),
+            });
+            let absent_owner = reverse.get(&tag).is_some_and(|owner| !classes.contains_key(owner));
+            if tag == 0 || (reverse.contains_key(&tag) && !pattern_slot && !absent_owner) || !retired.insert(tag) {
                 return Err(invalid("invalid retired topology operation tag"));
             }
         }
         let owner = r.reference()?;
         require_class(&classes, owner, "C3423E04-7E85-4B44-8E31-A5FA9C100052", 2)?;
         finish(&r)?;
-        Ok(reverse)
+        // These tables also retain operations of deleted features and former
+        // pattern instances. Validate both indexes before removing their
+        // unavailable owners. A selector that still needs one cannot resolve it
+        // from this map; it must not inherit another feature's operation.
+        reverse.retain(|_, owner| classes.contains_key(owner));
+        Ok((reverse, retired))
     }
 }
 
@@ -93,6 +128,57 @@ mod tests {
     #[test]
     fn operation_tags_are_owned_by_features_not_records_with_similar_ids() {
         assert_eq!(mapped().design().operation_owners().unwrap(), BTreeMap::from([(8000, 8), (8001, 9), (8002, 9)]));
+    }
+
+    #[test]
+    fn absent_historical_owners_are_not_live_selection_candidates() {
+        for version in [0, 1] {
+            for retired in [false, true] {
+                let mut f = mapped();
+                let mut b = vec![0; 6];
+                if version == 1 {
+                    u32(&mut b, 2);
+                    for (feature, tag) in [(9, 8001), (999, 8999)] {
+                        u64(&mut b, feature);
+                        u32(&mut b, 1);
+                        u64(&mut b, tag);
+                    }
+                }
+                u32(&mut b, 2);
+                for (tag, feature) in [(8001, 9), (8999, 999)] {
+                    u64(&mut b, tag);
+                    u64(&mut b, feature);
+                }
+                u32(&mut b, u32::from(retired));
+                if retired {
+                    u64(&mut b, 8999);
+                }
+                reference(&mut b, 4);
+                f.put(180, CLASS, version, b, None);
+                assert_eq!(Fixture(f.0.clone()).design().operation_owners().unwrap(), BTreeMap::from([(8001, 9)]));
+                // Reintroducing an actual owner keeps its live operation unless
+                // the retired index contradicts that relationship.
+                f.put(999, "original-feature", 0, vec![], None);
+                let result = f.design().operation_owners();
+                if retired {
+                    assert!(result.is_err());
+                } else {
+                    assert_eq!(result.unwrap().get(&8999), Some(&999));
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires local Style 7 archive"]
+    fn native_style7_ignores_only_unavailable_operation_owners() {
+        let root = std::path::PathBuf::from(solidcraft_geom::env::var_os("F3D_ADDITIONAL_CORPUS").unwrap());
+        let designs = read_f3d(&std::fs::read(root.join("knobs/Style 7.f3d")).unwrap()).unwrap();
+        let owners = designs[0].operation_owners().unwrap();
+        assert_eq!(owners.get(&301), Some(&216));
+        assert_eq!(owners.get(&450), Some(&76352));
+        assert!(!owners.contains_key(&330));
+        assert!(!owners.contains_key(&423));
     }
 
     fn retired(version: u32, forward: bool, tags: &[u64]) -> Fixture {

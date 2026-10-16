@@ -20,6 +20,7 @@ pub struct HistoryFeature {
 
 #[derive(Debug, PartialEq)]
 pub enum HistoryKind {
+    CircularPattern(CircularPattern),
     TwoEdgePoint {
         definition: u64,
         edges: [u64; 2],
@@ -43,6 +44,7 @@ pub enum HistoryKind {
     Extrude {
         operation: Operation,
         profile_containers: Vec<u64>,
+        target_containers: Vec<u64>,
     },
     Loft {
         operation: Operation,
@@ -164,16 +166,9 @@ impl Design {
                             }
                             let projections = references(&mut r)?;
                             for projection in &projections {
-                                require_class(
-                                    &classes,
-                                    *projection,
-                                    super::projections::CLASS,
-                                    match version {
-                                        3 => 1,
-                                        4 => 3,
-                                        _ => 4,
-                                    },
-                                )?;
+                                // Projection generations can survive a sketch upgrade.
+                                // Their own versioned reader validates the relationship.
+                                super::projections::version(&classes, *projection)?;
                             }
                             if version >= 4 {
                                 zeros(&mut r, 4)?;
@@ -236,6 +231,10 @@ impl Design {
                             let kind = super::mirrors::inputs(&mut r, &records, &classes, id, body_feature_version)?;
                             (kind, String::new())
                         }
+                        (super::circular_patterns::CLASS, 0) => {
+                            let pattern = super::circular_patterns::inputs(&mut r, &records, &classes, id, body_feature_version)?;
+                            (HistoryKind::CircularPattern(pattern), String::new())
+                        }
                         (super::combines::CLASS, 1) => {
                             let kind = super::combines::inputs(&mut r, &records, &classes, id, body_feature_version)?;
                             (kind, String::new())
@@ -247,10 +246,15 @@ impl Design {
                             for p in &profile_containers {
                                 require_class(&classes, *p, "2CA5A1CD-C99B-4C9B-91AF-57989148E841", 1)?;
                             }
-                            // Versioned role-specific object lists: the populated list
-                            // changes for booleans. Their roles remain uninterpreted.
-                            body_roles(&mut r, &classes, body_feature_version)?;
-                            (HistoryKind::Extrude { operation, profile_containers }, String::new())
+                            let roles = body_roles(&mut r, &classes, body_feature_version)?;
+                            let target_containers = roles.last().cloned().unwrap_or_default();
+                            for target in &target_containers {
+                                require_class(&classes, *target, "2CA5A1CD-C99B-4C9B-91AF-57989148E841", 1)?;
+                            }
+                            if operation == Operation::NewBody && !target_containers.is_empty() {
+                                return Err(invalid("new-body extrusion has boolean targets"));
+                            }
+                            (HistoryKind::Extrude { operation, profile_containers, target_containers }, String::new())
                         }
                         _ => return Err(invalid(&format!("unsupported timeline feature {id}: class {} version {}", class.id, class.version))),
                     };
@@ -318,6 +322,7 @@ impl Design {
 
 pub(super) enum ExtrudeLimit {
     Distance(u64),
+    SymmetricDistance { distance: u64, full_length: bool },
     ToEntity { offset: u64, container: u64 },
 }
 
@@ -329,7 +334,7 @@ pub(super) struct ExtrudeInputs {
     pub start_offset: Option<u64>,
 }
 
-/// Consume the verified one-sided, profile-plane/offset-start schema, stopping
+/// Consume verified distance/To Entity schemas, stopping
 /// at the profile container lists. Shared by inspection and reconstruction.
 pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>) -> Result<ExtrudeInputs> {
     empty(r)?;
@@ -339,8 +344,9 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
     }
     r.take(3)?; // evaluation metadata
     let operation = operation(r.u32()?)?;
-    if r.u32()? != 1 {
-        return Err(invalid("unsupported extrusion extent layout (observed one-sided schema required)"));
+    let direction = r.u32()?;
+    if !matches!(direction, 1 | 3) {
+        return Err(invalid("unsupported extrusion extent layout"));
     }
     let extent_type = r.u32()?;
     if !matches!(extent_type, 1 | 2) {
@@ -351,7 +357,7 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
     // explicit hints in either direction produce the same observed geometry.
     match r.take(1)? {
         [0] => {}
-        [1] if extent_type == 1 => {}
+        [1] if direction == 1 && extent_type == 1 => {}
         _ => return Err(invalid("unsupported extrusion direction hint")),
     }
     if r.take(1)? != [1] {
@@ -362,6 +368,9 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
         [1] => true,
         _ => return Err(invalid("unsupported extrusion start-offset flag")),
     };
+    if direction == 3 && offset {
+        return Err(invalid("unsupported symmetric extrusion start offset"));
+    }
     zeros(r, 3)?;
     let axis = solidcraft_geom::Vec3::new(f64::from_bits(r.u64()?), f64::from_bits(r.u64()?), f64::from_bits(r.u64()?));
     if !axis.is_finite() {
@@ -373,10 +382,23 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
         zeros(r, 1)?;
         Some(binding)
     } else {
-        zeros(r, 2)?;
+        zeros(r, 1)?;
         None
     };
-    if extent_type == 1 {
+    // Modern symmetric records leave the opposite-distance slot empty. Older
+    // records (the clamp) repeat the same binding; they must not supply a second,
+    // independently editable distance under a symmetric direction.
+    let opposite = if start_offset.is_none() {
+        if direction == 3 && r.bytes.get(r.at) == Some(&1) {
+            Some(r.reference()?)
+        } else {
+            zeros(r, 1)?;
+            None
+        }
+    } else {
+        None
+    };
+    if direction == 1 && extent_type == 1 {
         zeros(r, 1)?;
         require_class(classes, r.reference()?, "0897AF07-EF1B-42E5-BDD9-1C746A085CBC", 0)?;
         zeros(r, 1)?;
@@ -407,6 +429,30 @@ pub(super) fn extrude_inputs(r: &mut Reader<'_>, classes: &BTreeMap<u64, &Class>
     zeros(r, 1)?;
     if r.u32()? != 1 {
         return Err(invalid("unsupported extrusion extent flags"));
+    }
+    if direction == 3 {
+        if opposite.is_some_and(|id| id != distance) {
+            return Err(invalid("symmetric extrusion distance bindings disagree"));
+        }
+        // Controlled full-/half-length exports distinguish this marker from
+        // the ordinary two-sided distance extent. The older face-extend form
+        // moves the marker by four bytes without changing the trailing inputs.
+        zeros(r, if extent_type == 1 { 5 } else { 9 })?;
+        if r.u32()? != 1 {
+            return Err(invalid("unsupported symmetric extrusion extent flags"));
+        }
+        zeros(r, if extent_type == 1 { 10 } else { 6 })?;
+        if r.reference()? != taper {
+            return Err(invalid("symmetric extrusion taper bindings disagree"));
+        }
+        zeros(r, 1)?;
+        let full_length = match r.u32()? {
+            1 => true,
+            2 => false,
+            _ => return Err(invalid("unsupported symmetric extrusion length convention")),
+        };
+        zeros(r, 11)?;
+        return Ok(ExtrudeInputs { operation, axis, limit: ExtrudeLimit::SymmetricDistance { distance, full_length }, taper, start_offset });
     }
     zeros(r, 36)?;
     Ok(ExtrudeInputs { operation, axis, limit: ExtrudeLimit::Distance(distance), taper, start_offset })

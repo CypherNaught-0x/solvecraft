@@ -42,3 +42,33 @@ pub(crate) fn migrate(v: &mut Value) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tagged_history_upgrades_to_pending_format_without_accepting_future_upstream() {
+        let original = crate::Document::new("Development compatibility");
+        for version in 13..=30 {
+            let mut value: Value = serde_json::from_str(&original.to_json()).unwrap();
+            value["format"] = Value::String(format!("solidcraft-f3d-dev/{version}"));
+            // Saved development files never used the new pending-change marker.
+            value.as_object_mut().unwrap().remove("format_pending");
+            let opened = crate::Document::from_json(&value.to_string()).unwrap();
+            assert_eq!(opened, original);
+            let saved: Value = serde_json::from_str(&opened.to_json()).unwrap();
+            assert_eq!(saved["format"], crate::format::format_string(crate::format::FORMAT));
+            assert_eq!(saved["format_pending"], serde_json::json!(crate::format::pending_names()));
+            assert_eq!(crate::Document::from_json(&opened.to_json()).unwrap(), opened);
+        }
+        for version in [0, 1, 12, 31, u32::MAX] {
+            let value = serde_json::json!({"format":format!("solidcraft-f3d-dev/{version}"),"name":"Unknown development"});
+            assert!(crate::Document::from_json(&value.to_string()).is_err());
+        }
+        for version in crate::format::FORMAT + 1..=crate::format::FORMAT + 10 {
+            let value = serde_json::json!({"format":crate::format::format_string(version),"name":"Future upstream"});
+            assert!(crate::Document::from_json(&value.to_string()).unwrap_err().to_string().contains("newer SolidCraft"));
+        }
+    }
+}

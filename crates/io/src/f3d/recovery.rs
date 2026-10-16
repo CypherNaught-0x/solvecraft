@@ -174,9 +174,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_root_identity_does_not_block_independently_decoded_features() {
+    fn unknown_root_identity_does_not_block_independently_decoded_features() {
         let mut design = fixture(false).design();
-        design.classes.iter_mut().find(|c| c.objects.contains(&3)).unwrap().version = 18;
+        design.classes.iter_mut().find(|c| c.objects.contains(&3)).unwrap().version = 17;
         assert!(design.to_document("Strict").is_err());
         design.recovery = Some(Default::default());
         let mut doc = design.to_document("Legacy").unwrap();

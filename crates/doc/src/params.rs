@@ -76,6 +76,9 @@ impl FeatureKind {
             ExprRole::Placement => placement.push(e.as_str()),
         });
         inputs.extend(placement);
+        if let FeatureKind::Sketch { sketch, .. } = self {
+            inputs.extend(sketch.offsets.iter().filter_map(|offset| offset.distance_expression.as_deref()));
+        }
         inputs
     }
 }

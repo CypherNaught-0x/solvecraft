@@ -4244,6 +4244,7 @@ dependencies = [
 name = "solidcraft-io"
 version = "0.14.0"
 dependencies = [
+ "cadmpeg-asm",
  "cadmpeg-codec-f3d",
  "cadmpeg-codec-step",
  "cadmpeg-core",

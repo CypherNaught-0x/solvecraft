@@ -120,7 +120,8 @@
         "operation": "new_body",
         "targets": [
           "Body1"
-        ]
+        ],
+        "interpolation": "uniform"
       }
     }
   ],

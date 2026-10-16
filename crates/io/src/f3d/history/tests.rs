@@ -45,6 +45,7 @@ fn common(b: &mut Vec<u8>, base: &str, number: u32, name: &str, suppressed: bool
 fn fixture(order: &[u64], op: u32, suppressed: bool, matrix: Option<[f64; 16]>) -> Design {
     let mut design = Design {
         recovery: None,
+        archive: None,
         path: "synthetic".into(),
         build: 1,
         layout: 8,
@@ -151,7 +152,7 @@ fn history_uses_timeline_order_names_suppression_and_placement() {
         assert_eq!(f[1].name, "Depth");
         assert!(!f[0].suppressed);
         assert!(f[1].suppressed);
-        assert_eq!(f[1].kind, HistoryKind::Extrude { operation: expected, profile_containers: vec![44] });
+        assert_eq!(f[1].kind, HistoryKind::Extrude { operation: expected, profile_containers: vec![44], target_containers: vec![] });
         let HistoryKind::Sketch { geometry, placement } = &f[0].kind else { panic!("sketch") };
         assert_eq!(*geometry, 60);
         assert_eq!(placement.entities, [78]);

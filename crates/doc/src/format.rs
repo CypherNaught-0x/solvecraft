@@ -917,6 +917,17 @@ fn validate_versioned_geometry(value: &Value) -> Result<()> {
                 if link.get("auto_face").is_some_and(|marker| !marker.is_boolean()) {
                     return Err(invalid());
                 }
+                if let Some(join) = link.get("join_arcs")
+                    && (!join.is_boolean()
+                        || (join.as_bool() == Some(true)
+                            && (link.get("auto_face").and_then(Value::as_bool) != Some(true)
+                                || link.get("source").and_then(|s| s.get("type")).and_then(Value::as_str) != Some("face")
+                                || !matches!(link.get("kind").and_then(Value::as_str), None | Some("project"))
+                                || link.get("face_name").and_then(Value::as_str).is_none_or(str::is_empty)
+                                || link.get("edge_name").is_some_and(|v| !v.is_null()))))
+                {
+                    return Err(invalid());
+                }
                 if let Some(circle) = link.get("edge_circle") {
                     let names = circle.as_array().filter(|a| a.len() <= 128).ok_or_else(invalid)?;
                     let mut seen = std::collections::BTreeSet::new();
@@ -1308,7 +1319,7 @@ mod tests {
         sketch.links[0].edge_name = Some("F2:start|F2:side:l1".into());
         let mut doc = Document::new("name migration");
         doc.add_feature(crate::FeatureKind::Sketch { plane: crate::PlaneRef::Origin { name: "XY".into() }, sketch }, None).unwrap();
-        for version in 13..=FORMAT {
+        for version in 13..=30 {
             let mut json: Value = serde_json::from_str(&doc.to_json()).unwrap();
             json["format"] = Value::from(format!("solidcraft-f3d-dev/{version}"));
             let migrated = read(&json.to_string()).unwrap();
@@ -1321,7 +1332,7 @@ mod tests {
 
     #[test]
     fn upstream_formats_keep_exact_history_names_and_piece_order() {
-        for version in 14..=20 {
+        for version in 14..=FORMAT {
             let input = serde_json::json!({
                 "format": format_string(version), "name": "Upstream", "next_id": 2, "params": [],
                 "features": [{"id": 1, "name": "Box", "type": "box", "length": "10", "width": "10", "height": "10", "corner": ["0", "0", "0"], "operation": "new_body", "face_names": ["F1:top"]}]

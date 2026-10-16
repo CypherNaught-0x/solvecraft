@@ -100,8 +100,8 @@ pub(crate) fn validate(profiles: &[PieceProfileBoundary]) -> Result<()> {
         {
             return Err(invalid());
         }
-        let mut seen = BTreeSet::new();
-        for boundary in std::iter::once(&profile.outer).chain(&profile.holes) {
+        let mut seen = BTreeMap::new();
+        for (boundary_index, boundary) in std::iter::once(&profile.outer).chain(&profile.holes).enumerate() {
             total += boundary.len();
             if boundary.is_empty() || boundary.len() > 512 || total > 20_000 || boundary.windows(2).any(|pair| pair[0] >= pair[1]) {
                 return Err(invalid());
@@ -113,11 +113,19 @@ pub(crate) fn validate(profiles: &[PieceProfileBoundary]) -> Result<()> {
                     || part.piece == 0
                     || part.piece > part.count
                     || part.count > 50_000
-                    || !seen.insert((&part.curve, part.piece))
                     || counts.insert(&part.curve, part.count).is_some_and(|old| old != part.count)
                 {
                     return Err(invalid());
                 }
+                // A nested graph component can give adjacent hole loops. An
+                // edge shared by two such loops occurs once in each direction
+                // and cancels from the compound hole. No other repetition is
+                // valid; resolution still requires an exact regenerated face.
+                let prior = seen.entry((&part.curve, part.piece)).or_insert((boundary_index, part.reversed, 0usize));
+                if prior.2 > 0 && (prior.2 != 1 || prior.0 == 0 || boundary_index == 0 || prior.0 == boundary_index || prior.1 == part.reversed) {
+                    return Err(invalid());
+                }
+                prior.2 += 1;
             }
         }
     }
@@ -142,6 +150,80 @@ pub(crate) fn validate_seams(profiles: &[PieceProfileBoundary], seams: &BTreeMap
     Ok(())
 }
 
+/// Collapse only explicit duplicate references to the same partition of
+/// coincident full circles. Keep the original references in the document: this
+/// certificate must be re-established after every edit and never comes from a
+/// serialized profile cache. A reference to an alias alone is not sufficient.
+pub fn normalize_coincident_profile_boundaries(
+    sketch: &crate::sketch::Sketch,
+    profiles: &[PieceProfileBoundary],
+    seams: &BTreeMap<String, f64>,
+) -> Result<(Vec<PieceProfileBoundary>, BTreeMap<String, String>)> {
+    validate(profiles)?;
+    validate_seams(profiles, seams)?;
+    let sources: BTreeSet<_> = profiles.iter().flat_map(|p| std::iter::once(&p.outer).chain(&p.holes)).flatten().map(|p| p.curve.as_str()).collect();
+    let mut carriers: Vec<(&str, solidcraft_geom::Vec2, f64, f64)> = Vec::new();
+    let mut aliases = BTreeMap::new();
+    let mut comparisons = 0usize;
+    for curve in &sketch.curves {
+        if curve.construction || !sources.contains(curve.id.as_str()) {
+            continue;
+        }
+        let crate::sketch::CurveKind::Circle { c, r } = curve.kind else { continue };
+        let center = sketch.point(c).ok_or_else(invalid)?;
+        if !center.is_finite() || !r.is_finite() || r <= 0. {
+            return Err(invalid());
+        }
+        let seam = seams.get(&curve.id).copied().unwrap_or(0.);
+        let mut canonical = None;
+        for (id, point, radius, phase) in &carriers {
+            comparisons += 1;
+            if comparisons > 2_000_000 {
+                return Err(invalid());
+            }
+            // This is stricter than graph vertex merging. Compare every alias
+            // with its representative, not with a chain of nearby circles.
+            if center.dist(*point) + (r - radius).abs() <= 1e-9 && (seam - phase).abs() <= 1e-12 {
+                canonical = Some(*id);
+                break;
+            }
+        }
+        if let Some(id) = canonical {
+            aliases.insert(curve.id.clone(), id.to_owned());
+        } else {
+            carriers.push((&curve.id, center, r, seam));
+        }
+    }
+    let mut occurrences: BTreeMap<&str, Vec<_>> = BTreeMap::new();
+    let mut references = BTreeSet::new();
+    for (index, boundary) in profiles.iter().flat_map(|p| std::iter::once(&p.outer).chain(&p.holes)).enumerate() {
+        for piece in boundary {
+            occurrences.entry(&piece.curve).or_default().push((index, piece.piece, piece.count, piece.reversed));
+            references.insert((index, piece.curve.as_str(), piece.piece, piece.count, piece.reversed));
+        }
+    }
+    aliases.retain(|alias, canonical| {
+        occurrences.get(alias.as_str()).is_some_and(|parts| {
+            parts.iter().all(|(index, piece, count, reversed)| references.contains(&(*index, canonical.as_str(), *piece, *count, *reversed)))
+        })
+    });
+    let mut normalized = profiles.to_vec();
+    for profile in &mut normalized {
+        for boundary in std::iter::once(&mut profile.outer).chain(&mut profile.holes) {
+            for piece in boundary.iter_mut() {
+                if let Some(id) = aliases.get(&piece.curve) {
+                    piece.curve.clone_from(id);
+                }
+            }
+            boundary.sort();
+            boundary.dedup();
+        }
+        profile.holes.sort();
+    }
+    validate(&normalized)?;
+    Ok((normalized, aliases))
+}
+
 pub(crate) fn indices(ss: &SolvedSketch, profiles: &[PieceProfileBoundary], seams: &BTreeMap<String, f64>) -> Result<Vec<usize>> {
     validate(profiles)?;
     validate_seams(profiles, seams)?;
@@ -157,17 +239,26 @@ pub(crate) fn indices(ss: &SolvedSketch, profiles: &[PieceProfileBoundary], seam
         .iter()
         .map(|profile| profile.piece_boundaries_with_seams(seams).map(|(outer, holes)| PieceProfileBoundary { outer, holes }))
         .collect::<Vec<_>>();
-    profiles
-        .iter()
-        .map(|identity| {
-            let mut matches = current.iter().enumerate().filter(|(_, candidate)| candidate.as_ref() == Some(identity));
-            let (index, _) = matches.next().ok_or_else(|| DocError::Unknown(format!("analytic profile pieces changed or missing in {}", ss.name)))?;
-            if matches.next().is_some() {
-                return Err(DocError::Invalid(format!("ambiguous analytic profile pieces in {}", ss.name)));
-            }
-            Ok(index)
-        })
-        .collect()
+    let locate = |profiles: &[PieceProfileBoundary]| {
+        profiles
+            .iter()
+            .map(|identity| {
+                let mut matches = current.iter().enumerate().filter(|(_, candidate)| candidate.as_ref() == Some(identity));
+                let (index, _) =
+                    matches.next().ok_or_else(|| DocError::Unknown(format!("analytic profile pieces changed or missing in {}", ss.name)))?;
+                if matches.next().is_some() {
+                    return Err(DocError::Invalid(format!("ambiguous analytic profile pieces in {}", ss.name)));
+                }
+                Ok(index)
+            })
+            .collect::<Result<Vec<_>>>()
+    };
+    let original = locate(profiles);
+    if original.is_ok() {
+        return original;
+    }
+    let (normalized, aliases) = normalize_coincident_profile_boundaries(&ss.sketch, profiles, seams)?;
+    if aliases.is_empty() { original } else { locate(&normalized) }
 }
 
 #[cfg(test)]
@@ -235,6 +326,52 @@ mod tests {
     }
 
     #[test]
+    fn coincident_circle_aliases_require_duplicate_identity_and_live_geometry() {
+        let mut sketch = crate::sketch::Sketch::new();
+        sketch.add_circle(Vec2::ZERO, 30., None, Some("left")).unwrap();
+        sketch.add_circle(Vec2::new(40., 0.), 30., None, Some("right")).unwrap();
+        sketch.add_circle(Vec2::new(1e-14, 0.), 30., None, Some("alias")).unwrap();
+        let piece = |curve: &str, part| crate::sketch::ProfilePiece { curve: curve.into(), piece: part, count: 2, reversed: false };
+        let expected = PieceProfileBoundary { outer: vec![piece("left", 1), piece("right", 2)], holes: vec![] };
+        let mut selected = expected.clone();
+        selected.outer.insert(0, piece("alias", 1));
+        let empty = BTreeMap::new();
+        let (normalized, aliases) = normalize_coincident_profile_boundaries(&sketch, &[selected.clone()], &empty).unwrap();
+        assert_eq!(normalized, [expected]);
+        assert_eq!(aliases, BTreeMap::from([("alias".into(), "left".into())]));
+        let solved = |mut sketch: crate::sketch::Sketch| {
+            let report = crate::sketch::solve(&mut sketch);
+            let profiles = crate::sketch::find_profiles(&sketch);
+            SolvedSketch { feature: 1, name: "Aliases".into(), plane: solidcraft_geom::Plane::named("XY").unwrap(), sketch, report, profiles }
+        };
+        assert!(indices(&solved(sketch.clone()), &[selected.clone()], &empty).is_ok());
+        // Every damaged reference below must fail, rather than dropping the alias.
+        for case in 0..7 {
+            let mut changed = sketch.clone();
+            let mut wanted = selected.clone();
+            let mut seams = BTreeMap::new();
+            match case {
+                0 => {
+                    let crate::sketch::CurveKind::Circle { r, .. } = &mut changed.curves[2].kind else { panic!("circle") };
+                    *r += 0.1;
+                }
+                1 => changed.curves[2].construction = true,
+                2 => wanted.outer[0].reversed = true,
+                3 => wanted.outer[0].count = 3,
+                4 => wanted.outer[0].piece = 2,
+                5 => {
+                    wanted.outer.remove(1);
+                }
+                6 => {
+                    seams.insert("alias".into(), std::f64::consts::PI);
+                }
+                _ => panic!("case"),
+            }
+            assert!(indices(&solved(changed), &[wanted], &seams).is_err(), "case {case}");
+        }
+    }
+
+    #[test]
     fn analytic_piece_identity_includes_holes_and_never_trusts_cached_profiles() {
         let mut sketch = crate::sketch::Sketch::new();
         sketch.add_circle(Vec2::ZERO, 30., None, Some("left")).unwrap();
@@ -257,5 +394,39 @@ mod tests {
         assert!(
             !crate::sketch::find_profiles(&sketch).iter().any(|p| p.piece_boundaries() == Some((identity.outer.clone(), identity.holes.clone())))
         );
+    }
+
+    #[test]
+    fn compound_holes_allow_only_opposite_shared_spans_in_distinct_loops() {
+        let mut sketch = crate::sketch::Sketch::new();
+        sketch.add_circle(Vec2::ZERO, 30., None, Some("outer")).unwrap();
+        sketch.add_circle(Vec2::ZERO, 10., None, Some("inner")).unwrap();
+        sketch.add_circle(Vec2::new(10., 0.), 8., None, Some("divider")).unwrap();
+        let profiles = crate::sketch::find_profiles(&sketch);
+        let ring = profiles.iter().find(|p| p.hole_curves.len() > 1).unwrap();
+        let (outer, holes) = ring.piece_boundaries().unwrap();
+        let identity = PieceProfileBoundary { outer, holes };
+        validate(std::slice::from_ref(&identity)).unwrap();
+        let mut occurrences: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for (h, hole) in identity.holes.iter().enumerate() {
+            for (p, piece) in hole.iter().enumerate() {
+                occurrences.entry((&piece.curve, piece.piece)).or_default().push((h, p));
+            }
+        }
+        let shared = occurrences.values().find(|v| v.len() == 2).unwrap();
+        let [(h, p), (j, q)] = shared.as_slice() else { panic!("shared span") };
+        let mut wrong = identity.clone();
+        wrong.holes[*j][*q].reversed = wrong.holes[*h][*p].reversed;
+        wrong.holes[*j].sort();
+        wrong.holes.sort();
+        assert!(validate(&[wrong]).is_err());
+        let mut wrong = identity.clone();
+        wrong.outer.push(wrong.holes[*h][*p].clone());
+        wrong.outer.sort();
+        assert!(validate(&[wrong]).is_err());
+        let mut wrong = identity.clone();
+        wrong.holes.push(vec![wrong.holes[*h][*p].clone()]);
+        wrong.holes.sort();
+        assert!(validate(&[wrong]).is_err());
     }
 }

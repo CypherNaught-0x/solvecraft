@@ -54,7 +54,10 @@ impl Schema {
         Ok(Self { geometry, curve })
     }
     pub fn owner(&self, r: &mut Reader<'_>, metadata: &mut EntityMetadata) -> Result<u64> {
-        if self.geometry == 17 {
+        // Some v17 records end directly with the owning sketch reference.
+        // Other v17 records retain a relationship list before it. Only the
+        // exact terminal-reference envelope may omit that list.
+        if self.geometry == 17 && r.bytes.len().saturating_sub(r.at) != 11 {
             metadata.legacy = references(r)?;
         }
         r.reference()

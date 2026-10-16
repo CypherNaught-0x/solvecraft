@@ -44,7 +44,10 @@ impl Design {
         }
         let components = self.classes.iter().find(|c| c.id == "E03784ED-5E19-4E14-B9F2-3B07017018CD");
         let root = components
-            .filter(|c| (c.version == 23 || self.recovering()) && c.objects.len() == 1)
+            // Only the root's identity is used here. Origin groups and sketch
+            // placement validate their owner independently; no component payload
+            // or assembly transform is inferred from either generation.
+            .filter(|c| (matches!(c.version, 18 | 23) || self.recovering()) && c.objects.len() == 1)
             .and_then(|c| c.objects.first())
             .copied()
             .ok_or_else(|| invalid("component/assembly reconstruction is not supported yet"))?;
@@ -85,6 +88,8 @@ impl Design {
         let circles: BTreeMap<_, _> = self.recover_collection("sketch circles", self.sketch_circles())?.into_iter().map(|c| (c.id, c)).collect();
         let arcs: BTreeMap<_, _> = self.recover_collection("sketch arcs", self.sketch_arcs())?.into_iter().map(|a| (a.circle.id, a)).collect();
         let lines: BTreeMap<_, _> = self.recover_collection("sketch lines", self.sketch_lines())?.into_iter().map(|l| (l.id, l)).collect();
+        let sketch_graphs: BTreeMap<_, _> =
+            self.recover_collection("sketch attachment graphs", self.sketch_constraint_graphs())?.into_iter().map(|g| (g.geometry, g)).collect();
         let constraints: BTreeMap<_, _> =
             self.recover_collection("sketch constraints", self.sketch_constraints())?.into_iter().map(|c| (c.geometry, c)).collect();
         if let Err(error) =
@@ -142,7 +147,8 @@ impl Design {
                 let mut new_plane = None;
                 let mut new_point = None;
                 let mut new_edge_names = Vec::new();
-                let mut import_face = |object| -> Result<solidcraft_doc::FaceAnchor> {
+                let mut pending_profiles = BTreeMap::new();
+                let mut import_face = |object| -> Result<(solidcraft_doc::FaceAnchor, Plane)> {
                     let face = super::loft_faces::face(&records, &classes, object, f.id)?;
                     if operation_owners.is_none() {
                         operation_owners = Some(self.operation_owners()?);
@@ -152,19 +158,64 @@ impl Design {
                     let creator = doc.feature(id).ok_or_else(|| invalid("missing imported loft body creator"))?;
                     let [body_name] = creator.body_names.as_slice() else { return Err(invalid("loft face requires one created body")) };
                     let mut contributions = Vec::new();
+                    let mut cap_roles = BTreeMap::new();
                     let mut producers = BTreeSet::new();
                     for operation in &face.all_operations {
                         let native = *owners.get(operation).ok_or_else(|| invalid("missing loft face operation owner"))?;
                         let imported = *feature_ids.get(&native).ok_or_else(|| invalid("loft face operation follows its selector"))?;
                         let current = doc.feature(imported).filter(|f| !f.suppressed).ok_or_else(|| invalid("loft face operation is suppressed"))?;
+                        if face.boundary_operations.contains(operation) {
+                            let [producer_operation] = face.contributions.as_slice() else {
+                                return Err(invalid("trimmed cap requires one producer"));
+                            };
+                            let producer_native = owners.get(producer_operation).ok_or_else(|| invalid("missing trimmed cap producer"))?;
+                            let producer_id = *feature_ids.get(producer_native).ok_or_else(|| invalid("missing imported trimmed cap producer"))?;
+                            let source = *source_profiles.get(producer_native).ok_or_else(|| invalid("missing trimmed cap profile"))?;
+                            face.validate_profile(source, &circles, &lines)?;
+                            let circle = source
+                                .regions
+                                .first()
+                                .and_then(|r| r.first())
+                                .and_then(|b| b.curves.first())
+                                .ok_or_else(|| invalid("missing trimmed cap circle"))?;
+                            let producer = doc.feature(producer_id).ok_or_else(|| invalid("missing trimmed cap extrusion"))?;
+                            let FeatureKind::Extrude { extent, .. } = &producer.kind else {
+                                return Err(invalid("trimmed cap producer is not an extrusion"));
+                            };
+                            let end = if !face.high {
+                                "start"
+                            } else if doc.eval(&extent.distance, Kind::Length)? < 0. {
+                                "bottom"
+                            } else {
+                                "top"
+                            };
+                            let expected = BTreeSet::from([format!("F{producer_id}:{end}"), format!("F{producer_id}:side:c{circle}")]);
+                            if !matches!(&current.kind, FeatureKind::Chamfer { body: Some(body), groups, .. } if body == body_name && groups.is_empty())
+                                || current.edge_names.is_empty()
+                                || current.edge_names.iter().any(|name| {
+                                    solidcraft_doc::naming::strip_edge_piece(name).split('|').map(str::to_owned).collect::<BTreeSet<_>>() != expected
+                                })
+                            {
+                                return Err(invalid("trimmed cap boundary does not identify its circular chamfer"));
+                            }
+                            continue;
+                        }
                         if native != face.feature
-                            && !matches!(&current.kind, FeatureKind::Extrude { operation: Operation::Join, targets, .. } if targets.as_slice() == [body_name.clone()])
+                            && !matches!(&current.kind, FeatureKind::Extrude { operation, targets, .. }
+                                if targets.as_slice() == [body_name.clone()]
+                                    && (*operation == Operation::Join
+                                        || (*operation == Operation::Cut && !face.bounded && face.side.is_none())))
                         {
                             return Err(invalid("loft face contributor belongs to another body or operation"));
                         }
-                        let source = *source_profiles.get(&native).ok_or_else(|| invalid("missing loft face contributor profile"))?;
                         if face.contributions.contains(operation) {
-                            face.validate_profile(source, &circles, &lines)?;
+                            // Unbounded cap recipes identify the certified support
+                            // plane, including caps produced from another body face.
+                            // They do not require a native sketch-profile record.
+                            let source = source_profiles.get(&native).copied();
+                            if face.bounded || face.side.is_some() {
+                                face.validate_profile(source.ok_or_else(|| invalid("missing loft face contributor profile"))?, &circles, &lines)?;
+                            }
                             if !producers.insert(imported) {
                                 return Err(invalid("duplicate loft face contribution producer"));
                             }
@@ -172,19 +223,32 @@ impl Design {
                                 .side_roles
                                 .get(operation)
                                 .copied()
-                                .map(|label| super::side_roles::curve(&records, &classes, native, label, source, &lines).map(|id| format!("c{id}")))
+                                .map(|label| {
+                                    let source = source.ok_or_else(|| invalid("missing loft side contributor profile"))?;
+                                    super::side_roles::curve(&records, &classes, native, label, source, &lines).map(|id| format!("c{id}"))
+                                })
                                 .transpose()?;
                             contributions.push((imported, curve));
+                            if let Some(end) = face.cap_roles.get(operation) {
+                                cap_roles.insert(imported, *end);
+                            }
                         }
                     }
-                    if face.side.is_none() && contributions.len() != 1 {
+                    if face.side.is_none() && contributions.len() != 1 && cap_roles.len() != contributions.len() {
                         return Err(invalid("composite cap sections are not supported yet"));
                     }
                     projection_model.evaluate(&doc);
-                    if projection_model.results.iter().any(|r| r.error.is_some()) {
-                        return Err(invalid("cannot regenerate loft face dependencies"));
+                    if let Some((result, error)) = projection_model.results.iter().find_map(|r| r.error.as_ref().map(|error| (r, error))) {
+                        let name = doc.feature(result.id).map(|f| f.name.as_str()).unwrap_or("unknown");
+                        return Err(invalid(&format!("cannot regenerate face dependency {} ({name}): {error}", result.id)));
                     }
-                    face.anchor(&doc, &projection_model.state(), id, &contributions)
+                    let anchor = if cap_roles.len() > 1 {
+                        super::loft_faces::composite_cap_anchor(&doc, &projection_model.state(), id, &cap_roles)?
+                    } else {
+                        face.anchor(&doc, &projection_model.state(), id, &contributions)?
+                    };
+                    let plane = doc.resolve_face_anchor(&anchor, 0, &projection_model.state())?;
+                    Ok((anchor, plane))
                 };
                 let import_edges = |objects: &[u64],
                                     intersection: Option<Vec3>,
@@ -200,31 +264,125 @@ impl Design {
                     }
                     let owners = operation_owners.as_ref().ok_or_else(|| invalid("missing blend operations"))?;
                     projection_model.evaluate(&doc);
-                    if projection_model.results.iter().any(|r| r.error.is_some()) {
-                        return Err(invalid("cannot regenerate blend dependencies"));
+                    if let Some((result, error)) = projection_model.results.iter().find_map(|r| r.error.as_ref().map(|error| (r, error))) {
+                        let name = doc.feature(result.id).map(|f| f.name.as_str()).unwrap_or("unknown");
+                        return Err(invalid(&format!("cannot regenerate blend dependency {} ({name}): {error}", result.id)));
                     }
                     let state = projection_model.state();
                     let count = objects.len();
+                    let initial_edges = edges.len();
                     if !(1..=64).contains(&count) || edges.len() + count > 1000 {
                         return Err(invalid("invalid blend edge count"));
                     }
+                    if count > 1 && intersection.is_none() && native_flip.is_none() {
+                        let context = super::composite_blends::Context {
+                            records: &records,
+                            classes: &classes,
+                            operations: owners,
+                            features: &feature_ids,
+                            profiles: &source_profiles,
+                            lines: &lines,
+                            circles: &circles,
+                            doc: &doc,
+                            state: &state,
+                            model: projection_model,
+                            before: None,
+                            depth: 0,
+                        };
+                        if let Ok(selected) = context.resolve_group(objects, f.id) {
+                            if selected.is_empty() || edges.len() + selected.len() > 1000 {
+                                return Err(invalid("invalid reconstructed blend group size"));
+                            }
+                            for selection in &selected {
+                                if !active_bodies.contains(&selection.body)
+                                    || body.as_ref().is_some_and(|body| body != &selection.body)
+                                    || new_edge_names.contains(&selection.name)
+                                {
+                                    return Err(invalid("blend group has an unavailable body or duplicate edge"));
+                                }
+                            }
+                            let count = selected.len();
+                            for selection in selected {
+                                *body = Some(selection.body);
+                                edges.push(selection.point);
+                                new_edge_names.push(selection.name);
+                            }
+                            return Ok((count, false));
+                        }
+                    }
                     let mut resolved_flip = None;
                     for object in objects {
+                        // A joined cap can carry contributions from several
+                        // extrusions. Resolve its complete incidence graph
+                        // before the single-producer/circular legacy path.
+                        let joined = if intersection.is_none() {
+                            let context = super::composite_blends::Context {
+                                records: &records,
+                                classes: &classes,
+                                operations: owners,
+                                features: &feature_ids,
+                                profiles: &source_profiles,
+                                lines: &lines,
+                                circles: &circles,
+                                doc: &doc,
+                                state: &state,
+                                model: projection_model,
+                                before: None,
+                                depth: 0,
+                            };
+                            if let Some(flip) = native_flip {
+                                context.resolve_asymmetric(*object, f.id, flip).map(|(selected, flip)| (selected, Some(flip)))
+                            } else {
+                                context.resolve(*object, f.id).map(|selected| (selected, None))
+                            }
+                        } else {
+                            Err(invalid("joined blend selection mode is unsupported"))
+                        };
+                        let joined_error = match joined {
+                            Ok((selected, flip)) => {
+                                if let Some(flip) = flip {
+                                    if resolved_flip.is_some_and(|old| old != flip) {
+                                        return Err(invalid("mixed native chamfer face orientations within one group are not supported yet"));
+                                    }
+                                    resolved_flip = Some(flip);
+                                }
+                                if selected.is_empty() || edges.len() + selected.len() > 1000 {
+                                    return Err(invalid("invalid reconstructed blend edge count"));
+                                }
+                                for selected in selected {
+                                    if !active_bodies.contains(&selected.body) || body.as_ref().is_some_and(|body| body != &selected.body) {
+                                        return Err(invalid("joined blend edges belong to different or unavailable bodies"));
+                                    }
+                                    if new_edge_names.contains(&selected.name) {
+                                        return Err(invalid("duplicate joined blend edge selection"));
+                                    }
+                                    *body = Some(selected.body);
+                                    edges.push(selected.point);
+                                    new_edge_names.push(selected.name);
+                                }
+                                continue;
+                            }
+                            Err(error) => error,
+                        };
                         let edge = if intersection.is_some() {
                             super::fillets::edge_with_mode(&records, &classes, *object, f.id, true)?
                         } else {
-                            super::fillets::edge(&records, &classes, *object, f.id)?
+                            super::fillets::edge(&records, &classes, *object, f.id)
+                                .map_err(|error| invalid(&format!("{error}; joined blend: {joined_error}")))?
                         };
                         if owners.get(&edge.operation) != Some(&edge.feature) {
                             return Err(invalid("blend edge operation belongs to another producer"));
                         }
                         let source_id = *feature_ids.get(&edge.feature).ok_or_else(|| invalid("blend precedes its source"))?;
                         let source = doc.feature(source_id).filter(|f| !f.suppressed).ok_or_else(|| invalid("blend source is suppressed"))?;
-                        let FeatureKind::Extrude { extent, .. } = &source.kind else { return Err(invalid("unsupported blend source feature")) };
+                        let FeatureKind::Extrude { extent, sketch, .. } = &source.kind else {
+                            return Err(invalid("unsupported blend source feature"));
+                        };
+                        let distance = doc.eval(&extent.distance, Kind::Length)?;
                         if extent.direction != solidcraft_doc::Direction::Positive
                             || extent.start_offset.is_some()
                             || extent.taper.as_ref().map(|e| doc.eval(e, Kind::Angle)).transpose()?.is_some_and(|a| a.abs() > 1e-12)
-                            || doc.eval(&extent.distance, Kind::Length)? <= 0.
+                            || distance.abs() <= 1e-12
                         {
                             return Err(invalid("unsupported blend source extent"));
                         }
@@ -240,15 +398,36 @@ impl Design {
                         for label in &edge.labels {
                             let name = match label {
                                 1 => format!("F{source_id}:start"),
-                                2 => format!("F{source_id}:top"),
+                                // Native label 2 is the travel cap for either
+                                // sign; our cap role is relative to the sketch.
+                                2 => format!("F{source_id}:{}", if distance < 0. { "bottom" } else { "top" }),
                                 _ => {
-                                    let curve = super::side_roles::curve(&records, &classes, edge.feature, u64::from(*label), profile, &lines)?;
+                                    let solved = state.sketch(sketch.0).ok_or_else(|| invalid("missing blend source sketch"))?;
+                                    let resolver = if edge.closed { super::blend_sides::circle } else { super::blend_sides::curve };
+                                    let curve = resolver(
+                                        &records,
+                                        &classes,
+                                        edge.feature,
+                                        u64::from(*label),
+                                        super::blend_sides::Source { profile, lines: &lines, circles: &circles, solved },
+                                    )?;
                                     format!("F{source_id}:side:c{curve}")
                                 }
                             };
                             face_names.insert(*label, name);
                         }
-                        if let Some(native_flip) = native_flip {
+                        if edge.closed
+                            && let Some(native_flip) = native_flip
+                        {
+                            // The oriented native recipe identifies the primary
+                            // setback face. Complete circular caps use the kernel's
+                            // cap-first convention, independent of world placement.
+                            let flip = (super::chamfers::primary_face(&edge)? == 3) ^ native_flip;
+                            if resolved_flip.is_some_and(|old| old != flip) {
+                                return Err(invalid("mixed native circular chamfer orientations within one group"));
+                            }
+                            resolved_flip = Some(flip);
+                        } else if let Some(native_flip) = native_flip {
                             let primary = super::chamfers::primary_face(&edge)?;
                             let names = solidcraft_doc::naming::face_names(target);
                             let mut normals = Vec::new();
@@ -291,6 +470,26 @@ impl Design {
                             .enumerate()
                             .filter(|(_, name)| name.split('|').map(solidcraft_doc::naming::strip_piece).collect::<BTreeSet<_>>() == adjacent)
                             .collect();
+                        if edge.closed {
+                            if selected.is_empty() || selected.len() > 64 || edges.len() + selected.len() > 1000 {
+                                return Err(invalid("missing or excessive circular blend boundary"));
+                            }
+                            let plane = state.sketch(sketch.0).ok_or_else(|| invalid("missing circular blend sketch"))?.plane;
+                            let names: Vec<_> = selected.iter().map(|(_, name)| name.clone()).collect();
+                            solidcraft_doc::project::resolve_edge_circle(&state, &plane, name, &names)?;
+                            let mesh = target.mesh();
+                            for (index, selected) in selected {
+                                if new_edge_names.contains(&selected) {
+                                    return Err(invalid("duplicate circular blend edge selection"));
+                                }
+                                let points =
+                                    mesh.edges.get(index).filter(|p| p.len() >= 3).ok_or_else(|| invalid("missing circular blend samples"))?;
+                                let point = *points.get(points.len() / 2).ok_or_else(|| invalid("missing circular blend sample"))?;
+                                edges.push(point);
+                                new_edge_names.push(selected);
+                            }
+                            continue;
+                        }
                         let [(index, selected)] = selected.as_slice() else {
                             return Err(invalid("blend edge incidence is missing or ambiguous"));
                         };
@@ -313,9 +512,9 @@ impl Design {
                         edges.push((*start + *end) * 0.5);
                         new_edge_names.push(selected.clone());
                     }
-                    Ok((count, resolved_flip.unwrap_or(false)))
+                    Ok((edges.len() - initial_edges, resolved_flip.unwrap_or(false)))
                 };
-                let kind = match f.kind {
+                let mut kind = match f.kind {
                     HistoryKind::TwoEdgePoint { edges, position, .. } => {
                         use solidcraft_doc::construct::{GeoRef, PointDef};
                         let mut sources = Vec::new();
@@ -403,24 +602,34 @@ impl Design {
                                 &mut projection_model,
                                 &mut new_edge_names,
                             )?;
-                            groups.push(solidcraft_doc::ChamferGroup { count, distance, distance2, angle, flip, tangent_chain: set.tangent_chain });
+                            groups.push(solidcraft_doc::ChamferGroup {
+                                count,
+                                distance: (distance).into(),
+                                distance2: distance2.map(Into::into),
+                                angle: angle.map(Into::into),
+                                flip,
+                                tangent_chain: set.tangent_chain,
+                            });
                         }
                         if groups.is_empty() {
                             return Err(invalid("missing chamfer group"));
                         }
                         let first = groups.remove(0);
                         FeatureKind::Chamfer {
-                            edges,
+                            edges: edges.into_iter().map(Into::into).collect(),
                             distance: first.distance,
                             distance2: first.distance2,
                             angle: first.angle,
                             flip: first.flip,
                             tangent_chain: first.tangent_chain,
                             groups,
-                            body,
+                            body: body.map(Into::into),
                         }
                     }
                     HistoryKind::Fillet { sets } => {
+                        if sets.iter().any(|set| set.face_container.is_some()) {
+                            return Err(invalid("fillet face selections require live boundary reconstruction"));
+                        }
                         let mut body = None;
                         let mut edges = Vec::new();
                         let mut primary_radius = None;
@@ -441,7 +650,12 @@ impl Design {
                                 return Err(invalid("fillet groups reuse a radius binding"));
                             }
                             let (count, _) = import_edges(
-                                &super::loft_faces::objects(&records, &classes, set.container, f.id)?,
+                                &super::loft_faces::objects(
+                                    &records,
+                                    &classes,
+                                    set.container.ok_or_else(|| invalid("missing fillet edge selection"))?,
+                                    f.id,
+                                )?,
                                 None,
                                 None,
                                 &mut body,
@@ -455,21 +669,22 @@ impl Design {
                             } else {
                                 groups.push(solidcraft_doc::FilletRadiusGroup {
                                     count,
-                                    radius: radius.name.clone(),
+                                    radius: (radius.name.clone()).into(),
                                     tangent_chain: set.tangent_chain,
                                 });
                             }
                         }
                         FeatureKind::Fillet {
-                            edges,
-                            radius: primary_radius.ok_or_else(|| invalid("missing first fillet radius"))?,
-                            body,
+                            edges: edges.into_iter().map(Into::into).collect(),
+                            radius: (primary_radius.ok_or_else(|| invalid("missing first fillet radius"))?).into(),
+                            body: body.map(Into::into),
                             style: if groups.is_empty() {
                                 solidcraft_doc::FilletStyle::Constant
                             } else {
                                 solidcraft_doc::FilletStyle::Grouped { groups }
                             },
                             fit: solidcraft_doc::FilletFit::Exact,
+                            corner: Default::default(),
                             tangent_chain: sets.first().is_some_and(|s| s.tangent_chain),
                         }
                     }
@@ -484,10 +699,19 @@ impl Design {
                         let target_objects = super::combines::objects(&records, &classes, target_container, f.id, None)?;
                         let [target_object] = target_objects.as_slice() else { return Err(invalid("Combine requires one target body")) };
                         let mut selected_handles = BTreeSet::new();
-                        let mut body = |object| -> Result<(String, u64)> {
-                            let (selected, handle) = super::loft_faces::combine_target(&records, &classes, object, f.id)?;
+                        let mut body = |object| -> Result<Option<(String, u64)>> {
+                            let (mut selected, handle) = super::loft_faces::combine_target(&records, &classes, object, f.id)
+                                .map_err(|e| invalid(&format!("Combine selector {object}: {e}")))?;
                             let operation = selected.operations.first().ok_or_else(|| invalid("missing Combine source operation"))?;
-                            if owners.get(&operation.operation) != Some(&selected.feature) || !selected_handles.insert(handle) {
+                            if handle.is_none() {
+                                selected.feature = *owners.get(&operation.operation).ok_or_else(|| invalid("missing retired pattern owner"))?;
+                                if !classes.get(&selected.feature).is_some_and(|c| c.id == super::circular_patterns::CLASS && c.version == 0) {
+                                    return Err(invalid("null Combine source is not a circular pattern"));
+                                }
+                            }
+                            if owners.get(&operation.operation) != Some(&selected.feature)
+                                || handle.is_some_and(|handle| !selected_handles.insert(handle))
+                            {
                                 return Err(invalid("duplicate or inconsistent Combine source identity"));
                             }
                             let source = feature_ids
@@ -495,7 +719,56 @@ impl Design {
                                 .and_then(|id| doc.feature(*id))
                                 .filter(|f| !f.suppressed)
                                 .ok_or_else(|| invalid("Combine source follows its selector or is suppressed"))?;
-                            let [body] = source.body_names.as_slice() else { return Err(invalid("Combine source requires one produced body")) };
+                            let patterned = classes.get(&selected.feature).is_some_and(|c| c.id == super::circular_patterns::CLASS);
+                            let body = if patterned {
+                                let output = super::circular_patterns::body_output(
+                                    &records,
+                                    &classes,
+                                    owners,
+                                    selected.feature,
+                                    handle,
+                                    operation.operation,
+                                    u64::from(operation.label),
+                                )?;
+                                let seed = feature_ids
+                                    .get(&output.source_feature)
+                                    .and_then(|id| doc.feature(*id))
+                                    .ok_or_else(|| invalid("missing pattern seed feature"))?;
+                                let [seed_body] = seed.body_names.as_slice() else {
+                                    return Err(invalid("ambiguous pattern seed body"));
+                                };
+                                for tag in &output.contributors {
+                                    let modifier = owners
+                                        .get(tag)
+                                        .and_then(|native| feature_ids.get(native))
+                                        .and_then(|id| doc.feature(*id))
+                                        .filter(|modifier| {
+                                            !modifier.suppressed
+                                                && doc.features.iter().position(|f| f.id == modifier.id)
+                                                    < doc.features.iter().position(|f| f.id == source.id)
+                                        })
+                                        .ok_or_else(|| invalid("pattern contributor is missing, suppressed or follows the pattern"))?;
+                                    if !matches!(&modifier.kind, FeatureKind::Fillet { body: Some(body), .. } | FeatureKind::Chamfer { body: Some(body), .. } if body == seed_body)
+                                    {
+                                        return Err(invalid("pattern contributor does not modify the selected seed body"));
+                                    }
+                                }
+                                let Some(index) = output.index else {
+                                    super::body_labels::validate_aliases(
+                                        &records,
+                                        &classes,
+                                        selected.feature,
+                                        u64::from(operation.label),
+                                        &operation.aliases,
+                                    )?;
+                                    return Ok(None);
+                                };
+                                source.body_names.get(index).ok_or_else(|| invalid("missing generated pattern body"))?
+                            } else {
+                                let [body] = source.body_names.as_slice() else { return Err(invalid("Combine source requires one produced body")) };
+                                body
+                            };
+                            let handle = handle.ok_or_else(|| invalid("missing live Combine body handle"))?;
                             if !active_bodies.contains(body) {
                                 return Err(invalid("Combine source is no longer available"));
                             }
@@ -513,21 +786,24 @@ impl Design {
                                 {
                                     return Err(invalid("Combine contributor belongs to another body or operation"));
                                 }
-                                if operation.flags == 3 {
+                                super::body_labels::validate_aliases(&records, &classes, native, u64::from(operation.label), &operation.aliases)?;
+                                if operation.flags == 3 && patterned {
+                                    // Source, instance and handle were certified when selecting this body.
+                                } else if operation.flags == 3 {
                                     let groups = super::mirrors::output_operations(&records, &classes, owners, native, handle, operation.operation)?;
                                     super::body_labels::validate_mirror(&records, &classes, native, u64::from(operation.label), handle, &groups)?;
                                 } else {
                                     super::body_labels::validate(&records, &classes, native, operation.operation, u64::from(operation.label))?;
                                 }
                             }
-                            Ok((body.clone(), handle))
+                            Ok(Some((body.clone(), handle)))
                         };
-                        let (target, _) = body(*target_object)?;
+                        let (target, _) = body(*target_object)?.ok_or_else(|| invalid("Combine target is retired"))?;
                         let mut tools = Vec::new();
                         let mut tool_handles = BTreeSet::new();
                         for container in tool_containers {
                             for object in super::combines::objects(&records, &classes, container, f.id, Some(operation_tag))? {
-                                let (tool, handle) = body(object)?;
+                                let Some((tool, handle)) = body(object)? else { continue };
                                 if tools.len() >= 64 || tools.contains(&tool) || tool == target {
                                     return Err(invalid("duplicate or excessive Combine tools"));
                                 }
@@ -541,7 +817,101 @@ impl Design {
                         if !f.suppressed && !keep_tools {
                             active_bodies.retain(|body| !tools.contains(body));
                         }
-                        FeatureKind::Combine { target, tools, operation, keep_tools }
+                        FeatureKind::Combine { target: (target).into(), tools: tools.into_iter().map(Into::into).collect(), operation, keep_tools }
+                    }
+                    HistoryKind::CircularPattern(pattern) => {
+                        let axis = super::circular_patterns::origin_axis(&records, &classes, pattern.axis, root)?;
+                        let count = bindings
+                            .get(&pattern.count)
+                            .filter(|p| p.owner == Some(f.id) && p.label == "countU" && Kind::from_unit(&p.display_unit) == Kind::Unitless)
+                            .ok_or_else(|| invalid("missing circular-pattern count binding"))?;
+                        let angle = bindings
+                            .get(&pattern.angle)
+                            .filter(|p| p.owner == Some(f.id) && p.label == "TotalAngle" && Kind::from_unit(&p.display_unit) == Kind::Angle)
+                            .ok_or_else(|| invalid("missing circular-pattern angle binding"))?;
+                        if count.value != pattern.instances as f64 {
+                            return Err(invalid("circular-pattern count disagrees with its instances"));
+                        }
+                        let mut targets = Vec::new();
+                        for target in &pattern.targets {
+                            let source = feature_ids
+                                .get(target)
+                                .and_then(|id| doc.feature(*id))
+                                .filter(|f| !f.suppressed)
+                                .ok_or_else(|| invalid("circular-pattern target is unavailable"))?;
+                            let [body] = source.body_names.as_slice() else { return Err(invalid("circular-pattern target requires one body")) };
+                            if !active_bodies.contains(body) || targets.contains(body) {
+                                return Err(invalid("missing or duplicate circular-pattern target"));
+                            }
+                            targets.push(body.clone());
+                        }
+                        let mut features = Vec::new();
+                        let mut bodies = Vec::new();
+                        if pattern.features.is_empty() {
+                            if operation_owners.is_none() {
+                                operation_owners = Some(self.operation_owners()?);
+                            }
+                            let owners = operation_owners.as_ref().ok_or_else(|| invalid("missing circular-pattern operations"))?;
+                            for object in super::loft_faces::objects(&records, &classes, pattern.source_container, f.id)? {
+                                let target = super::loft_faces::target_object(&records, &classes, object, f.id)?;
+                                let [operation] = target.operations.as_slice() else {
+                                    return Err(invalid("composite circular-pattern source is not supported yet"));
+                                };
+                                if owners.get(&operation.operation) != Some(&target.feature) {
+                                    return Err(invalid("circular-pattern recipe disagrees with its source"));
+                                }
+                                super::body_labels::validate(&records, &classes, target.feature, operation.operation, u64::from(operation.label))?;
+                                let source = feature_ids
+                                    .get(&target.feature)
+                                    .and_then(|id| doc.feature(*id))
+                                    .filter(|f| !f.suppressed)
+                                    .ok_or_else(|| invalid("circular-pattern source follows its selector or is suppressed"))?;
+                                let [body] = source.body_names.as_slice() else {
+                                    return Err(invalid("circular-pattern source requires one produced body"));
+                                };
+                                if !active_bodies.contains(body) || bodies.contains(body) {
+                                    return Err(invalid("missing or duplicate circular-pattern source body"));
+                                }
+                                bodies.push(body.clone());
+                            }
+                        } else {
+                            for source in &pattern.features {
+                                let source = feature_ids
+                                    .get(source)
+                                    .and_then(|id| doc.feature(*id))
+                                    .filter(|f| !f.suppressed)
+                                    .ok_or_else(|| invalid("circular-pattern feature follows its selector or is suppressed"))?;
+                                let FeatureKind::Extrude { operation, targets: source_targets, .. } = &source.kind else {
+                                    return Err(invalid("unsupported circular-pattern feature kind"));
+                                };
+                                if *operation != Operation::NewBody && *source_targets != targets {
+                                    return Err(invalid("circular-pattern feature targets disagree with its operation"));
+                                }
+                                features.push(source.name.clone());
+                            }
+                        }
+                        let mut outputs = Vec::new();
+                        for _ in &pattern.outputs {
+                            body_number += 1;
+                            outputs.push(format!("Body{body_number}"));
+                        }
+                        if !f.suppressed {
+                            active_bodies.extend(outputs.iter().cloned());
+                        }
+                        new_body = Some(outputs);
+                        FeatureKind::Pattern {
+                            features: features.into_iter().map(Into::into).collect(),
+                            bodies: bodies.into_iter().map(Into::into).collect(),
+                            pattern: solidcraft_doc::PatternKind::Circular {
+                                origin: (Vec3::ZERO).into(),
+                                axis: (axis).into(),
+                                count: (count.name.clone()).into(),
+                                angle: (angle.name.clone()).into(),
+                                symmetric: pattern.symmetric,
+                                alignment: Default::default(),
+                                reversed: false,
+                            },
+                        }
                     }
                     HistoryKind::MirrorFeatures { plane, sources, targets, output_count } => {
                         let (plane, _) = plane_base(&records, &classes, &planes, plane, root)?;
@@ -582,7 +952,7 @@ impl Design {
                             active_bodies.extend(outputs.iter().cloned());
                         }
                         new_body = Some(outputs);
-                        FeatureKind::Mirror { features, plane, bodies: vec![], combine: false }
+                        FeatureKind::Mirror { features: features.into_iter().map(Into::into).collect(), plane, bodies: vec![], combine: false }
                     }
                     HistoryKind::Mirror { plane, source_container, output_count } => {
                         let (plane, _) = plane_base(&records, &classes, &planes, plane, root)?;
@@ -624,7 +994,7 @@ impl Design {
                             active_bodies.extend(outputs.iter().cloned());
                         }
                         new_body = Some(outputs);
-                        FeatureKind::Mirror { features: vec![], plane, bodies, combine: false }
+                        FeatureKind::Mirror { features: vec![], plane, bodies: bodies.into_iter().map(Into::into).collect(), combine: false }
                     }
                     HistoryKind::OffsetPlane { geometry, definition, extra_offset } => {
                         let definition = super::planes::definition(&records, &classes, definition, f.id)?;
@@ -641,17 +1011,37 @@ impl Design {
                             return Err(invalid("plane definition disagrees with its dependencies"));
                         }
                         new_plane = Some((geometry, cached));
-                        FeatureKind::ConstructionPlane { plane: PlaneRef::Offset { base: Box::new(base), distance: p.name.clone() } }
+                        FeatureKind::ConstructionPlane { plane: PlaneRef::Offset { base: Box::new(base), distance: (p.name.clone()).into() } }
                     }
                     HistoryKind::Sketch { geometry, placement } => {
+                        // Legacy v17 can repeat the complete membership with default
+                        // state 1. Controlled local import/edit/resave checks preserve
+                        // the same geometry and constraints with this table present.
+                        // Partial or repeated entries have not been established.
                         if !placement.legacy_entity_metadata.is_empty() {
-                            return Err(invalid("legacy sketch entity metadata reconstruction is not supported yet"));
+                            let ids: BTreeSet<_> = placement.legacy_entity_metadata.iter().map(|(id, _)| *id).collect();
+                            let members: BTreeSet<_> = placement.entities.iter().copied().collect();
+                            if ids.len() != placement.legacy_entity_metadata.len()
+                                || ids != members
+                                || placement.legacy_entity_metadata.iter().any(|(_, flags)| *flags != 1)
+                            {
+                                return Err(invalid("unsupported legacy sketch entity metadata membership or state"));
+                            }
                         }
                         if placement.owner != root {
                             return Err(invalid("non-root sketch placement is not supported yet"));
                         }
                         let plane = plane(&placement.matrix)?;
-                        let plane_ref = if !has_offset_planes {
+                        let graph =
+                            sketch_graphs.get(&geometry).filter(|g| g.feature == f.id).ok_or_else(|| invalid("missing sketch attachment graph"))?;
+                        let plane_ref = if let Some(body) = graph.support {
+                            let definition = super::planes::face_definition(&records, &classes, placement.support, f.id, body)?;
+                            if !super::planes::same_support_plane(definition.plane, plane) {
+                                return Err(invalid("sketch placement disagrees with its support definition"));
+                            }
+                            let (anchor, _) = import_face(definition.base)?;
+                            super::planes::attach_sketch(&doc, &projection_model.state(), anchor, plane)?
+                        } else if !has_offset_planes {
                             PlaneRef::Custom { plane }
                         } else {
                             let definition = super::planes::definition(&records, &classes, placement.support, f.id)?;
@@ -683,9 +1073,29 @@ impl Design {
                         if members.len() != placement.entities.len() {
                             return Err(invalid("duplicate sketch entity"));
                         }
-                        for id in &placement.projections {
-                            let projection = projections::decode(&records, &classes, *id, f.id)?;
+                        let projections =
+                            placement.projections.iter().map(|id| projections::decode(&records, &classes, *id, f.id)).collect::<Result<Vec<_>>>()?;
+                        for projection in projections.into_iter().flatten() {
                             let (entities, namespace) = match &projection.source {
+                                projections::Source::Composite(boundary) => {
+                                    if operation_owners.is_none() {
+                                        operation_owners = Some(self.operation_owners()?);
+                                    }
+                                    projection_model.evaluate(&doc);
+                                    if projection_model.results.iter().any(|r| r.error.is_some()) {
+                                        return Err(invalid("cannot regenerate composite projection dependencies"));
+                                    }
+                                    let state = projection_model.state();
+                                    let context = super::body_projections::Context {
+                                        native: &native,
+                                        profiles: &source_profiles,
+                                        doc: &doc,
+                                        model: &state,
+                                        features: &feature_ids,
+                                        operations: operation_owners.as_ref().ok_or_else(|| invalid("missing topology operation ownership"))?,
+                                    };
+                                    (boundary.attach(&context, &projection_model, geometry, plane, &plane_ref, &mut sketch)?, (3_u8, boundary.body))
+                                }
                                 projections::Source::Sketch { geometry: source_geometry, .. } => {
                                     let (source_feature, source_plane) =
                                         sketches.get(source_geometry).copied().ok_or_else(|| invalid("projection precedes its source sketch"))?;
@@ -716,6 +1126,81 @@ impl Design {
                                         (if edge.recipe.end { 2_u8 } else { 1_u8 }, edge.body),
                                     )
                                 }
+                                projections::Source::CutBody(edge) => {
+                                    if operation_owners.is_none() {
+                                        operation_owners = Some(self.operation_owners()?);
+                                    }
+                                    projection_model.evaluate(&doc);
+                                    if projection_model.results.iter().any(|r| r.error.is_some()) {
+                                        return Err(invalid("cannot regenerate cut-face projection dependencies"));
+                                    }
+                                    let state = projection_model.state();
+                                    let context = super::body_projections::Context {
+                                        native: &native,
+                                        profiles: &source_profiles,
+                                        doc: &doc,
+                                        model: &state,
+                                        features: &feature_ids,
+                                        operations: operation_owners.as_ref().ok_or_else(|| invalid("missing topology operation ownership"))?,
+                                    };
+                                    (
+                                        edge.attach(&context, projection.target, geometry, plane, &mut sketch)?,
+                                        (if edge.end { 2_u8 } else { 1_u8 }, edge.body),
+                                    )
+                                }
+                                projections::Source::FaceCap(edge) => {
+                                    if operation_owners.is_none() {
+                                        operation_owners = Some(self.operation_owners()?);
+                                    }
+                                    projection_model.evaluate(&doc);
+                                    if projection_model.results.iter().any(|r| r.error.is_some()) {
+                                        return Err(invalid("cannot regenerate face-cap projection dependencies"));
+                                    }
+                                    let state = projection_model.state();
+                                    let context = super::body_projections::Context {
+                                        native: &native,
+                                        profiles: &source_profiles,
+                                        doc: &doc,
+                                        model: &state,
+                                        features: &feature_ids,
+                                        operations: operation_owners.as_ref().ok_or_else(|| invalid("missing topology operation ownership"))?,
+                                    };
+                                    (edge.attach(&context, projection.target, geometry, plane, &mut sketch)?, (2_u8, edge.body))
+                                }
+                                projections::Source::ChamferCap(edge) => {
+                                    if operation_owners.is_none() {
+                                        operation_owners = Some(self.operation_owners()?);
+                                    }
+                                    projection_model.evaluate(&doc);
+                                    if projection_model.results.iter().any(|r| r.error.is_some()) {
+                                        return Err(invalid("cannot regenerate chamfer cap dependencies"));
+                                    }
+                                    let state = projection_model.state();
+                                    let operations = operation_owners.as_ref().ok_or_else(|| invalid("missing chamfer operation ownership"))?;
+                                    let context = super::body_projections::Context {
+                                        native: &native,
+                                        profiles: &source_profiles,
+                                        doc: &doc,
+                                        model: &state,
+                                        features: &feature_ids,
+                                        operations,
+                                    };
+                                    let topology = super::composite_blends::Context {
+                                        records: &records,
+                                        classes: &classes,
+                                        operations,
+                                        features: &feature_ids,
+                                        profiles: &source_profiles,
+                                        lines: &lines,
+                                        circles: &circles,
+                                        doc: &doc,
+                                        state: &state,
+                                        model: &projection_model,
+                                        before: None,
+                                        depth: 0,
+                                    };
+                                    (edge.attach(&context, &topology, projection.target, geometry, plane, &mut sketch)?, (4_u8, edge.body))
+                                }
                             };
                             for (id, index, source_point) in entities.points {
                                 if !members.contains(&id) {
@@ -736,11 +1221,12 @@ impl Design {
                                     point_indices.insert(id, index);
                                 }
                             }
-                            let (id, index) = entities.curve;
-                            if !members.contains(&id) || !consumed.insert(id) {
-                                return Err(invalid("duplicate or foreign projected curve"));
+                            for (id, index) in entities.curves {
+                                if !members.contains(&id) || !consumed.insert(id) {
+                                    return Err(invalid("duplicate or foreign projected curve"));
+                                }
+                                curve_indices.insert(id, index);
                             }
-                            curve_indices.insert(id, index);
                         }
                         let projected = consumed.clone();
                         let mut has_origin = false;
@@ -1051,9 +1537,9 @@ impl Design {
                                 return Err(invalid("loft section requires one source"));
                             };
                             if classes.get(object).is_some_and(|c| c.id == super::body_projections::SELECTOR) {
-                                let anchor = import_face(*object)?;
+                                let (anchor, _) = import_face(*object)?;
                                 sections.push(solidcraft_doc::LoftSection {
-                                    sketch: 0,
+                                    sketch: (0).into(),
                                     profiles: ProfileSel::All,
                                     point: None,
                                     face: Some(Box::new(anchor)),
@@ -1083,8 +1569,9 @@ impl Design {
                                 }
                             }
                             let (sketch, _) = sketches.get(&profile.geometry).ok_or_else(|| invalid("loft section must precede its feature"))?;
+                            pending_profiles.insert(sections.len(), *profile);
                             sections.push(solidcraft_doc::LoftSection {
-                                sketch: *sketch,
+                                sketch: (*sketch).into(),
                                 profiles: profile_selection(profile, &circles)?,
                                 point: None,
                                 face: None,
@@ -1156,15 +1643,30 @@ impl Design {
                         } else {
                             solidcraft_doc::LoftInterpolation::Uniform
                         };
-                        FeatureKind::Loft { sections, interpolation, operation, targets }
+                        FeatureKind::Loft { sections, interpolation, operation, targets: targets.into_iter().map(Into::into).collect() }
                     }
-                    HistoryKind::Extrude { operation, profile_containers } => {
-                        let selected = selected(&records, &profiles, f.id, &profile_containers)?;
-                        let [profile] = selected.as_slice() else {
-                            return Err(invalid("multiple-profile extrusion reconstruction is not supported yet"));
+                    HistoryKind::Extrude { operation, profile_containers, target_containers } => {
+                        let objects = profile_containers
+                            .iter()
+                            .map(|container| super::loft_faces::objects(&records, &classes, *container, f.id))
+                            .collect::<Result<Vec<_>>>()?
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>();
+                        let has_face = objects.iter().any(|id| classes.get(id).is_some_and(|c| c.id == super::body_projections::SELECTOR));
+                        let (profile, anchor, plane) = if has_face {
+                            let [object] = objects.as_slice() else { return Err(invalid("face extrusion requires exactly one face")) };
+                            let (anchor, plane) = import_face(*object)?;
+                            (None, Some(anchor), plane)
+                        } else {
+                            let selected = selected(&records, &profiles, f.id, &profile_containers)?;
+                            let [profile] = selected.as_slice() else {
+                                return Err(invalid("multiple-profile extrusion reconstruction is not supported yet"));
+                            };
+                            let (_, plane) =
+                                sketches.get(&profile.geometry).copied().ok_or_else(|| invalid("extrusion precedes its source sketch"))?;
+                            (Some(*profile), None, plane)
                         };
-                        let (sketch, plane) =
-                            sketches.get(&profile.geometry).copied().ok_or_else(|| invalid("extrusion precedes its source sketch"))?;
                         let (mut extent, endpoint) = extent(&records, &classes, &bindings, f.id, &plane)?;
                         if let Some(container) = endpoint {
                             let objects = super::loft_faces::objects(&records, &classes, container, f.id)?;
@@ -1172,13 +1674,12 @@ impl Design {
                                 return Err(invalid("extrusion endpoint requires one entity"));
                             };
                             let target = if classes.get(object).is_some_and(|c| c.id == super::body_projections::SELECTOR) {
-                                let anchor = import_face(*object)?;
-                                let plane = doc.resolve_face_anchor(&anchor, 0, &projection_model.state())?;
+                                let (anchor, plane) = import_face(*object)?;
                                 PlaneRef::Face { plane, at: plane.origin, name: None, anchor: Some(Box::new(anchor)) }
                             } else {
                                 let geometry = super::planes::tracked_plane(&records, &classes, *object, f.id)?;
                                 if let Some((name, _)) = planes.get(&geometry) {
-                                    PlaneRef::Construction { name: name.clone() }
+                                    PlaneRef::Construction { name: (name.clone()).into() }
                                 } else {
                                     let (name, _) = super::planes::origin(&records, &classes, geometry, root)?;
                                     PlaneRef::Origin { name }
@@ -1186,11 +1687,19 @@ impl Design {
                             };
                             extent.to_plane = Some(Box::new(target));
                         }
-                        source_profiles.insert(f.id, *profile);
+                        let face_body = anchor.as_ref().map(|anchor| anchor.target.body.clone());
+                        let (sketch, selection, region_count) = if let Some(profile) = profile {
+                            source_profiles.insert(f.id, profile);
+                            pending_profiles.insert(0, profile);
+                            let (sketch, _) = sketches.get(&profile.geometry).copied().ok_or_else(|| invalid("missing extrusion sketch"))?;
+                            (sketch, profile_selection(profile, &circles)?, profile.regions.len())
+                        } else {
+                            let anchor = anchor.ok_or_else(|| invalid("missing extrusion face anchor"))?;
+                            let sketch = face_extrusion_sketch(&mut doc, &projection_model.state(), anchor, plane, &f.name)?;
+                            (sketch, ProfileSel::All, 1)
+                        };
                         let targets = if operation == Operation::NewBody {
-                            let bodies: Vec<_> = profile
-                                .regions
-                                .iter()
+                            let bodies: Vec<_> = (0..region_count)
                                 .map(|_| {
                                     body_number += 1;
                                     format!("Body{body_number}")
@@ -1201,15 +1710,71 @@ impl Design {
                             }
                             new_body = Some(bodies);
                             vec![]
-                        } else {
-                            if active_bodies.len() != 1 {
-                                return Err(invalid("multi-body boolean target reconstruction is not supported yet"));
+                        } else if !target_containers.is_empty() {
+                            if operation_owners.is_none() {
+                                operation_owners = Some(self.operation_owners()?);
                             }
-                            active_bodies.clone()
+                            let context = super::extrusion_targets::Context {
+                                records: &records,
+                                classes: &classes,
+                                document: &doc,
+                                feature_ids: &feature_ids,
+                                owners: operation_owners.as_ref().ok_or_else(|| invalid("missing extrusion target operations"))?,
+                                active: &active_bodies,
+                            };
+                            let body = context.single(&target_containers, f.id)?;
+                            if face_body.as_ref().is_some_and(|source| source != &body) {
+                                return Err(invalid("face extrusion profile and explicit target select different bodies"));
+                            }
+                            vec![body]
+                        } else {
+                            if let Some(body) = face_body {
+                                if !active_bodies.contains(&body) {
+                                    return Err(invalid("face extrusion target body is unavailable"));
+                                }
+                                vec![body]
+                            } else {
+                                if active_bodies.len() != 1 {
+                                    return Err(invalid("multi-body boolean target reconstruction is not supported yet"));
+                                }
+                                active_bodies.clone()
+                            }
                         };
-                        FeatureKind::Extrude { sketch, profiles: profile_selection(profile, &circles)?, extent, operation, targets, thin: None }
+                        FeatureKind::Extrude {
+                            sketch: (sketch).into(),
+                            profiles: selection,
+                            extent,
+                            operation,
+                            targets: targets.into_iter().map(Into::into).collect(),
+                            thin: None,
+                        }
                     }
                 };
+                match &mut kind {
+                    FeatureKind::Extrude { sketch, profiles, .. } => {
+                        *profiles = resolved_profile_selection(
+                            profiles.clone(),
+                            pending_profiles.get(&0).copied(),
+                            &circles,
+                            &doc,
+                            &mut projection_model,
+                            sketch.0,
+                        )?;
+                    }
+                    FeatureKind::Loft { sections, .. } => {
+                        for (index, section) in sections.iter_mut().enumerate() {
+                            section.profiles = resolved_profile_selection(
+                                section.profiles.clone(),
+                                pending_profiles.get(&index).copied(),
+                                &circles,
+                                &doc,
+                                &mut projection_model,
+                                (section.sketch).0,
+                            )?;
+                        }
+                    }
+                    _ => {}
+                }
                 let id = doc.add_feature(kind, Some(&f.name))?;
                 feature_ids.insert(f.id, id);
                 let feature = doc.features.iter_mut().find(|f| f.id == id).ok_or_else(|| invalid("missing imported feature"))?;
@@ -1233,7 +1798,7 @@ impl Design {
                         continue;
                     }
                     *name = p.name.clone();
-                    *expression = p.expression.clone();
+                    *expression = (p.expression.clone()).into();
                     transferred.insert(p.name.clone());
                     if !p.comment.is_empty() {
                         doc.param_comments.insert(p.name.clone(), p.comment.clone());
@@ -1372,8 +1937,45 @@ fn xy_normal(normal: &[f64; 3]) -> bool {
     normal.iter().zip([0., 0., 1.]).all(|(value, expected)| value.is_finite() && (value - expected).abs() <= 1e-10)
 }
 
+fn resolved_profile_selection(
+    selection: ProfileSel,
+    native: Option<&SketchProfile>,
+    circles: &BTreeMap<u64, SketchCircle>,
+    doc: &Document,
+    model: &mut solidcraft_doc::Model,
+    sketch: u64,
+) -> Result<ProfileSel> {
+    let grouped = native.filter(|profile| profile.region_members.iter().any(|members| !members.is_empty()));
+    if native.is_none() && !matches!(selection, ProfileSel::PieceBoundaries { .. }) {
+        return Ok(selection);
+    }
+    model.evaluate(doc);
+    if model.results.iter().any(|r| r.error.is_some()) {
+        return Err(invalid("cannot regenerate selected profile dependencies"));
+    }
+    let state = model.state();
+    let solved = state.sketch(sketch).ok_or_else(|| invalid("missing selected profile sketch"))?;
+    if let Some(profile) = grouped {
+        return super::profile_groups::resolve(profile, circles, solved);
+    }
+    let selection =
+        if !matches!(selection, ProfileSel::PieceBoundaries { .. }) && solidcraft_doc::profile_selection_indices(solved, &selection).is_err() {
+            match native {
+                Some(profile) => selection_for_regions(&profile.regions, circles, true)?,
+                None => selection,
+            }
+        } else {
+            selection
+        };
+    super::profile_selection::resolve(selection, solved)
+}
+
 fn profile_selection(profile: &SketchProfile, circles: &BTreeMap<u64, SketchCircle>) -> Result<ProfileSel> {
-    if profile.regions.iter().flatten().flat_map(|boundary| &boundary.pieces).any(|(_, count)| *count != 1) {
+    selection_for_regions(&profile.regions, circles, false)
+}
+
+pub(super) fn selection_for_regions(regions: &[Vec<ProfileLoop>], circles: &BTreeMap<u64, SketchCircle>, directed: bool) -> Result<ProfileSel> {
+    if directed || regions.iter().flatten().flat_map(|boundary| &boundary.pieces).any(|(_, count)| *count != 1) {
         let boundary = |boundary: &ProfileLoop| -> Result<Vec<solidcraft_doc::sketch::ProfilePiece>> {
             let mut pieces = Vec::new();
             for ((id, (piece, count)), reversed) in boundary.curves.iter().zip(&boundary.pieces).zip(&boundary.reversed) {
@@ -1383,14 +1985,14 @@ fn profile_selection(profile: &SketchProfile, circles: &BTreeMap<u64, SketchCirc
             Ok(pieces)
         };
         let mut profiles = Vec::new();
-        for loops in &profile.regions {
+        for loops in regions {
             let outer = loops.iter().find(|l| l.outer).ok_or_else(|| invalid("missing outer profile boundary"))?;
             let mut holes = loops.iter().filter(|l| !l.outer).map(boundary).collect::<Result<Vec<_>>>()?;
             holes.sort();
             profiles.push(solidcraft_doc::PieceProfileBoundary { outer: boundary(outer)?, holes });
         }
         let mut circle_seams = BTreeMap::new();
-        for id in profile.regions.iter().flatten().flat_map(|boundary| &boundary.curves) {
+        for id in regions.iter().flatten().flat_map(|boundary| &boundary.curves) {
             if let Some(circle) = circles.get(id) {
                 let angle = circle.x_axis[1].atan2(circle.x_axis[0]).rem_euclid(std::f64::consts::TAU);
                 if angle > 1e-12 && angle < std::f64::consts::TAU - 1e-12 {
@@ -1406,7 +2008,7 @@ fn profile_selection(profile: &SketchProfile, circles: &BTreeMap<u64, SketchCirc
         ids
     };
     let mut profiles = Vec::new();
-    for loops in &profile.regions {
+    for loops in regions {
         let outer = loops.iter().find(|l| l.outer).ok_or_else(|| invalid("missing outer profile boundary"))?;
         let mut holes: Vec<_> = loops.iter().filter(|l| !l.outer).map(ids).collect();
         holes.sort();
@@ -1450,7 +2052,12 @@ pub(super) fn sketch_plane_reference(base: PlaneRef, cached: Plane, sketch: Plan
     if (cached.x * cos + cached.y * sin - sketch.x).len() > 1e-9 || (cached.y * cos - cached.x * sin - sketch.y).len() > 1e-9 {
         return Err(invalid("unsupported sketch basis rotation"));
     }
-    Ok(PlaneRef::AtAngle { base: Box::new(base), axis_origin: Vec3::default(), axis_dir: normal, angle: format!("{} deg", angle.to_degrees()) })
+    Ok(PlaneRef::AtAngle {
+        base: Box::new(base),
+        axis_origin: Vec3::default(),
+        axis_dir: normal,
+        angle: format!("{} deg", angle.to_degrees()).into(),
+    })
 }
 
 fn plane_base(
@@ -1461,7 +2068,7 @@ fn plane_base(
     root: u64,
 ) -> Result<(PlaneRef, Plane)> {
     if let Some((name, plane)) = planes.get(&id) {
-        return Ok((PlaneRef::Construction { name: name.clone() }, *plane));
+        return Ok((PlaneRef::Construction { name: (name.clone()).into() }, *plane));
     }
     let (name, plane) = super::planes::origin(records, classes, id, root)?;
     Ok((PlaneRef::Origin { name }, plane))
@@ -1496,6 +2103,38 @@ fn selected<'a>(
     Ok(selected)
 }
 
+/// A live face projection supplies the boundary; cached native tessellation does
+/// not participate in selection or geometry reconstruction.
+fn face_extrusion_sketch(
+    doc: &mut Document,
+    state: &solidcraft_doc::ModelState,
+    anchor: solidcraft_doc::FaceAnchor,
+    plane: Plane,
+    name: &str,
+) -> Result<u64> {
+    use solidcraft_doc::sketch::{LinkGeom, LinkKind};
+    let resolved = solidcraft_doc::project::resolve_anchored_face(doc, state, &plane, LinkKind::Project, &anchor)?;
+    let circular = match resolved.geom.as_slice() {
+        [LinkGeom::Circle(_, _)] => true,
+        [LinkGeom::Arc { c, a, b }, LinkGeom::Arc { c: d, a: p, b: q }] => {
+            let tolerance = 1e-6 * a.dist(*c).max(1.);
+            c.dist(*d) < tolerance && a.dist(*q) < tolerance && b.dist(*p) < tolerance && a.dist(*b) > tolerance
+        }
+        _ => false,
+    };
+    if !circular {
+        return Err(invalid("face extrusion requires a verified complete circular cap"));
+    }
+    let mut sketch = Sketch::new();
+    let link =
+        sketch.add_link_with_wires(LinkKind::Project, resolved.source, &resolved.geom, &resolved.wires).map_err(|e| invalid(&e.to_string()))?;
+    let entry = sketch.links.iter_mut().find(|entry| entry.id == link).ok_or_else(|| invalid("missing face extrusion projection"))?;
+    entry.face_name = Some(anchor.target.name.clone());
+    entry.auto_face = true;
+    let plane = PlaneRef::Face { plane, at: plane.origin, name: None, anchor: Some(Box::new(anchor)) };
+    Ok(doc.add_feature(FeatureKind::Sketch { plane, sketch }, Some(&format!("{name} profile")))?)
+}
+
 fn extent(
     records: &Records<'_>,
     classes: &BTreeMap<u64, &Class>,
@@ -1521,9 +2160,10 @@ fn extent(
             Ok(p.name.clone())
         })
         .transpose()?;
-    let (binding, label, target) = match input.limit {
-        super::history::ExtrudeLimit::Distance(binding) => (binding, "AlongDistance", None),
-        super::history::ExtrudeLimit::ToEntity { offset, container } => (offset, "Side1Offset", Some(container)),
+    let (binding, label, target, symmetric, full_length) = match input.limit {
+        super::history::ExtrudeLimit::Distance(binding) => (binding, "AlongDistance", None, false, false),
+        super::history::ExtrudeLimit::SymmetricDistance { distance, full_length } => (distance, "AlongDistance", None, true, full_length),
+        super::history::ExtrudeLimit::ToEntity { offset, container } => (offset, "Side1Offset", Some(container), false, false),
     };
     let distance =
         parameters.get(&binding).filter(|p| p.owner == Some(id) && p.label == label).ok_or_else(|| invalid("missing extrusion distance binding"))?;
@@ -1539,15 +2179,18 @@ fn extent(
     // Controlled volume measurements establish the same positive taper sign.
     Ok((
         Extent {
-            distance: if target.is_some() { "0 mm".into() } else { distance.name.clone() },
-            direction: Direction::Positive,
+            // Preserve the native parameter unchanged and express its full/half
+            // length interpretation through the document's extent convention.
+            distance: if target.is_some() { "0 mm".into() } else { (distance.name.clone()).into() },
+            convention: if full_length { solidcraft_doc::ExtrudeConvention::TotalDistance } else { solidcraft_doc::ExtrudeConvention::LegacyPerSide },
+            direction: if symmetric { Direction::Symmetric } else { Direction::Positive },
             distance2: None,
-            start_offset,
+            start_offset: start_offset.map(Into::into),
             through_all: false,
-            taper: Some(taper.name.clone()),
+            taper: Some((taper.name.clone()).into()),
             to: None,
             to_plane: None,
-            to_offset: target.map(|_| distance.name.clone()),
+            to_offset: target.map(|_| distance.name.clone()).map(Into::into),
             from: None,
         },
         target,
@@ -1598,3 +2241,7 @@ pub(super) fn symmetry(
         _ => Err(invalid("unsupported symmetric entity types")),
     }
 }
+
+#[cfg(test)]
+#[path = "face_extrusion_tests.rs"]
+mod face_extrusion_tests;

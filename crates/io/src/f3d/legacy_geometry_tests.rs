@@ -30,6 +30,76 @@ fn legacy(mut f: Fixture, geometry: u32) -> Design {
     d
 }
 
+fn legacy_membership(entries: &[(u64, u32)]) -> Design {
+    let mut f = super::import_tests::fixture(false);
+    let sketch = f.0.get_mut(&8).unwrap();
+    sketch.1 = 4;
+    sketch.2.drain(49..53);
+    let secondary = f.0.get_mut(&70).unwrap().3.as_mut().unwrap();
+    secondary.drain(21..32);
+    let mut table = Vec::new();
+    super::relationship_tests::u32(&mut table, entries.len() as u32);
+    for (id, flags) in entries {
+        reference(&mut table, *id);
+        super::relationship_tests::u32(&mut table, *flags);
+    }
+    let at = secondary.len() - 11;
+    secondary.splice(at..at, table);
+    let graph = &mut f.0.get_mut(&70).unwrap().2;
+    let mut r = Reader { bytes: graph, at: 5 };
+    attributes::read(&mut r).unwrap();
+    let start = r.at;
+    r.wide_string().unwrap();
+    let end = r.at;
+    // The empty external identity follows the owner in v17.
+    graph.drain(start..end);
+    let at = graph.len() - 3;
+    graph.splice(at..at, [0; 4]);
+    f.put(1000, "A0A15D26-1F3B-4120-A3F1-9CDDA189AB74", 2, vec![], None);
+    f.put(1001, "2EDC2536-D95B-4469-8ACA-DC07124D9C43", 2, vec![], None);
+    for (guid, version, bytes, _) in f.0.values_mut() {
+        if guid == "7A6A3D31-BE74-4E19-9115-20642944C2E4" {
+            // Parameter v7 omits four inherited bytes and one expression byte.
+            let mut r = Reader { bytes, at: 16 };
+            r.wide_string().unwrap();
+            r.u32().unwrap();
+            r.reference().unwrap();
+            r.wide_string().unwrap();
+            let at = r.at;
+            bytes.remove(at);
+            bytes.drain(12..16);
+            *version = 7;
+        }
+    }
+    legacy(f, 17)
+}
+
+#[test]
+fn complete_legacy_membership_preserves_driving_dimensions_and_saved_replay() {
+    let d = legacy_membership(&[(56, 1), (31, 1), (41, 1), (42, 1)]);
+    let mut doc = d.to_document("Legacy membership").unwrap();
+    super::import_tests::volume(&doc, std::f64::consts::PI * 30. * 30. * 17.);
+    doc.change_param("d7", "40 mm", None, None).unwrap();
+    doc.change_param("height", "d7 / 2", None, None).unwrap();
+    super::import_tests::volume(&doc, std::f64::consts::PI * 20. * 20. * 20.);
+    let reopened = crate::read_design(&crate::write_design(&doc)).unwrap();
+    assert_eq!(doc, reopened);
+    super::import_tests::volume(&reopened, std::f64::consts::PI * 20. * 20. * 20.);
+}
+
+#[test]
+fn ambiguous_legacy_membership_is_not_silently_discarded() {
+    for entries in [
+        vec![(31, 1)],
+        vec![(56, 1), (31, 1), (41, 1), (42, 1), (42, 1)],
+        vec![(56, 1), (31, 1), (41, 1), (43, 1)],
+        vec![(56, 1), (31, 2), (41, 1), (42, 1)],
+    ] {
+        let error = legacy_membership(&entries).to_document("Ambiguous membership").unwrap_err();
+        assert!(error.to_string().contains("legacy"), "{error}");
+    }
+}
+
 #[test]
 fn legacy_geometry_versions_preserve_construction_and_coordinates() {
     for polygon in [true, false] {
@@ -49,6 +119,49 @@ fn legacy_geometry_versions_preserve_construction_and_coordinates() {
             assert_eq!(old.sketch_lines().unwrap(), modern.sketch_lines().unwrap());
             assert_eq!(old.sketch_circles().unwrap(), modern.sketch_circles().unwrap());
         }
+    }
+}
+
+#[test]
+fn version_17_entities_can_end_in_an_owner_without_a_relationship_list() {
+    for polygon in [false, true] {
+        let fixture = || if polygon { rectangle() } else { super::import_tests::fixture(false) };
+        let modern = fixture().design();
+        let mut old = legacy(fixture(), 16); // same terminal-owner form, no metadata list
+        old.layout = 5;
+        old.classes.iter_mut().find(|c| c.id == "44A64366-4BD3-4B24-881A-F94C206E8F2D").unwrap().version = 17;
+        assert_eq!(old.sketch_points().unwrap(), modern.sketch_points().unwrap());
+        assert_eq!(old.sketch_lines().unwrap(), modern.sketch_lines().unwrap());
+        assert_eq!(old.sketch_circles().unwrap(), modern.sketch_circles().unwrap());
+    }
+    // Metadata is still decoded when present; the short form is not a
+    // fallback for a malformed list or a reference to another class.
+    let schema = entity::Schema { geometry: 17, curve: 8 };
+    let mut b = Vec::new();
+    refs(&mut b, &[900]);
+    reference(&mut b, 70);
+    let mut metadata = EntityMetadata::default();
+    let mut reader = Reader { bytes: &b, at: 0 };
+    assert_eq!(schema.owner(&mut reader, &mut metadata).unwrap(), 70);
+    assert_eq!(metadata.legacy, [900]);
+    super::history::finish(&reader).unwrap();
+    for keep in 0..11 {
+        let mut metadata = EntityMetadata::default();
+        let owner = &b[b.len() - 11..];
+        assert!(schema.owner(&mut Reader { bytes: &owner[..keep], at: 0 }, &mut metadata).is_err());
+    }
+}
+
+#[test]
+#[ignore = "requires the local native knob corpus"]
+fn native_knob_entities_decode_both_version_17_owner_envelopes() {
+    let root = std::path::PathBuf::from(solidcraft_geom::env::var_os("F3D_ADDITIONAL_CORPUS").unwrap()).join("knobs");
+    for name in ["Crescent", "Eye", "Narrow", "Square", "Style 3", "Style 4", "Style 5", "Style 6", "style-1"] {
+        let designs = read_f3d(&std::fs::read(root.join(format!("{name}.f3d"))).unwrap()).unwrap();
+        let d = &designs[0];
+        assert!(!d.sketch_points().unwrap_or_else(|e| panic!("{name} points: {e}")).is_empty());
+        d.sketch_lines().unwrap_or_else(|e| panic!("{name} lines: {e}"));
+        d.sketch_circles().unwrap_or_else(|e| panic!("{name} circles: {e}"));
     }
 }
 

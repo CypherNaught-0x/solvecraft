@@ -97,7 +97,8 @@
             "sketch": "Upper section"
           }
         ],
-        "name": "Transition"
+        "name": "Transition",
+        "interpolation": "uniform"
       }
     }
   ],

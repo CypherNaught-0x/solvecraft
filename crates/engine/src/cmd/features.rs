@@ -26,7 +26,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "CREATE")
         .icon("sweep")
         .params("sketch: profile sketch; profiles?; path_sketch: sketch; path: [curve ids in order]; orientation?: perpendicular (default: square to the path, turning with it) | parallel (as drawn: the profile moves without turning; the path must keep crossing its plane) | [x,y,z] (square to the path, its turn about the path fixed by this direction); twist?: angle expr (the profile turns this much about the path over its length; within 4 turns); scale?: expr (the profile's scale at the end, linear along the path; 0.01…100); operation?, targets?, name?, body_name?"),
-    CommandSpec::new("solid.loft", "Loft", loft).at("SOLID", "CREATE").icon("loft").params("sections: [{sketch, profiles?} | {sketch, point: id} (an apex) | {face: [x,y,z], body?, index?}] (2..50, in order); interpolation?: uniform | circular_chord (three coaxial circles); operation?, targets?, name?, body_name?"),
+    CommandSpec::new("solid.loft", "Loft", loft).at("SOLID", "CREATE").icon("loft").params("sections: [{sketch, profiles?} | {sketch, point: id} (an apex) | {face: [x,y,z], body?, index?}] (2..50, in order); interpolation?: chord_length (default) | uniform | circular_chord (three coaxial circles); operation?, targets?, name?, body_name?"),
     CommandSpec::new("solid.box", "Box", prim_box).at("SOLID", "CREATE").icon("box").params("length, width, height: expr; corner?: [x,y,z] | center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?, targets?: [body], name?, body_name?"),
     CommandSpec::new("solid.cylinder", "Cylinder", prim_cylinder).at("SOLID", "CREATE").icon("cylinder").params("radius | diameter, height: expr; base?: [x,y,z] (centre of the bottom: numbers in mm or length expressions; default: the origin); axis?: X|Y|Z|[x,y,z] (default Z); operation?, targets?: [body], name?, body_name?"),
     CommandSpec::new("solid.sphere", "Sphere", prim_sphere).at("SOLID", "CREATE").icon("sphere").params("radius | diameter: expr; center?: [x,y,z] (numbers in mm or length expressions; default: the origin); operation?, targets?: [body], name?, body_name?"),
@@ -36,7 +36,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("fillet")
         .key("F")
         .params("edges: [[x,y,z] point on edge | {body, index}]; radius: expr; body?; tangent_chain?: bool; edge_sets?: [{edges, radius, tangent_chain?}, …] (2…64 independently editable groups); type?: constant|curvature (alias g2: curvature-continuous quintic between planar faces along straight edges, one perpendicular planar end face at each end; radius sets the equivalent circular setback, not constant curvature; exact fit only)|chord (radius is the width across)|variable (radius at the end nearest start, radius2 at the other; one end may be 0, where the round closes to the corner)|spline (the radius along the edge is a clamped B-spline from the end nearest start: radius is its first control radius, radii the rest, knots its knot vector from 0 to 1; one end may be 0); radius2?; start?: [x,y,z]; radii?: [expr, …]; knots?: [number, …]; mid?: [[position 0…1 from start, radius expr], …] (variable radii between the ends); smooth?: bool (smooth instead of straight between the radii); corner?: rolling|g2 (rolling, the default: the corners where three blended edges meet are pieces of the rolling ball's sphere, tangent to each blend; g2: a patch repeating each blend's surface up to the second order, constant-radius exact fillets only, refused where it cannot be built); fit?: exact|reduce|taper (exact, the default: a radius too large for the geometry around the edges is refused; reduce: where it doesn't fit it is reduced to the largest that does, one radius for edges sharing a face; the smallest used is returned as `radius_applied`, each edge's as `radii_applied: [{edge: [x,y,z], radius}]`, and noted in the feature's warning; taper: along each straight edge between planar faces where it doesn't fit, the radius follows the room there as a smooth spline, down to 0 where a face closes to a point, noted in the feature's warning)"),
-    CommandSpec::new("solid.chamfer", "Chamfer", chamfer).at("SOLID", "MODIFY").icon("chamfer").params("edges: [[x,y,z] | {body, index}]; distance: expr; distance2?: expr (along the second face) | angle?: expr (from the first face); flip?: bool (which face is first: by default the one facing up most); tangent_chain?: bool; edge_sets?: [{edges, distance, distance2?, angle?, flip?, tangent_chain?}, …]; body?"),
+    CommandSpec::new("solid.chamfer", "Chamfer", chamfer).at("SOLID", "MODIFY").icon("chamfer").params("edges: [[x,y,z] | {body, index}]; distance: expr; distance2?: expr (along the second face) | angle?: expr (from the first face); flip?: bool (which face is first: by default the one facing up most; for a complete circular cap, the planar cap); tangent_chain?: bool; edge_sets?: [{edges, distance, distance2?, angle?, flip?, tangent_chain?}, …]; body?"),
     CommandSpec::new("solid.combine", "Combine", combine).at("SOLID", "MODIFY").icon("combine").params("target: body; tools: [body]; operation?: join|cut|intersect; keep_tools?: bool; new_component?: bool (the result goes into a new component; component_name?)"),
     CommandSpec::new("solid.pattern.rectangular", "Rectangular Pattern", pattern_rect)
         .at("SOLID", "CREATE")
@@ -45,7 +45,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("solid.pattern.circular", "Circular Pattern", pattern_circ)
         .at("SOLID", "CREATE")
         .icon("pattern_circ")
-        .params("features: [names] | bodies: [names] | components: [names]; axis: X|Y|Z | {origin, dir}; count; angle? (default 360 deg; partial arcs include both ends); alignment?: left|center|right (default right; original stays fixed); reversed?: bool (Flip; selects the extra side for even centered counts)"),
+        .params("features: [names] | bodies: [names] | components: [names]; axis: X|Y|Z | {origin, dir}; count; angle? (default 360 deg; partial arcs include both ends); symmetric?: bool (legacy centered order; use without alignment or reversed); alignment?: left|center|right (default right; original stays fixed); reversed?: bool (Flip; selects the extra side for even centered counts)"),
     CommandSpec::new("solid.pattern.path", "Pattern on Path", pattern_path)
         .at("SOLID", "CREATE")
         .icon("pattern_rect")
@@ -1027,7 +1027,7 @@ fn fillet_chain(p: &Value) -> Result<bool> {
 fn fillet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.fillet";
     if let Some(sets) = p.get("edge_sets") {
-        if ["edges", "radius", "type", "radius2", "start", "mid", "smooth", "tangent_chain"].iter().any(|key| p.get(key).is_some()) {
+        if ["edges", "radius", "type", "radius2", "start", "mid", "smooth", "tangent_chain", "corner"].iter().any(|key| p.get(key).is_some()) {
             return Err(bad(cmd, "edge_sets cannot also specify a shared edge list or radius style"));
         }
         if p.get("fit").is_some_and(|fit| fit.as_str() != Some("exact")) {
@@ -1055,11 +1055,12 @@ fn fillet(s: &mut Session, p: &Value) -> Result<Value> {
             s,
             p,
             FeatureKind::Fillet {
-                edges,
+                edges: edges.into_iter().map(Into::into).collect(),
                 radius,
-                body: str_(p, "body").map(str::to_string),
+                body: str_(p, "body").map(str::to_string).map(Into::into),
                 style: solidcraft_doc::FilletStyle::Grouped { groups },
                 fit: solidcraft_doc::FilletFit::Exact,
+                corner: Default::default(),
                 tangent_chain: fillet_chain(sets.first().ok_or_else(|| bad(cmd, "missing first radius group"))?)?,
             },
         );
@@ -1421,6 +1422,7 @@ fn pattern_circ(s: &mut Session, p: &Value) -> Result<Value> {
     let angle = expr(p, "angle").unwrap_or_else(|| "360 deg".into());
     check_expr(s, &angle, Kind::Angle, cmd, "angle")?;
     let pattern = solidcraft_doc::PatternKind::Circular {
+        symmetric: p.get("symmetric").and_then(Value::as_bool).unwrap_or(false),
         origin: Position(origin),
         axis: Dir(axis),
         count,
@@ -2005,7 +2007,12 @@ fn loft(s: &mut Session, p: &Value) -> Result<Value> {
             let solidcraft_doc::PlaneRef::Face { anchor: Some(anchor), .. } = plane else {
                 return Err(bad(cmd, "loft face requires a persistent planar attachment"));
             };
-            sections.push(solidcraft_doc::LoftSection { sketch: 0, profiles: solidcraft_doc::ProfileSel::All, point: None, face: Some(anchor) });
+            sections.push(solidcraft_doc::LoftSection {
+                sketch: (0).into(),
+                profiles: solidcraft_doc::ProfileSel::All,
+                point: None,
+                face: Some(anchor),
+            });
             continue;
         }
         let sketch = sketch_id(s, sec.get("sketch"), cmd, "sections[].sketch")?;
@@ -2015,16 +2022,32 @@ fn loft(s: &mut Session, p: &Value) -> Result<Value> {
             if !st.sketch(sketch).is_some_and(|ss| ss.sketch.points.iter().any(|q| q.id == pt)) {
                 return Err(bad(cmd, format!("no point `{pt}` in the section's sketch")));
             }
-            sections.push(solidcraft_doc::LoftSection { sketch: SketchId(sketch), profiles: solidcraft_doc::ProfileSel::All, point: Some(pt.to_string()), face: None });
+            sections.push(solidcraft_doc::LoftSection {
+                sketch: SketchId(sketch),
+                profiles: solidcraft_doc::ProfileSel::All,
+                point: Some(pt.to_string()),
+                face: None,
+            });
             continue;
         }
         sections.push(solidcraft_doc::LoftSection { sketch: SketchId(sketch), profiles: profiles(sec, cmd)?, point: None, face: None });
     }
     let interpolation = match p.get("interpolation") {
-        None => solidcraft_doc::LoftInterpolation::Uniform,
-        Some(value) => serde_json::from_value(value.clone()).map_err(|_| bad(cmd, "interpolation must be uniform or circular_chord"))?,
+        None => solidcraft_doc::LoftInterpolation::ChordLength,
+        Some(value) => {
+            serde_json::from_value(value.clone()).map_err(|_| bad(cmd, "interpolation must be chord_length, uniform or circular_chord"))?
+        }
     };
-    add_feature(s, p, FeatureKind::Loft { sections, interpolation, operation: operation(p, cmd)?, targets: string_list(p, "targets").into_iter().map(BodyName).collect() })
+    add_feature(
+        s,
+        p,
+        FeatureKind::Loft {
+            sections,
+            interpolation,
+            operation: operation(p, cmd)?,
+            targets: string_list(p, "targets").into_iter().map(BodyName).collect(),
+        },
+    )
 }
 
 fn thread(s: &mut Session, p: &Value) -> Result<Value> {

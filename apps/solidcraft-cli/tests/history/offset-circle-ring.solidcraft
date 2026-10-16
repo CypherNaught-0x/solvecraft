@@ -1,5 +1,5 @@
 {
-  "format": "solidcraft-f3d-dev/15",
+  "format": "solidcraft-f3d-dev/29",
   "name": "Untitled",
   "units": "mm",
   "params": [
@@ -24,6 +24,12 @@
     {
       "name": "d1",
       "expr": "outerDiameter",
+      "unit": "mm",
+      "model": true
+    },
+    {
+      "name": "d2",
+      "expr": "gap",
       "unit": "mm",
       "model": true
     }
@@ -86,6 +92,14 @@
             "c": 0,
             "value": 60.0,
             "param": "d1"
+          },
+          {
+            "id": "k3",
+            "type": "offset_distance",
+            "output": "c1",
+            "value": 5.0,
+            "reverse": false,
+            "param": "d2"
           }
         ],
         "offsets": [
@@ -100,13 +114,12 @@
               "c1"
             ],
             "distance": 5.0,
-            "distance_expression": "gap",
             "closed": true
           }
         ],
         "counters": {
           "c": 1,
-          "k": 2
+          "k": 3
         }
       }
     },
@@ -115,7 +128,7 @@
       "name": "Ring",
       "suppressed": false,
       "param_names": [
-        "d2"
+        "d3"
       ],
       "type": "extrude",
       "sketch": 1,

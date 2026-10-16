@@ -1,15 +1,28 @@
 # Small editable history fixtures
 
-These 116 designs and their JSON command recipes are original SolidCraft test
+These 177 designs and their JSON command recipes are original SolidCraft test
 data. They were authored through SolidCraft commands; no Fusion-produced file is
 included. Each `.solidcraft` can be opened normally. Each `.json` contains its
 recipe, independent expectations and optional edits.
 
+`legacy/offset-circle-ring.solidcraft` retains the development branch's expression-driven
+offset. Its compatibility test checks the same analytic volumes, edits, reopening and
+undo after upstream introduced a driving offset dimension. The main fixture is authored
+with the current command behavior. Development formats 14–22 use the explicit
+`solidcraft-f3d-dev/N` tag to distinguish them from upstream's format numbering.
+
 | Fixture | Features checked | Analytic volume (mm³) |
 |---|---|---:|
 | circle-extrude | Driving diameter, height expression | 5040π |
+| circular-symmetric-body | Even-count symmetric body copies; count, signed/full sweep and height edits; volume, bounds and center of mass | 360π |
+| circular-symmetric-feature | Odd-count symmetric feature copies; count, signed/full sweep and height edits; volume, bounds and center of mass | 450π |
 | user-parameters | User/model roles, comments, favorites, dependent height | 4000π |
 | negative-extrude | Signed height, downward bounds | 5040π |
+| symmetric-extrude-half | Per-side distance, centered bounds, diameter/height edits | 10080π |
+| symmetric-extrude-full | Full-length parameter driving both half-extents, centered bounds | 5040π |
+| grouped-profile-union | Three explicitly selected circle regions merge into one body; diameter/height edits, analytic union volume and bounds | (1800π − lens(30,30,40)) × 17 |
+| coincident-profile-lens | A lens retains both coincident source circles; shared diameter and height edits, undo and reopening | lens(30,30,40) × 17 |
+| subdivided-profile-lens | An interior disk and its surrounding lens region remain one filled extrusion; source, height and divider edits | lens(30,30,40) × 17 |
 | placed-circle | Offset local center, explicit XZ placement | 324π |
 | plane-xy | Offset plane, parent edits and negative placement | 1500π |
 | plane-yz | YZ plane offset toward +X, parameter and feature edits | 1500π |
@@ -192,6 +205,8 @@ height and destination-plane edits, reopening and undo. The suite contains 61
 original saved designs.
 
 
+
+
 `loft-serial-join` and `loft-triple-join` extend the rectangular joined pedestal
 with one or two additional transitions, each 20 mm tall. The successive sections
 are 20 x 40, 30 x 50 and 40 x 60 mm. Their added analytic volumes are 22666⅔ and
@@ -302,3 +317,196 @@ annular sections. Circular measurements allow 0.04% for tessellation; a missing
 half-rim exceeds that allowance. Independent group dimensions, source height
 and width/diameter, suppression, JSON/container reopening and undo are checked.
 There are 128 original saved designs.
+
+
+`subdivided-profile-lens` selects the lens of two radius-30 circles whose centers
+are 40 mm apart, including a disk and the surrounding annular region created by
+an interior circle. Its extrusion is one filled body. Volume uses the independent
+circle-intersection formula (lens area times height), with height, source diameter
+and internal-divider diameter edits, save/reopen and undo checks. The divider
+diameter changes without changing the union's volume. There are 134 saved designs.
+
+The six `signed-extrude-*` fixtures extrude a 20 × 30 mm rectangle by −40 mm
+and apply one fillet or chamfer to a vertical edge, the sketch-plane cap, or the
+travel cap. Fillets remove a prism with area `r²(1 − π/4)`; its inward centroid
+is `r(5/6 − π/4)/(1 − π/4)`. Chamfers remove triangular prisms with area `d²/2`
+and centroid `d/3`. Subtracted volume moments distinguish the two caps even
+when volume and bounds match. Radius/setback, negative depth, width, suppression,
+reopening and undo are checked. The suite now contains 143 original saved designs.
+
+The two `mixed-profile-*` examples select the intersection of a radius-30 circle
+and the rectangle x∈[−5,5], y∈[−35,−25], then extrude −40 mm and blend the two
+vertical rectangle corners. The selected area is
+`2 a t + a sqrt(R²−a²) + R² asin(a/R)`, with `a=5`, `t=−25`.
+Its first y-moment is `(t²−R²)a + a³/3`. Fillet/chamfer removals and their moments
+use the corner formulas above. Setback/radius, depth, circle diameter, suppression,
+undo and reopening are checked. There are now 145 original saved designs.
+
+`mixed-profile-fillet-pattern` repeats the rounded mixed-profile prism four times
+about Z. Its volume is four times the independent segment/corner formula and its
+aggregate centroid lies on Z. Radius, depth, diameter, blend suppression and eight
+copies are checked with reopening and undo. There are 146 original saved designs.
+
+`combine-circular-pattern-{keep,consume}` cuts four radius-3 tools on a radius-20
+Z pattern from a radius-40, height-10 cylinder. The final stock volume is
+`(40² − 4 × 3²) × 10 × π`; keeping the tools restores the aggregate volume to
+`40² × 10 × π`. Height, tool diameter and Combine suppression are checked,
+including centroid, bounds, body count, undo and reopening. There are 148
+original saved designs.
+
+`combine-circular-small-grips` joins ten rounded grips to a 15 × 15 × 10 mm
+stock with a radius-3 opening. Each grip is the circle intersected with
+x∈[−0.48,0.02], y∈[−3.5,−2.5], extruded 12 mm down, with two radius-0.1
+vertical corner fillets. Its area is `−2.5 × 0.5 + F(0.02) − F(−0.48)
+− 2r²(1−π/4)`, where `F(x) = (x sqrt(9−x²) + 9 asin(x/3))/2`.
+The total volume adds ten such prisms to `(225−9π) × 10`; symmetry fixes the
+horizontal centroid and the two extrusion depths determine its vertical moment.
+Depths 10 and 14, radius 0.2, Combine suppression, undo and reopening are checked.
+Joined volumes use a 0.02 mm³ tolerance. With Combine suppressed, the standalone
+stock has no small fillet to tighten its measurement tessellation; the 0.2 mm³
+tolerance covers its circular-hole chord error and the separate grip surfaces.
+This covers the prism-axis search after a pattern introduces more than eight
+wall directions. There are 149 original saved designs.
+
+`circular-blend-{fillet,chamfer}-bottom` selects both halves of a circular rim
+without tangent-chain expansion. The radius-10, height-40 cylinder retains
+diameter, height, blend size and suppression edits. Volume follows the circular
+rim formulas above. For a bottom chamfer, removed material has first z-moment
+`π(Rr³/3 − r⁴/12)`; for a bottom fillet it is
+`r × removed_volume − π(Rr³/3 − r⁴/12)`. Subtracting these moments checks that
+the bottom cap, rather than the top cap, remains selected after edits and
+reopening. These two examples brought the saved suite to 151 designs.
+
+The two `circular-asymmetric-*-bottom` examples retain separate setback dimensions
+(two distances or distance and angle), with the first distance on the cylinder
+wall. For radial setback a and axial setback b, removed volume is
+πab(R − a/3); its first axial moment at the bottom is πab²(R/3 − a/12).
+Tests edit each setback, diameter and height, suppress the feature, undo and reopen.
+Kernel and native-import tests separately verify the cap radius and wall contact
+height, so exchanged setbacks cannot hide within volume tolerances.
+
+The `face-extrude-chamfer-top` and `face-extrude-chamfer-bottom` examples add
+a joined extension from a chamfer-trimmed circular cap. The face profile remains
+linked; edits to diameter, source height, both chamfer distances and extension
+length are checked against cylinder/frustum volume formulas, along with bounds,
+suppression, undo and reopening. These are original SolidCraft recipes.
+
+The `face-cut-chamfer-top` and `face-cut-chamfer-bottom` examples cut 5 mm into
+a trimmed cap of a diameter-20, height-40 cylinder. The cap and wall chamfer
+setbacks are 2 and 3 mm. For radius R, radial setback a, axial setback b and
+pocket depth d, volume is `πR²H − πab(R − a/3) − π(R − a)²d`.
+Independent first moments check the pocket's centroid at the selected end.
+Diameter, height, both setbacks, depth, suppression, undo and reopening are
+covered. These bring the original saved design suite to 157 examples.
+
+The four `projected-face-{extrude,cut}-chamfer-{top,bottom}` examples project
+the circular cap of a face extrusion or pocket into a linked sketch and extrude
+that sketch 7 mm into a second body. The projection follows diameter, height,
+both chamfer setbacks and extension/depth edits. Analytic volume and first
+moments include the added radius-(R − a), height-7 cylinder. Bottom examples use radial
+setback 3 mm and axial setback 2 mm; top examples use 2 mm and 3 mm. Suppression, undo
+and container reopening are checked too. The saved suite has 161 examples.
+
+The two `projected-face-cut-plain-{top,bottom}` examples remove 5 mm from the
+full cap of a radius-10, height-40 cylinder, project the new circular boundary,
+and extrude a separate 7 mm body. Total volume is `πR²(H − depth + 7)`.
+Independent centroid and bounds checks distinguish the two ends. Diameter,
+height and cut-depth edits, projection extrusion suppression, undo and container
+reopening preserve the cut cap's source. These bring the suite to 163 examples.
+
+The `partial-cylinder-wall-join` example joins one end of a rectangle outside a
+projected-size circle to a cylindrical neck on a beveled base. Its shared curved
+wall covers only part of the neck height. Analytic expectations add the wing
+area `2 a L - a sqrt(r²-a²) - r² asin(a/r)` times its depth to the existing
+cylinder/frustum volume. Depth edits, suppression, undo and reopening are checked.
+
+The `partial-cylinder-cap-pocket` design attaches a pocket to the merged top of
+the neck and wing. Its volume removes π mm³ (radius 2 mm, depth 0.25 mm). The
+pocket follows base-height edits, and remains on the neck when the wing is
+suppressed; the saved attachment follows the resulting face, not a frozen plane.
+
+The `partial-cylinder-tip-fillet` design rounds the wing's two free tip edges.
+Each removes `width × radius² × (1 − π/4)` from the joined body. Radius and
+base-height edits, suppression, undo and saved-history reopening are checked.
+The I/O incidence regression also checks this small removed volume using the
+same fine chord tolerance before and after: adaptive whole-body measurements
+change resolution when a smaller radius is introduced.
+
+The `partial-cylinder-ring-neck-fillet` and `partial-cylinder-ring-base-fillet`
+examples round the concave and convex circular shoulders independently. Expected
+volumes integrate πr(z)² along the analytic cylinder/cone profile, replacing the
+corner with a tangent radius-1 mm arc. Radius-1.5 mm edits, source-height edits,
+suppression, undo and reopening preserve that history. An I/O regression measures
+before/after geometry at a fixed 0.0001 mm chord tolerance and checks the small
+added/removed volume within 0.02 mm³. There are 168 examples.
+
+
+The `partial-cylinder-wing-vertical-fillet` and `partial-cylinder-wing-bottom-fillet`
+examples round the concave wing roots. The vertical round adds the area between
+its tangent circles and straight wing wall, integrated by Green's theorem, times
+the wing depth. The lower round adds a torus segment clipped by the two planar
+wing sides; its expected volume integrates circular-strip areas through height.
+The ordinary I/O test checks both radii (1 and 1.5 mm) against these independent
+references to 0.02 mm³, and refuses radii that cross the shoulder or consume the
+wing tip. The saved recipes also check radius/source-height edits, suppression,
+undo and reopening. There are 170 original examples.
+
+The `partial-cylinder-combined-corner-fillet` and
+`partial-cylinder-combined-all-fillet` examples round both vertical wing roots
+and their lower circular edge together. The second also rounds both separate
+shoulder rings in the same feature. Their expected added volume includes the
+intersection of the vertical rounds and the lower torus, rather than adding the
+independent edge volumes. The I/O regression integrates that clipped torus and
+checks radii 1 and 1.5 mm within 0.02 mm³ at a common 0.000025 mm chord tolerance.
+The shoulder contributions use the analytic cylinder/cone integrals above.
+Reversing the corner edge order preserves the result. Both saved designs also
+check radius/source-height edits, suppression, undo and reopening. There are
+172 original examples.
+
+`partial-cylinder-touching-tip-fillets` uses a 2 mm deep wing with 1 mm rounds
+on its two tip edges. The rounds meet on one cylindrical carrier; the kernel
+retains a seam between their two faces. Removing `2 × 3.75 × r² × (1 − π/4)`
+from the unrounded wing gives the analytic volume. A radius edit to 0.75 mm
+separates the carriers again. Radius, source-height, suppression, undo and
+reopening checks accompany an I/O regression that requires exact face lineage
+before coalescing the two faces.
+
+The two `paired-chamfer-projection-*` examples bevel both ends of one cylinder,
+project either the upper or lower beveled circle, and extrude the live projection
+as a separate body. For cylinder radius R, height H, equal bevel setback d and
+projected length L, the analytic total volume is
+`π × (R²H − 2d²(R − d/3) + (R − d)²L)`. The two removed rings are symmetric
+about H/2; the projected cylinder supplies the remaining first moment. Diameter,
+height, bevel and projection-length edits, suppression, undo and save/reopen are
+checked. The split-cylinder example below extends this collection.
+
+
+`split-cylinder-cap-fillet` joins a centered 6 mm band of a radius-10 mm disk
+above an 8 mm cylinder, then rounds both concave shoulders. Its original
+SolidCraft recipe checks save/reopen, radius, diameter, base-height and grip-height
+edits, plus suppression. The unrounded volume is `pi R² h + A H`, where
+`A = 2 (a sqrt(R²-a²) + R² asin(a/R))` and `a=3 mm`. The two rounds add
+`4 integral[0,r] sqrt(R²-(a+s)²) g(s) ds`, with
+`g(s) = r - sqrt(r²-(r-s)²)`. Integrating the same slice times `h+g(s)/2`
+gives the added first moment for the centroid check. These expectations come
+from geometry, not sampled kernel output. The I/O regression also compares
+rounded and unrounded volumes at the same chord tolerance, so cylinder
+meshing error cannot conceal a missing round.
+
+
+`split-cylinder-consumed-wall` uses the same independent integral at a 5 mm
+grip height, with the round radius driven by that height. The planar walls are
+fully consumed, leaving each round tangent to the upper cap. Height edits preserve
+that relationship; reducing the radius separately restores the planar walls.
+The I/O regression also refuses a radius larger than the wall height and verifies
+that the limiting result has no crossed face loops.
+
+`split-cylinder-grip-corner-fillets` rounds the four vertical corners of the
+same clipped cylindrical grip. With `a=3`, the center of each tangent round is
+`(a-r, sqrt((R-r)²-(a-r)²)) = (cx, cy)` and its cylinder contact has
+`tx=R cx/(R-r)`. Let `F(R,x)=(x sqrt(R²-x²)+R² asin(x/R))/2`.
+The removed volume is
+`4 H [F(R,a)-F(R,tx)-(a-tx)cy-F(r,r)+F(r,tx-cx)]`.
+Its centroid follows from the base cylinder and the remaining constant-section
+grip. Radius, diameter and both heights are edited, saved, reopened and undone;
+suppressing the rounds restores the independently calculated unrounded volume.

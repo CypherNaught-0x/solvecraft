@@ -364,11 +364,12 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
             let history = match d.history() {
                 Ok(features) => json!({"records":features.iter().map(|f| {
                     let kind = match &f.kind {
+                        solidcraft_io::f3d::HistoryKind::CircularPattern(p) => json!({"type":"circular_pattern","axis":p.axis,"count_binding":p.count,"angle_binding":p.angle,"symmetric":p.symmetric,"instances":p.instances,"source_container":p.source_container,"features":p.features,"target_producers":p.targets,"outputs":p.outputs}),
                         solidcraft_io::f3d::HistoryKind::TwoEdgePoint { definition, edges, position } => json!({"type":"construction_point_two_edges","definition":definition,"edges":edges,"cached_position_mm":position}),
                         solidcraft_io::f3d::HistoryKind::Chamfer { sets } => json!({"type":"chamfer","sets":sets.iter().map(|s| json!({"container":s.container,"distance_binding":s.distance,"distance2_binding":s.distance2,"angle_binding":s.angle,"flip":s.flip,"tangent_chain":s.tangent_chain})).collect::<Vec<_>>()}),
-                        solidcraft_io::f3d::HistoryKind::Fillet { sets } => json!({"type":"fillet","sets":sets.iter().map(|s| json!({"container":s.container,"radius_binding":s.radius,"weight_binding":s.weight,"tangent_chain":s.tangent_chain})).collect::<Vec<_>>()}),
+                        solidcraft_io::f3d::HistoryKind::Fillet { sets } => json!({"type":"fillet","sets":sets.iter().map(|s| json!({"container":s.container,"face_container":s.face_container,"radius_binding":s.radius,"weight_binding":s.weight,"tangent_chain":s.tangent_chain})).collect::<Vec<_>>()}),
                         solidcraft_io::f3d::HistoryKind::Sketch { geometry, placement } => json!({"type":"sketch","geometry":geometry,"transform":placement.matrix,"transform_length_unit":"cm","placement_owner":placement.owner,"entities":placement.entities}),
-                        solidcraft_io::f3d::HistoryKind::Extrude { operation, profile_containers } => json!({"type":"extrude","operation":operation,"profile_containers":profile_containers}),
+                        solidcraft_io::f3d::HistoryKind::Extrude { operation, profile_containers, target_containers } => json!({"type":"extrude","operation":operation,"profile_containers":profile_containers,"target_containers":target_containers}),
                         solidcraft_io::f3d::HistoryKind::Loft { operation, section_containers, target_containers } => json!({"type":"loft","operation":operation,"section_containers":section_containers,"target_containers":target_containers}),
                         solidcraft_io::f3d::HistoryKind::OffsetPlane { geometry, definition, extra_offset } => json!({"type":"offset_plane","geometry":geometry,"definition":definition,"extra_offset_binding":extra_offset}),
                         solidcraft_io::f3d::HistoryKind::Mirror { plane, source_container, output_count } => json!({"type":"mirror","plane":plane,"source_container":source_container,"output_count":output_count}),
@@ -422,7 +423,7 @@ fn inspect_f3d(_: &mut Session, p: &Value) -> Result<Value> {
                 Err(e) => json!({"unsupported":e.to_string()}),
             };
             let sketch_profiles=match d.sketch_profiles() {
-                Ok(profiles)=>json!({"records":profiles.iter().map(|p|json!({"id":p.id,"feature":p.feature,"geometry":p.geometry,"regions":p.regions.iter().map(|loops|loops.iter().map(|l|json!({"curves":l.curves,"reversed":l.reversed,"pieces":l.pieces,"outer":l.outer})).collect::<Vec<_>>()).collect::<Vec<_>>()})).collect::<Vec<_>>()}),
+                Ok(profiles)=>json!({"records":profiles}),
                 Err(e)=>json!({"unsupported":e.to_string()}),
             };
             json!({"path": d.path, "build": d.build, "layout": d.layout, "classes": d.classes.len(),

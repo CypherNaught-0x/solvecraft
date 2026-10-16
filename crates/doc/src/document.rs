@@ -729,7 +729,7 @@ pub enum FeatureKind {
     /// Ruled loft through profiles of several sketches, in order.
     Loft {
         sections: Vec<LoftSection>,
-        #[serde(default, skip_serializing_if = "LoftInterpolation::is_uniform")]
+        #[serde(default)]
         interpolation: LoftInterpolation,
         #[serde(default)]
         operation: Operation,
@@ -1642,7 +1642,7 @@ impl FilletStyle {
     /// What the feature's `radius` is in this style (the label of its parameter).
     pub fn radius_label(&self) -> &'static str {
         match self {
-            FilletStyle::Constant => "Radius",
+            FilletStyle::Constant | FilletStyle::Grouped { .. } => "Radius",
             FilletStyle::Curvature => "Equivalent radius",
             FilletStyle::Chord => "Chord length",
             FilletStyle::Variable { .. } | FilletStyle::Spline { .. } => "Start radius",
@@ -1673,25 +1673,29 @@ impl FilletStyle {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
 #[serde(deny_unknown_fields)]
 pub struct FilletRadiusGroup {
     pub count: usize,
-    pub radius: String,
+    #[walk(length = "Group radius")]
+    pub radius: Expr,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tangent_chain: bool,
 }
 
 /// An additional ordered chamfer selection with independent editable parameters.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
 #[serde(deny_unknown_fields)]
 pub struct ChamferGroup {
     pub count: usize,
-    pub distance: String,
+    #[walk(length = "Group distance")]
+    pub distance: Expr,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub distance2: Option<String>,
+    #[walk(length = "Group distance 2")]
+    pub distance2: Option<Expr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub angle: Option<String>,
+    #[walk(angle = "Group angle")]
+    pub angle: Option<Expr>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flip: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1829,20 +1833,16 @@ pub struct Component {
     pub parent: u64,
 }
 
-/// Saved interpolation semantics; absent fields retain the original uniform loft.
+/// Saved interpolation semantics. Development formats migrate omitted fields to
+/// uniform; upstream files and new commands use chord-length section parameters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoftInterpolation {
-    #[default]
     Uniform,
+    #[default]
+    ChordLength,
     /// Three coaxial circles, with a shared chord-length section parameter.
     CircularChord,
-}
-
-impl LoftInterpolation {
-    pub fn is_uniform(&self) -> bool {
-        *self == Self::Uniform
-    }
 }
 
 /// One loft section: a sketch profile/point or an exact planar body face.
@@ -1851,7 +1851,6 @@ pub struct LoftSection {
     #[serde(default)]
     pub sketch: SketchId,
     #[serde(default)]
-    #[walk(profiles_of = sketch, when = point.is_none())]
     pub profiles: ProfileSel,
     /// A sketch point instead of a profile (the loft closes to it, as a pyramid's apex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1976,6 +1975,10 @@ pub enum PatternKind {
         alignment: solidcraft_sketch::PatternAlignment,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         reversed: bool,
+        /// Distribute copies on both sides of the seed. For even counts the
+        /// negative side has one extra instance; the seed remains unchanged.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        symmetric: bool,
     },
     /// Copies along a chain of sketch curves: instance k moves by path(k·spacing) − path(0),
     /// measured along the path from its start.

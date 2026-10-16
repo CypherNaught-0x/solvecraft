@@ -31,6 +31,28 @@ const THIN_ACCEPT: Accept = PROFILES | CURVES;
 const HOLE_TYPES: [&str; 3] = ["simple", "counterbore", "countersink"];
 const HOLE_LABELS: [&str; 3] = ["Simple", "Counterbore", "Countersink"];
 
+/// Editable text belongs to the dialog; document expressions change as a whole.
+#[derive(Clone, Debug)]
+pub struct ChamferFields {
+    pub(crate) distance: String,
+    pub(crate) distance2: Option<String>,
+    pub(crate) angle: Option<String>,
+    pub(crate) flip: bool,
+    pub(crate) tangent_chain: bool,
+}
+
+impl From<&solidcraft_engine::doc::ChamferGroup> for ChamferFields {
+    fn from(group: &solidcraft_engine::doc::ChamferGroup) -> Self {
+        Self {
+            distance: group.distance.to_string(),
+            distance2: group.distance2.as_ref().map(ToString::to_string),
+            angle: group.angle.as_ref().map(ToString::to_string),
+            flip: group.flip,
+            tangent_chain: group.tangent_chain,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Kind {
     /// Pick a plane or planar face; the sketch starts on it at once.
@@ -87,7 +109,7 @@ pub enum Kind {
         chains: Vec<bool>,
     },
     GroupedChamfer {
-        groups: Vec<solidcraft_engine::doc::ChamferGroup>,
+        groups: Vec<ChamferFields>,
     },
     Shell {
         thickness: String,
@@ -107,6 +129,7 @@ pub enum Kind {
     PatternCirc {
         count: String,
         angle: String,
+        symmetric: bool,
     },
     /// Loft through profiles of different sketches, in pick order.
     Loft {
@@ -555,7 +578,7 @@ impl Dialog {
                 ],
             ),
             "solid.pattern.circular" => Dialog::new(
-                Kind::PatternCirc { count: "6".into(), angle: "360 deg".into() },
+                Kind::PatternCirc { count: "6".into(), angle: "360 deg".into(), symmetric: false },
                 vec![SelInput::new("Objects", BODIES, true), SelInput::new("Axis", AXES, false)],
             ),
             "solid.loft" => Dialog::new(Kind::Loft { operation: usize::from(has_bodies) }, vec![SelInput::new("Profiles", PROFILES, true)]),
@@ -1572,7 +1595,7 @@ fn placement_row(d: &mut Dialog, ui: &mut egui::Ui) {
                     ],
                 ),
                 1 => (
-                    Kind::PatternCirc { count: "6".into(), angle: "360 deg".into() },
+                    Kind::PatternCirc { count: "6".into(), angle: "360 deg".into(), symmetric: false },
                     vec![SelInput::new("Objects", BODIES, true), SelInput::new("Axis", AXES, false)],
                 ),
                 _ => (
@@ -2861,14 +2884,17 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                             ui.end_row();
                         }
                     }
-                    Kind::PatternCirc { count, angle } => {
+                    Kind::PatternCirc { count, angle, symmetric } => {
                         for (l, v) in [("Quantity", count), ("Total angle", angle)] {
                             row_label(ui, l);
                             enter |= field(ui, v);
                             ui.end_row();
                         }
+                        row_label(ui, "Symmetric");
+                        ui.checkbox(symmetric, "");
+                        ui.end_row();
                         if d.inputs.first().is_some_and(|i| i.accept == selection::FEATURES) {
-                            feature_pattern_alignment_row(ui, &mut d.extra, 0);
+                            ui.add_enabled_ui(!*symmetric, |ui| feature_pattern_alignment_row(ui, &mut d.extra, 0));
                         }
                     }
                     Kind::Loft { operation } => {
@@ -3929,7 +3955,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             }
             ("solid.pattern.rectangular", p)
         }
-        Kind::PatternCirc { count, angle } => {
+        Kind::PatternCirc { count, angle, symmetric } => {
             need(0, "objects")?;
             let axis = match sels(d, 1).first() {
                 None if d.extra.contains_key("axis") => d.extra.get("axis").cloned().unwrap_or(Value::Null),
@@ -3940,7 +3966,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                 }
                 None => return Err("select an axis".into()),
             };
-            let mut p = json!({"axis": axis, "count": count, "angle": angle});
+            let mut p = json!({"axis": axis, "count": count, "angle": angle, "symmetric": symmetric});
             pattern_objects(s, sels(d, 0), &mut p);
             ("solid.pattern.circular", p)
         }
@@ -4716,19 +4742,19 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             let mut at = 0;
             for count in sizes {
                 let mut input = SelInput::new("Edges", EDGES, true);
-                input.items = edges.get(at..at + count)?.iter().map(|p| edge_sel(s, *p)).collect::<Option<Vec<_>>>()?;
+                input.items = edges.get(at..at + count)?.iter().map(|p| edge_sel(s, p.0)).collect::<Option<Vec<_>>>()?;
                 inputs.push(input);
                 at += count;
             }
-            let first = solidcraft_engine::doc::ChamferGroup {
-                count: 0,
-                distance: distance.clone(),
-                distance2: distance2.clone(),
-                angle: angle.clone(),
+            let first = ChamferFields {
+                distance: distance.to_string(),
+                distance2: distance2.as_ref().map(ToString::to_string),
+                angle: angle.as_ref().map(ToString::to_string),
                 flip: *flip,
                 tangent_chain: *tangent_chain,
             };
-            let mut d = Dialog::new(Kind::GroupedChamfer { groups: std::iter::once(first).chain(groups.iter().cloned()).collect() }, inputs);
+            let mut d =
+                Dialog::new(Kind::GroupedChamfer { groups: std::iter::once(first).chain(groups.iter().map(ChamferFields::from)).collect() }, inputs);
             if let Some(body) = body {
                 d.extra.insert("body".into(), json!(body));
             }
@@ -4736,12 +4762,12 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
         }
         FeatureKind::Fillet { edges, radius, style: style @ FilletStyle::Grouped { groups }, body, tangent_chain, .. } => {
             let sizes = style.group_sizes(edges.len()).ok()?;
-            let radii = std::iter::once(radius.clone()).chain(groups.iter().map(|g| g.radius.clone())).collect();
+            let radii = std::iter::once(radius.to_string()).chain(groups.iter().map(|g| g.radius.to_string())).collect();
             let mut inputs = Vec::new();
             let mut at = 0;
             for count in sizes {
                 let mut input = SelInput::new("Edges", EDGES, true);
-                input.items = edges.get(at..at + count)?.iter().map(|p| edge_sel(s, *p)).collect::<Option<Vec<_>>>()?;
+                input.items = edges.get(at..at + count)?.iter().map(|p| edge_sel(s, p.0)).collect::<Option<Vec<_>>>()?;
                 inputs.push(input);
                 at += count;
             }
@@ -5041,11 +5067,11 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                     }
                     d
                 }
-                PatternKind::Circular { origin, axis, count, angle, alignment, reversed } => {
+                PatternKind::Circular { origin, axis, count, angle, alignment, reversed, symmetric } => {
                     let mut d = start("solid.pattern.circular")?;
                     d.extra.insert("alignment".into(), json!(alignment));
                     d.extra.insert("reversed".into(), json!(reversed));
-                    d.kind = Kind::PatternCirc { count: count.to_string(), angle: angle.to_string() };
+                    d.kind = Kind::PatternCirc { count: count.to_string(), angle: angle.to_string(), symmetric: *symmetric };
                     match world_axis(axis.0).filter(|_| origin.len() < 1e-9) {
                         Some(name) => {
                             if let Some(inp) = d.inputs.get_mut(1) {

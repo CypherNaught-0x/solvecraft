@@ -120,7 +120,8 @@
         "operation": "join",
         "targets": [
           "Body1"
-        ]
+        ],
+        "interpolation": "uniform"
       }
     },
     {
@@ -177,7 +178,8 @@
         "targets": [
           "Body1"
         ],
-        "name": "Second transition"
+        "name": "Second transition",
+        "interpolation": "uniform"
       }
     }
   ],

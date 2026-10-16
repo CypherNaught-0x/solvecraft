@@ -11,15 +11,18 @@ pub struct CircleProfile {
     pub circle: u64,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, serde::Serialize)]
 pub struct SketchProfile {
     pub id: u64,
     pub feature: u64,
     pub geometry: u64,
     pub regions: Vec<Vec<ProfileLoop>>,
+    /// Atomic selected regions contributing to each combined boundary. An empty
+    /// list denotes an ordinary, single-region selection.
+    pub region_members: Vec<Vec<Vec<ProfileLoop>>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ProfileLoop {
     pub curves: Vec<u64>,
     pub reversed: Vec<bool>,
@@ -104,57 +107,32 @@ impl Design {
                 }
                 let mut regions = Vec::new();
                 let mut total_curves = 0usize;
+                let mut selected_regions = 0usize;
+                let mut region_members = Vec::with_capacity(region_count);
                 let mut region_keys = BTreeSet::new();
-                for _ in 0..region_count {
-                    let loop_count = r.count(45)?;
-                    if loop_count == 0 || loop_count > 129 {
-                        return Err(invalid("invalid profile loop count"));
+                let mut missing = None;
+                for region_index in 0..region_count {
+                    let context =
+                        |error| invalid(&format!("feature {feature}, profile {id}, tracking {tracking}, region {}: {error}", region_index + 1));
+                    let (loops, unresolved) = read_loops(&mut r, geometry, &circle_ids, &mut total_curves).map_err(context)?;
+                    if missing.is_none() {
+                        missing = unresolved.map(context);
                     }
-                    let mut loops = Vec::new();
-                    let mut seen = BTreeSet::new();
-                    for _ in 0..loop_count {
-                        let count = r.count(40)?;
-                        total_curves += count;
-                        if count == 0 || count > 512 || total_curves > 20_000 {
-                            return Err(invalid("empty or excessive profile loop"));
+                    let member_count = r.count(49)?;
+                    selected_regions += member_count.max(1);
+                    if selected_regions > 128 {
+                        return Err(invalid("excessive selected profile members"));
+                    }
+                    let mut members = Vec::with_capacity(member_count);
+                    for member_index in 0..member_count {
+                        let member_context = |error| context(invalid(&format!("member {}: {error}", member_index + 1)));
+                        let (member, unresolved) = read_loops(&mut r, geometry, &circle_ids, &mut total_curves).map_err(member_context)?;
+                        if missing.is_none() {
+                            missing = unresolved.map(member_context);
                         }
-                        let mut curves = Vec::new();
-                        let mut reversed = Vec::new();
-                        let mut pieces = Vec::new();
-                        for _ in 0..count {
-                            if r.u32()? != 3 {
-                                return Err(invalid("unsupported profile curve tracking"));
-                            }
-                            let identity = (r.u64()?, r.u64()?);
-                            reversed.push(match r.u32()? {
-                                0 => false,
-                                1 => true,
-                                _ => return Err(invalid("unsupported profile curve orientation")),
-                            });
-                            let piece = r.u32()?;
-                            let total = r.u32()?;
-                            if piece == 0 || piece > total || total > 50_000 {
-                                return Err(invalid("invalid profile piece index or count"));
-                            }
-                            pieces.push((piece, total));
-                            zeros(&mut r, 8)?;
-                            let curve = circle_ids.get(&(geometry, identity)).copied().ok_or_else(|| invalid("missing selected profile curve"))?;
-                            if !seen.insert((curve, piece)) {
-                                return Err(invalid("repeated profile curve"));
-                            }
-                            curves.push(curve);
-                        }
-                        let outer = match r.take(1)? {
-                            [0] => false,
-                            [1] => true,
-                            _ => return Err(invalid("invalid profile outer flag")),
-                        };
-                        loops.push(ProfileLoop { curves, reversed, pieces, outer });
+                        members.push(member);
                     }
-                    if loops.iter().filter(|l| l.outer).count() != 1 {
-                        return Err(invalid("profile must have exactly one outer loop"));
-                    }
-                    zeros(&mut r, 4)?;
+                    region_members.push(members);
                     let mut key: Vec<_> = loops
                         .iter()
                         .map(|l| {
@@ -164,13 +142,28 @@ impl Design {
                         })
                         .collect();
                     key.sort();
-                    if !region_keys.insert(key) {
+                    // Missing curves use an internal placeholder. Only resolved
+                    // boundaries can be compared here; the verified snapshot
+                    // replaces the complete selection when tracking is stale.
+                    if loops.iter().all(|l| !l.curves.contains(&0)) && !region_keys.insert(key) {
                         return Err(invalid("duplicate selected profile region"));
                     }
                     regions.push(loops);
                 }
                 finish(&r)?;
-                Ok(SketchProfile { id: *id, feature, geometry, regions })
+                if let Some(error) = missing {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if self.archive.is_some() {
+                        regions = super::profile_cache::resolve(self, *id, geometry, &circle_ids)
+                            .map_err(|cache| invalid(&format!("{error}; current profile snapshot: {cache}")))?;
+                        region_members = vec![Vec::new(); regions.len()];
+                    } else {
+                        return Err(error);
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    return Err(error);
+                }
+                Ok(SketchProfile { id: *id, feature, geometry, regions, region_members })
             }),
         )
     }
@@ -227,4 +220,69 @@ impl Design {
         }
         Ok(selected)
     }
+}
+
+fn read_loops(
+    r: &mut Reader<'_>,
+    geometry: u64,
+    circle_ids: &BTreeMap<(u64, (u64, u64)), u64>,
+    total_curves: &mut usize,
+) -> Result<(Vec<ProfileLoop>, Option<IoError>)> {
+    let loop_count = r.count(45)?;
+    if loop_count == 0 || loop_count > 129 {
+        return Err(invalid("invalid profile loop count"));
+    }
+    let mut loops = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut missing = None;
+    for _ in 0..loop_count {
+        let count = r.count(40)?;
+        *total_curves += count;
+        if count == 0 || count > 512 || *total_curves > 20_000 {
+            return Err(invalid("empty or excessive profile loop"));
+        }
+        let mut curves = Vec::new();
+        let mut reversed = Vec::new();
+        let mut pieces = Vec::new();
+        for _ in 0..count {
+            if r.u32()? != 3 {
+                return Err(invalid("unsupported profile curve tracking"));
+            }
+            let identity = (r.u64()?, r.u64()?);
+            reversed.push(match r.u32()? {
+                0 => false,
+                1 => true,
+                _ => return Err(invalid("unsupported profile curve orientation")),
+            });
+            let piece = r.u32()?;
+            let total = r.u32()?;
+            if piece == 0 || piece > total || total > 50_000 {
+                return Err(invalid("invalid profile piece index or count"));
+            }
+            pieces.push((piece, total));
+            zeros(r, 8)?;
+            let curve = circle_ids.get(&(geometry, identity)).copied();
+            if curve.is_none() && missing.is_none() {
+                missing = Some(invalid(&format!(
+                    "missing selected profile curve ({}, {}) in sketch geometry {geometry}, piece {piece}/{total}",
+                    identity.0, identity.1
+                )));
+            }
+            if !seen.insert((identity, piece)) {
+                return Err(invalid("repeated profile curve"));
+            }
+            // Never exposed: unresolved selections require a verified snapshot.
+            curves.push(curve.unwrap_or(0));
+        }
+        let outer = match r.take(1)? {
+            [0] => false,
+            [1] => true,
+            _ => return Err(invalid("invalid profile outer flag")),
+        };
+        loops.push(ProfileLoop { curves, reversed, pieces, outer });
+    }
+    if loops.iter().filter(|l| l.outer).count() != 1 {
+        return Err(invalid("profile must have exactly one outer loop"));
+    }
+    Ok((loops, missing))
 }

@@ -9,7 +9,15 @@ const CURVE: &str = "2DEE34BE-FA70-4D54-979C-164D86FDA786";
 
 pub(super) fn label_table(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, feature: u64) -> Result<BTreeMap<u64, u64>> {
     if !classes.get(&feature).is_some_and(|c| {
-        matches!((c.id.as_str(), c.version), ("DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8) | (super::lofts::CLASS, 9) | (super::mirrors::CLASS, 0))
+        matches!(
+            (c.id.as_str(), c.version),
+            ("DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8)
+                | (super::fillets::CLASS, 2 | 3)
+                | (super::chamfers::CLASS, 2 | 3)
+                | (super::lofts::CLASS, 9)
+                | (super::mirrors::CLASS, 0)
+                | (super::circular_patterns::CLASS, 0)
+        )
     }) {
         return Err(invalid("unsupported feature label-table owner"));
     }
@@ -43,7 +51,13 @@ pub(super) fn label_table(records: &Records<'_>, classes: &BTreeMap<u64, &Class>
     for _ in 0..count {
         let id = r.reference()?;
         let role = r.u64()?;
-        let minimum = if classes.get(&feature).is_some_and(|c| c.id == super::mirrors::CLASS) { 1 } else { 3 };
+        let minimum = if classes.get(&feature).is_some_and(|c| {
+            matches!(c.id.as_str(), super::mirrors::CLASS | super::circular_patterns::CLASS | super::fillets::CLASS | super::chamfers::CLASS)
+        }) {
+            1
+        } else {
+            3
+        };
         if role < minimum || !classes.contains_key(&id) || !ids.insert(id) || entries.insert(role, id).is_some() {
             return Err(invalid("invalid or duplicate extrusion label"));
         }
@@ -59,7 +73,58 @@ pub(super) fn label_table(records: &Records<'_>, classes: &BTreeMap<u64, &Class>
     Ok(entries)
 }
 
-fn curve_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, feature: u64, label: u64) -> Result<(u64, [u64; 2])> {
+pub(super) fn circle_tag(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, feature: u64, label: u64) -> Result<u64> {
+    require_class(classes, feature, "DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8)?;
+    let entries = label_table(records, classes, feature)?;
+    let id = *entries.get(&label).ok_or_else(|| invalid("missing circular side label"))?;
+    require_class(classes, id, WRAPPER, 0)?;
+    let mut r = payload(records.primary(id)?, id)?;
+    zeros(&mut r, 5)?;
+    if r.u32()? != 1 {
+        return Err(invalid("circular side requires one source"));
+    }
+    zeros(&mut r, 1)?;
+    let curve = r.reference()?;
+    zeros(&mut r, 1)?;
+    finish(&r)?;
+    require_class(classes, curve, CURVE, 2)?;
+    let mut r = payload(records.primary(curve)?, curve)?;
+    zeros(&mut r, 6)?;
+    for value in [1, 0, 1, 3] {
+        if r.u32()? != value {
+            return Err(invalid("unsupported circular side source header"));
+        }
+    }
+    let tag = r.u64()?;
+    if tag == 0 || r.u64()? != 0 || r.u32()? != 1 || r.u32()? != 1 || !matches!(r.u32()?, 1 | 2) {
+        return Err(invalid("unsupported circular side source span"));
+    }
+    zeros(&mut r, 8)?;
+    let mut ends = Vec::new();
+    for _ in 0..2 {
+        let count = r.count(8)?;
+        if !matches!(count, 0 | 2) {
+            return Err(invalid("unsupported circular side incidence"));
+        }
+        let mut adjacent = BTreeSet::new();
+        for _ in 0..count {
+            let neighbor = r.u64()?;
+            if neighbor == 0 || neighbor == tag || !adjacent.insert(neighbor) {
+                return Err(invalid("invalid circular side incidence"));
+            }
+        }
+        ends.push(adjacent);
+    }
+    if ends.first() != ends.get(1) {
+        return Err(invalid("circular side is not a closed source carrier"));
+    }
+    finish(&r)?;
+    // The caller must also prove the selected reconstructed profile is this
+    // whole circle; a retained source span alone never selects a partial region.
+    Ok(tag)
+}
+
+pub(super) fn curve_span(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, feature: u64, label: u64) -> Result<CurveSpan> {
     require_class(classes, feature, "DD405BC2-D673-44F0-8833-5CB2A1C186C7", 8)?;
     let entries = label_table(records, classes, feature)?;
     let id = *entries.get(&label).ok_or_else(|| invalid("missing extrusion side label"))?;
@@ -85,26 +150,46 @@ fn curve_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, featur
     if profile_id == 0 || r.u64()? != 0 {
         return Err(invalid("unsupported side-role curve piece"));
     }
-    for value in [1, 1, 1, 0, 0] {
-        if r.u32()? != value {
-            return Err(invalid("unsupported side-role curve flags"));
-        }
+    if r.u32()? != 1 {
+        return Err(invalid("unsupported side-role curve direction"));
     }
-    let mut adjacent = [0; 2];
-    for id in &mut adjacent {
-        if r.u32()? != 1 {
+    let piece = (r.u32()?, r.u32()?);
+    if piece.0 == 0 || piece.0 > piece.1 || piece.1 > 512 {
+        return Err(invalid("invalid side-role curve partition"));
+    }
+    zeros(&mut r, 8)?;
+    let mut adjacent = [Vec::new(), Vec::new()];
+    for neighbors in &mut adjacent {
+        let count = r.count(8)?;
+        if !(1..=2).contains(&count) {
             return Err(invalid("unsupported side-role adjacency count"));
         }
-        *id = r.u64()?;
-        if *id == 0 || *id == profile_id {
-            return Err(invalid("invalid side-role adjacency"));
+        for _ in 0..count {
+            let id = r.u64()?;
+            if id == 0 || id == profile_id || neighbors.contains(&id) {
+                return Err(invalid("invalid side-role adjacency"));
+            }
+            neighbors.push(id);
         }
     }
-    if adjacent[0] == adjacent[1] {
-        return Err(invalid("duplicate side-role adjacency"));
-    }
     finish(&r)?;
-    Ok((profile_id, adjacent))
+    Ok(CurveSpan { tag: profile_id, piece, adjacent })
+}
+
+pub(super) struct CurveSpan {
+    pub tag: u64,
+    pub piece: (u32, u32),
+    pub adjacent: [Vec<u64>; 2],
+}
+
+fn curve_identity(records: &Records<'_>, classes: &BTreeMap<u64, &Class>, feature: u64, label: u64) -> Result<(u64, [u64; 2])> {
+    let span = curve_span(records, classes, feature, label)?;
+    let [a] = span.adjacent[0].as_slice() else { return Err(invalid("unsupported side-role adjacency count")) };
+    let [b] = span.adjacent[1].as_slice() else { return Err(invalid("unsupported side-role adjacency count")) };
+    if span.piece != (1, 1) || a == b {
+        return Err(invalid("unsupported complete side-role curve"));
+    }
+    Ok((span.tag, [*a, *b]))
 }
 
 pub(super) fn curve(
@@ -195,6 +280,23 @@ mod tests {
         f
     }
 
+    #[test]
+    fn fillet_output_tables_keep_explicit_labels_including_one_and_two() {
+        for version in [2, 3] {
+            let mut fixture = authored();
+            let owner = fixture.0.get_mut(&9).unwrap();
+            owner.0 = super::super::fillets::CLASS.into();
+            owner.1 = version;
+            let labels = &mut fixture.0.get_mut(&600).unwrap().2;
+            labels[21..29].copy_from_slice(&1_u64.to_le_bytes());
+            labels[40..48].copy_from_slice(&2_u64.to_le_bytes());
+            let design = fixture.design();
+            let classes = design.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+            let table = label_table(&Records::new(&design), &classes, 9).unwrap();
+            assert_eq!(table, BTreeMap::from([(1, 701), (2, 703), (47, 705), (17, 707)]));
+        }
+    }
+
     fn resolve(f: Fixture, label: u64, reverse: bool) -> Result<u64> {
         let d = f.design();
         let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
@@ -254,6 +356,44 @@ mod tests {
         for version in [0, 2, 3] {
             d.classes.last_mut().unwrap().version = version;
             assert!(resolve(&d).is_err(), "wrong inherited version {version}");
+        }
+    }
+
+    #[test]
+    fn side_span_partitions_retain_every_coincident_endpoint_neighbor() {
+        let make = || {
+            let mut f = authored();
+            let bytes = &mut f.0.get_mut(&702).unwrap().2;
+            bytes[42..46].copy_from_slice(&2_u32.to_le_bytes());
+            bytes[46..50].copy_from_slice(&2_u32.to_le_bytes());
+            bytes[58..62].copy_from_slice(&2_u32.to_le_bytes());
+            bytes.splice(70..70, 99_u64.to_le_bytes());
+            f
+        };
+        let parse = |f: Fixture| {
+            let d = f.design();
+            let classes = d.classes.iter().flat_map(|c| c.objects.iter().map(move |id| (*id, c))).collect();
+            curve_span(&Records::new(&d), &classes, 9, 23)
+        };
+        let span = parse(make()).unwrap();
+        assert_eq!(span.tag, 19);
+        assert_eq!(span.piece, (2, 2));
+        assert_eq!(span.adjacent, [vec![18, 99], vec![20]]);
+        for keep in 0..make().0[&702].2.len() {
+            let mut f = make();
+            f.0.get_mut(&702).unwrap().2.truncate(keep);
+            assert!(parse(f).is_err(), "truncated at {keep}");
+        }
+        for (at, bytes) in [
+            (42, 0_u32.to_le_bytes().to_vec()),
+            (42, 3_u32.to_le_bytes().to_vec()),
+            (46, 513_u32.to_le_bytes().to_vec()),
+            (58, u32::MAX.to_le_bytes().to_vec()),
+            (70, 18_u64.to_le_bytes().to_vec()),
+        ] {
+            let mut f = make();
+            f.0.get_mut(&702).unwrap().2[at..at + bytes.len()].copy_from_slice(&bytes);
+            assert!(parse(f).is_err(), "invalid field {at}");
         }
     }
 
