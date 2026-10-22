@@ -231,7 +231,9 @@ impl<'a> Reader<'a> {
 fn index(path: String, metadata: Vec<u8>, bulk: Vec<u8>) -> Result<Design> {
     let mut r = Reader { bytes: &metadata, at: 0 };
     let segment = r.string()?;
-    if !matches!(segment.as_str(), "Design" | "FusionDesignSegmentType") || r.u32()? != 0 {
+    // The u32 after the segment name is 0 in most observed streams and 1 in some
+    // layout-5 streams; it is kept verbatim in metadata and not interpreted.
+    if !matches!(segment.as_str(), "Design" | "FusionDesignSegmentType") || r.u32()? > 1 {
         return Err(invalid("unsupported design stream header"));
     }
     r.wide_string()?;
